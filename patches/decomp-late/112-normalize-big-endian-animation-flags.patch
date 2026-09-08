@@ -1,0 +1,104 @@
+diff --git a/include/Game/AnimInventory.h b/include/Game/AnimInventory.h
+--- a/include/Game/AnimInventory.h
++++ b/include/Game/AnimInventory.h
+@@ -9,16 +9,18 @@
+ 
+ struct AnimProperties
+ {
++    // The generated property tables store these flags as 32-bit words. Their
++    // true value is written as 0x01000000 so its first byte is 1 on GameCube's
++    // big-endian CPU. Keep the raw word on a little-endian host and normalize
++    // it in the accessors instead of interpreting its first byte as a bool.
+     /* 0x00 */ const char* enumName;
+     /* 0x04 */ const char* animName;
+-    /* 0x08 */ ePlayMode playMode;
++    /* 0x08 */ unsigned int playMode;
+     /* 0x0C */ float blendAmount;
+-    /* 0x10 */ bool mirror;
+-    // /* 0x11 */ u8 pad11[3];
+-    /* 0x14 */ int ballRotationMode;
+-    /* 0x18 */ int endPhase;
+-    /* 0x1C */ u8 matchCharacterSpeed;
+-    // /* 0x1D */ u8 pad1d[3];
++    /* 0x10 */ unsigned int mirror;
++    /* 0x14 */ unsigned int ballRotationMode;
++    /* 0x18 */ unsigned int endPhase;
++    /* 0x1C */ unsigned int matchCharacterSpeed;
+ };
+ 
+ class cAnimInventory
+diff --git a/src/Game/AnimInventory.cpp b/src/Game/AnimInventory.cpp
+--- a/src/Game/AnimInventory.cpp
++++ b/src/Game/AnimInventory.cpp
+@@ -81,7 +81,7 @@ cSAnim* cAnimInventory::GetAnim(int i)
+  */
+ ePlayMode cAnimInventory::GetPlayMode(int i)
+ {
+-    return m_pAnimProperties[i].playMode;
++    return (ePlayMode)m_pAnimProperties[i].playMode;
+ }
+ 
+ /**
+@@ -97,7 +97,7 @@ float cAnimInventory::GetBlendTime(int i)
+  */
+ bool cAnimInventory::GetMirrored(int i)
+ {
+-    return m_pAnimProperties[i].mirror;
++    return m_pAnimProperties[i].mirror != 0;
+ }
+ 
+ /**
+@@ -105,7 +105,7 @@ bool cAnimInventory::GetMirrored(int i)
+  */
+ int cAnimInventory::GetBallRotationMode(int i)
+ {
+-    return m_pAnimProperties[i].ballRotationMode;
++    return (int)m_pAnimProperties[i].ballRotationMode;
+ }
+ 
+ /**
+@@ -113,7 +113,7 @@ int cAnimInventory::GetBallRotationMode(int i)
+  */
+ int cAnimInventory::GetEndPhase(int i)
+ {
+-    return m_pAnimProperties[i].endPhase;
++    return (int)m_pAnimProperties[i].endPhase;
+ }
+ 
+ /**
+@@ -121,5 +121,5 @@ int cAnimInventory::GetEndPhase(int i)
+  */
+ u8 cAnimInventory::GetMatchCharacterSpeed(int i)
+ {
+-    return m_pAnimProperties[i].matchCharacterSpeed;
++    return m_pAnimProperties[i].matchCharacterSpeed != 0;
+ }
+diff --git a/src/Game/AnimProps/AnimProperties.h b/src/Game/AnimProps/AnimProperties.h
+--- a/src/Game/AnimProps/AnimProperties.h
++++ b/src/Game/AnimProps/AnimProperties.h
+@@ -1,7 +1,7 @@
+ #ifndef SOUND_PROP_ACCESSOR_H
+ #define SOUND_PROP_ACCESSOR_H
+ 
+-#include "types.h"
++#include "Game/AnimInventory.h"
+ 
+ // struct AnimProperties
+ // {
+@@ -27,16 +27,4 @@ static inline float F32(unsigned int u)
+ }
+ #endif
+ 
+-struct AnimProperties
+-{
+-    const char* name;
+-    const char* animation;
+-    unsigned int flagsA;
+-    float blend;
+-    unsigned int flagsB;
+-    unsigned int flagsC;
+-    unsigned int flagsD;
+-    unsigned int flagsE;
+-};
+-
+ #endif // SOUND_PROP_ACCES

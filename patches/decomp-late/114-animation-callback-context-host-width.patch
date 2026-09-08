@@ -1,0 +1,446 @@
+# Animation controllers store their callback context as a live host pointer.
+# Widen the callback signatures and storage together so players and goalkeepers
+# recover the complete object address on a 64-bit host. The same audit found
+# two alignment helpers truncating pointers before masking; keep those at host
+# width as well.
+
+--- a/include/Game/AI/Fielder.h
++++ b/include/Game/AI/Fielder.h
+@@ -310,9 +310,9 @@ public:
+     void SetIdleStrafeAnimState();
+     void SetIdleAnimState();
+     void SetIdleWBAnimState();
+-    static void JogRunSynchronizedWeightCallback(unsigned int nParam, cPN_SAnimController* pController);
+-    static void JogRunSABcallback(unsigned int nParam1, cPN_SingleAxisBlender* pSAB);
+-    static void RunningSABcallback(unsigned int nParam1, cPN_SingleAxisBlender* pSAB);
++    static void JogRunSynchronizedWeightCallback(std::uintptr_t nParam, cPN_SAnimController* pController);
++    static void JogRunSABcallback(std::uintptr_t nParam1, cPN_SingleAxisBlender* pSAB);
++    static void RunningSABcallback(std::uintptr_t nParam1, cPN_SingleAxisBlender* pSAB);
+     void SetRunLeanSAB(const int* pSABAnims, int nNumSABAnims, int nPrimaryAnim);
+     void SetJogRunLeanSAB(
+         const int* pRunningAnims, int nNumRunningAnims, int nPrimaryRunningAnim, int nJogAnim, float fBlendTime, float fWeightSeek);
+--- a/include/Game/Character.h
++++ b/include/Game/Character.h
+@@ -132,8 +132,8 @@ public:
+     void CreateWorldMatrix();
+     void PoseSkinMesh(cPoseAccumulator* pPoseAccumulator);
+     void PoseLocalSpace();
+-    cPN_SAnimController* NewAnimController(int animID, bool bRestartCyclic, bool bForceMirrorSwap, void (*funcPlaybackSpeedCallback)(unsigned int, cPN_SAnimController*), unsigned int nPlaybackSpeedCallbackParam);
+-    static void MatchAnimSpeedToCharacterSpeed(unsigned int nParam, cPN_SAnimController* pController);
++    cPN_SAnimController* NewAnimController(int animID, bool bRestartCyclic, bool bForceMirrorSwap, void (*funcPlaybackSpeedCallback)(std::uintptr_t, cPN_SAnimController*), std::uintptr_t nPlaybackSpeedCallbackParam);
++    static void MatchAnimSpeedToCharacterSpeed(std::uintptr_t nParam, cPN_SAnimController* pController);
+     void InitMovementStrafing(float fDirectionSeekSpeed, float fDirectionSeekFalloff, float fAccel, float fDecel);
+     void InitMovementRunningNoTurn(float fAccel, float fDecel);
+     void InitMovementRunning(float fDirectionSeekSpeed, float fDirectionSeekFalloff, float fAccel, float fDecel);
+--- a/include/Game/Goalie.h
++++ b/include/Game/Goalie.h
+@@ -176,7 +176,7 @@ public:
+     void MakeSaveEvent(bool bIsSTS);
+     void UpdateActionState(float fDeltaTime);
+     void SetGoalieAction(eGoalieActionState newGoalieState, int newSubstate);
+-    static void SaveBlendCallback(unsigned int nParam, cPN_SAnimController* pAnimCtrl);
++    static void SaveBlendCallback(std::uintptr_t nParam, cPN_SAnimController* pAnimCtrl);
+     cPoseNode* SetupBlender(bool bPrimary, const float* fStartPercent, int nMainAnimID, int nMilestone);
+     void PlayBlendedAnims(float fStartTime, int nMilestone);
+     void PlayNewAnim(int nAnimID);
+@@ -231,11 +231,11 @@ public:
+     void ActionLooseBallPickup(float fDeltaT);
+     void ActionLooseBallPursueRolling(float deltaTime);
+     void ActionLooseBallSetup(float fDeltaT);
+-    static void MoveDirectionCB(unsigned int nParam, cPN_SingleAxisBlender* blender);
+-    static void MoveWeightCB(unsigned int nParam, cPN_SingleAxisBlender* blender);
+-    static void StrafeSynchronizedSpeedCallback(unsigned int nParam, cPN_SAnimController* controller);
++    static void MoveDirectionCB(std::uintptr_t nParam, cPN_SingleAxisBlender* blender);
++    static void MoveWeightCB(std::uintptr_t nParam, cPN_SingleAxisBlender* blender);
++    static void StrafeSynchronizedSpeedCallback(std::uintptr_t nParam, cPN_SAnimController* controller);
+     void ActionMove(float deltaTime);
+-    static void RunWeightCB(unsigned int nParam, cPN_SingleAxisBlender* blender);
++    static void RunWeightCB(std::uintptr_t nParam, cPN_SingleAxisBlender* blender);
+ 
+     void StartRunBlend();
+ 
+--- a/include/Game/Player.h
++++ b/include/Game/Player.h
+@@ -98,7 +98,7 @@ public:
+     virtual void PrePhysicsUpdate(float dt);
+     static void PlayerHeadTrackCallback(std::uintptr_t nSelf, unsigned int nParam2, cPoseAccumulator* pPoseAccumulator,
+         unsigned int nJointIndex, int nParentIndex);
+-    cPN_SingleAxisBlender* CreateSingleAxisBlender(const int* pSABAnims, int nNumSABAnims, int nPrimaryAnim, void (*fWeightCB)(unsigned int, cPN_SingleAxisBlender*), float fWeightSeek, cPN_SAnimController* pSynchingController);
++    cPN_SingleAxisBlender* CreateSingleAxisBlender(const int* pSABAnims, int nNumSABAnims, int nPrimaryAnim, void (*fWeightCB)(std::uintptr_t, cPN_SingleAxisBlender*), float fWeightSeek, cPN_SAnimController* pSynchingController);
+     virtual void CollideWithBallCallback(cBall* pBall);
+     virtual void CollideWithCharacterCallback(CollisionPlayerPlayerData* pData);
+     virtual void CollideWithWallCallback(const CollisionPlayerWallData* pData);
+--- a/include/Game/SAnim/pnSAnimController.h
++++ b/include/Game/SAnim/pnSAnimController.h
+@@ -20,7 +20,7 @@ public:
+         , m_fTime(0.0f)
+     {
+     }
+-    cPN_SAnimController(cSAnim* pSAnim, const AnimRetarget* pAnimRetarget, ePlayMode playMode, void (*funcPlaybackSpeedCallback)(unsigned int, cPN_SAnimController*), unsigned int nPlaybackSpeedCallbackParam, bool bMirror);
++    cPN_SAnimController(cSAnim* pSAnim, const AnimRetarget* pAnimRetarget, ePlayMode playMode, void (*funcPlaybackSpeedCallback)(std::uintptr_t, cPN_SAnimController*), std::uintptr_t nPlaybackSpeedCallbackParam, bool bMirror);
+     /* 0x08 */ virtual ~cPN_SAnimController() { };
+     static void* operator new(unsigned long)
+     {
+@@ -96,13 +96,13 @@ public:
+     /* 0x28 */ ePlayMode m_ePlayMode;
+     /* 0x2C */ mutable float m_fWeight;
+     /* 0x30 */ bool m_bIgnoreTriggers;
+-    /* 0x34 */ void (*m_funcPlaybackSpeedCallback)(unsigned int, class cPN_SAnimController*);
+-    /* 0x38 */ unsigned int m_nPlaybackSpeedCallbackParam;
++    /* 0x34 */ void (*m_funcPlaybackSpeedCallback)(std::uintptr_t, class cPN_SAnimController*);
++    /* 0x38 */ std::uintptr_t m_nPlaybackSpeedCallbackParam;
+     /* 0x3C */ float m_fPlaybackSpeedScale;
+     /* 0x40 */ bool m_bIsSynchronized;
+     /* 0x44 */ cPN_SAnimController* m_pSynchronizedController;
+-    /* 0x48 */ void (*m_funcSychronizedWeightCallback)(unsigned int, class cPN_SAnimController*);
+-    /* 0x4C */ unsigned int m_nSynchronizedWeightCallbackParam;
++    /* 0x48 */ void (*m_funcSychronizedWeightCallback)(std::uintptr_t, class cPN_SAnimController*);
++    /* 0x4C */ std::uintptr_t m_nSynchronizedWeightCallbackParam;
+     /* 0x50 */ float m_fSynchronizedWeight;
+ 
+     static SlotPool<cPN_SAnimController> m_SAnimControllerSlotPool;
+--- a/include/Game/SAnim/pnSingleAxisBlender.h
++++ b/include/Game/SAnim/pnSingleAxisBlender.h
+@@ -9,7 +9,7 @@ class cPN_SingleAxisBlender : public cPoseNode
+ {
+ public:
+     cPN_SingleAxisBlender() { }
+-    cPN_SingleAxisBlender(int numChildren, void (*callback)(unsigned int, cPN_SingleAxisBlender*), unsigned int callbackParam, float weightSeek);
++    cPN_SingleAxisBlender(int numChildren, void (*callback)(std::uintptr_t, cPN_SingleAxisBlender*), std::uintptr_t callbackParam, float weightSeek);
+     /* 0x08 */ virtual ~cPN_SingleAxisBlender() { };
+     static void* operator new(unsigned long)
+     {
+@@ -36,8 +36,8 @@ public:
+     }
+ 
+     /* 0x14 */ float m_fSmoothedWeight;
+-    /* 0x18 */ void (*m_fWeightCallback)(unsigned int, class cPN_SingleAxisBlender*);
+-    /* 0x1C */ unsigned int m_nCallbackParam1;
++    /* 0x18 */ void (*m_fWeightCallback)(std::uintptr_t, class cPN_SingleAxisBlender*);
++    /* 0x1C */ std::uintptr_t m_nCallbackParam1;
+     /* 0x20 */ float m_fDesiredWeight;
+     /* 0x24 */ float m_fWeightSeek;
+ 
+--- a/include/Game/SAnim.h
++++ b/include/Game/SAnim.h
+@@ -110,7 +110,7 @@ inline void* nlChunk::GetUnalignedData()
+ inline void* nlChunk::GetAlignedData()
+ {
+     u32 alignment = 1u << (GetChunkAlignment() >> 24);
+-    return (void*)nlAlignUp((unsigned int)GetUnalignedData(), alignment);
++    return (void*)nlAlignUp(reinterpret_cast<std::uintptr_t>(GetUnalignedData()), alignment);
+ }
+ 
+ inline u32 nlChunk::GetChunkAlignment()
+--- a/include/NL/nlMath.h
++++ b/include/NL/nlMath.h
+@@ -21,7 +21,7 @@ unsigned int nlRandom(unsigned int range, unsigned int* seed);
+ void nlSetRandomSeed(unsigned int value, unsigned int* seed);
+ void nlInitRandom();
+ 
+-inline unsigned int nlAlignUp(unsigned int value, unsigned int alignment)
++inline std::uintptr_t nlAlignUp(std::uintptr_t value, std::uintptr_t alignment)
+ {
+     return (value + alignment - 1) & ~(alignment - 1);
+ }
+--- a/src/Game/AI/Fielder.cpp
++++ b/src/Game/AI/Fielder.cpp
+@@ -4260,9 +4260,9 @@ void cFielder::SetIdleWBAnimState()
+     InitMovementRunning(pTweaks->fRunningWBDirectionSeekSpeed, pTweaks->fRunningWBDirectionSeekFalloff, pTweaks->fRunningWBAccel, pTweaks->fRunningWBDecel);
+ }
+ 
+-void cFielder::JogRunSynchronizedWeightCallback(unsigned int nParam, cPN_SAnimController* pController)
++void cFielder::JogRunSynchronizedWeightCallback(std::uintptr_t nParam, cPN_SAnimController* pController)
+ {
+-    cFielder* pChar = (cFielder*)nParam;
++    cFielder* pChar = reinterpret_cast<cFielder*>(nParam);
+     if (pChar->m_eAnimID == 0x07 || pChar->m_eAnimID == 0x1A)
+     {
+         pController->m_fSynchronizedWeight = pChar->CalcJogRunBlendWeight();
+@@ -4273,9 +4273,9 @@ void cFielder::JogRunSynchronizedWeightCallback(unsigned int nParam, cPN_SAnimCo
+     }
+ }
+ 
+-void cFielder::JogRunSABcallback(unsigned int nParam1, cPN_SingleAxisBlender* pSAB)
++void cFielder::JogRunSABcallback(std::uintptr_t nParam1, cPN_SingleAxisBlender* pSAB)
+ {
+-    cFielder* pChar = (cFielder*)nParam1;
++    cFielder* pChar = reinterpret_cast<cFielder*>(nParam1);
+     if (pChar->m_eAnimID == 0x07)
+     {
+         pSAB->m_fDesiredWeight = pChar->CalcJogRunBlendWeight();
+@@ -4293,9 +4293,9 @@ void cFielder::JogRunSABcallback(unsigned int nParam1, cPN_SingleAxisBlender* pS
+ /**
+  * Offset/Address/Size: 0x4CA8 | 0x8001DFE4 | size: 0x54
+  */
+-void cFielder::RunningSABcallback(unsigned int nParam1, cPN_SingleAxisBlender* pSAB)
++void cFielder::RunningSABcallback(std::uintptr_t nParam1, cPN_SingleAxisBlender* pSAB)
+ {
+-    cFielder* pThis = (cFielder*)nParam1;
++    cFielder* pThis = reinterpret_cast<cFielder*>(nParam1);
+ 
+     if (pThis->m_eAnimID == ACTION_LOOSE_BALL_SHOT || pThis->m_eAnimID == 0x1A || pThis->m_eAnimID == ACTION_RUNNING_WB_TURBO)
+     {
+@@ -4342,10 +4342,10 @@ void cFielder::SetJogRunLeanSAB(
+ {
+     cPN_SAnimController* pJoggingController = NewAnimController(nJogAnim, false, false, NULL, 0);
+     pJoggingController->m_funcSychronizedWeightCallback = JogRunSynchronizedWeightCallback;
+-    pJoggingController->m_nSynchronizedWeightCallbackParam = (unsigned int)this;
++    pJoggingController->m_nSynchronizedWeightCallbackParam = reinterpret_cast<std::uintptr_t>(this);
+     pJoggingController->m_fSynchronizedWeight = 0.0f;
+ 
+-    cPN_SingleAxisBlender* pRunningSAB = ::new (AllocateSingleAxisBlender()) cPN_SingleAxisBlender(2, JogRunSABcallback, (unsigned int)this, 0.1f);
++    cPN_SingleAxisBlender* pRunningSAB = ::new (AllocateSingleAxisBlender()) cPN_SingleAxisBlender(2, JogRunSABcallback, reinterpret_cast<std::uintptr_t>(this), 0.1f);
+     pRunningSAB->SetChild(0, pJoggingController);
+     pRunningSAB->SetChild(1,
+         CreateSingleAxisBlender(pRunningAnims, nNumRunningAnims, nPrimaryRunningAnim, RunningSABcallback, 0.1f, pJoggingController));
+--- a/src/Game/AI/GoalieActions.cpp
++++ b/src/Game/AI/GoalieActions.cpp
+@@ -618,9 +618,9 @@ void Goalie::ActionLooseBallSetup(float fDeltaT)
+ /**
+  * Offset/Address/Size: 0x358C | 0x80051AC8 | size: 0x1C
+  */
+-void Goalie::MoveDirectionCB(unsigned int nParam, cPN_SingleAxisBlender* blender)
++void Goalie::MoveDirectionCB(std::uintptr_t nParam, cPN_SingleAxisBlender* blender)
+ {
+-    Goalie* pGoalie = (Goalie*)nParam;
++    Goalie* pGoalie = reinterpret_cast<Goalie*>(nParam);
+     float result = 0.0f;
+     if (pGoalie->mv3LocalNavTarget.y < 0.0f)
+     {
+@@ -632,18 +632,18 @@ void Goalie::MoveDirectionCB(unsigned int nParam, cPN_SingleAxisBlender* blender
+ /**
+  * Offset/Address/Size: 0x3544 | 0x80051A80 | size: 0x48
+  */
+-void Goalie::MoveWeightCB(unsigned int nParam, cPN_SingleAxisBlender* blender)
++void Goalie::MoveWeightCB(std::uintptr_t nParam, cPN_SingleAxisBlender* blender)
+ {
+-    Goalie* pGoalie = (Goalie*)nParam;
++    Goalie* pGoalie = reinterpret_cast<Goalie*>(nParam);
+     blender->m_fDesiredWeight = (s32)(u16)abs_s16(pGoalie->maLocalAngle) / 32768.0f;
+ }
+ 
+ /**
+  * Offset/Address/Size: 0x3538 | 0x80051A74 | size: 0xC
+  */
+-void Goalie::StrafeSynchronizedSpeedCallback(unsigned int nParam, cPN_SAnimController* controller)
++void Goalie::StrafeSynchronizedSpeedCallback(std::uintptr_t nParam, cPN_SAnimController* controller)
+ {
+-    Goalie* pGoalie = (Goalie*)nParam;
++    Goalie* pGoalie = reinterpret_cast<Goalie*>(nParam);
+     controller->m_fPlaybackSpeedScale = pGoalie->mfSpeedScale;
+ }
+ 
+@@ -841,9 +841,9 @@ inline s16 ClampMax(const s16 diff, const s16 max)
+ /**
+  * Offset/Address/Size: 0x3070 | 0x800515AC | size: 0x70
+  */
+-void Goalie::RunWeightCB(unsigned int nParam, cPN_SingleAxisBlender* blender)
++void Goalie::RunWeightCB(std::uintptr_t nParam, cPN_SingleAxisBlender* blender)
+ {
+-    const Goalie* pGoalie = (Goalie*)nParam;
++    const Goalie* pGoalie = reinterpret_cast<Goalie*>(nParam);
+ 
+     s16 diff = (s16)(pGoalie->m_aDesiredFacingDirection - pGoalie->m_aActualFacingDirection);
+ 
+--- a/src/Game/Character.cpp
++++ b/src/Game/Character.cpp
+@@ -1724,9 +1724,9 @@ void cCharacter::InitMovementStrafing(float fDirectionSeekSpeed, float fDirectio
+ /**
+  * Offset/Address/Size: 0x15AC | 0x8000F4F8 | size: 0xD4
+  */
+-void cCharacter::MatchAnimSpeedToCharacterSpeed(unsigned int nParam, cPN_SAnimController* pController)
++void cCharacter::MatchAnimSpeedToCharacterSpeed(std::uintptr_t nParam, cPN_SAnimController* pController)
+ {
+-    cFielder* fielder = (cFielder*)nParam;
++    cFielder* fielder = reinterpret_cast<cFielder*>(nParam);
+     if (fielder->m_eMovementState != MOVEMENT_FROM_ANIM && fielder->m_eMovementState != MOVEMENT_FROM_ANIM_SEEK)
+     {
+         if (fielder->m_eClassType == FIELDER)
+@@ -1748,12 +1748,12 @@ void cCharacter::MatchAnimSpeedToCharacterSpeed(unsigned int nParam, cPN_SAnimCo
+ /**
+  * Offset/Address/Size: 0x1270 | 0x8000F1BC | size: 0x33C
+  */
+-cPN_SAnimController* cCharacter::NewAnimController(int animID, bool bRestartCyclic, bool bForceMirrorSwap, void (*funcPlaybackSpeedCallback)(unsigned int, cPN_SAnimController*), unsigned int nPlaybackSpeedCallbackParam)
++cPN_SAnimController* cCharacter::NewAnimController(int animID, bool bRestartCyclic, bool bForceMirrorSwap, void (*funcPlaybackSpeedCallback)(std::uintptr_t, cPN_SAnimController*), std::uintptr_t nPlaybackSpeedCallbackParam)
+ {
+     bool restartCyclic = bRestartCyclic;
+     bool forceMirrorSwap = bForceMirrorSwap;
+-    void (*playbackSpeedCallback)(unsigned int, cPN_SAnimController*) = funcPlaybackSpeedCallback;
+-    unsigned int playbackSpeedCallbackParam = (unsigned int)this;
++    void (*playbackSpeedCallback)(std::uintptr_t, cPN_SAnimController*) = funcPlaybackSpeedCallback;
++    std::uintptr_t playbackSpeedCallbackParam = reinterpret_cast<std::uintptr_t>(this);
+ 
+     if (m_pAnimInventory->GetMatchCharacterSpeed(animID))
+     {
+--- a/src/Game/Goalie.cpp
++++ b/src/Game/Goalie.cpp
+@@ -1326,7 +1326,7 @@ void Goalie::DoNavigation(float fDeltaT, float fIdleDistance, Goalie::eNaviMode
+     cBall* pBall;
+     s16 aGoalie2Ball;
+     u16 absBallAngleDiff;
+-    unsigned int nParam;
++    std::uintptr_t nParam;
+     int eAnimID;
+     int nCurrentAnimID;
+     int nFinalAnim;
+@@ -1784,7 +1784,7 @@ void Goalie::DoNavigation(float fDeltaT, float fIdleDistance, Goalie::eNaviMode
+     cPN_SingleAxisBlender* pSAB_R = CreateSingleAxisBlender(nRightAnims, 3, 1, MoveWeightCB, 0.1f, 0);
+ 
+     cPN_SingleAxisBlender* pSAB = pSAB_L;
+-    nParam = (unsigned int)this;
++    nParam = reinterpret_cast<std::uintptr_t>(this);
+     cPN_SAnimController* pPrevCtrlr = 0;
+     int j;
+ 
+@@ -1804,7 +1804,7 @@ void Goalie::DoNavigation(float fDeltaT, float fIdleDistance, Goalie::eNaviMode
+                 if (pPrevCtrlr == 0)
+                 {
+                     pCtrlr->m_funcSychronizedWeightCallback = StrafeSynchronizedSpeedCallback;
+-                    pCtrlr->m_nSynchronizedWeightCallbackParam = (unsigned int)this;
++                    pCtrlr->m_nSynchronizedWeightCallbackParam = reinterpret_cast<std::uintptr_t>(this);
+                     pCtrlr->m_fSynchronizedWeight = 0.0f;
+                 }
+                 else
+@@ -3301,10 +3301,10 @@ void Goalie::SetGoalieAction(eGoalieActionState newGoalieState, int newSubstate)
+ /**
+  * Offset/Address/Size: 0x5F40 | 0x80048A3C | size: 0x64
+  */
+-void Goalie::SaveBlendCallback(unsigned int nParam, cPN_SAnimController* pAnimCtrl)
++void Goalie::SaveBlendCallback(std::uintptr_t nParam, cPN_SAnimController* pAnimCtrl)
+ {
+-    Goalie* pThis = reinterpret_cast<Goalie*>(nParam & ~3U);
+-    unsigned int saveDataIndex = nParam & 3U;
++    Goalie* pThis = reinterpret_cast<Goalie*>(nParam & ~std::uintptr_t(3));
++    std::uintptr_t saveDataIndex = nParam & std::uintptr_t(3);
+ 
+     SaveData* pSaveData = pThis->mBlendInfo.mpSaveData[saveDataIndex];
+     if (pSaveData == NULL)
+@@ -3352,7 +3352,7 @@ cPoseNode* Goalie::SetupBlender(bool bPrimary, const float* fStartPercent, int n
+         index2 = 3;
+     }
+     int animID = GetAnimID(mBlendInfo, index1);
+-    pSaveController1 = NewAnimController(animID, false, false, SaveBlendCallback, index1 + (unsigned int)this);
++    pSaveController1 = NewAnimController(animID, false, false, SaveBlendCallback, index1 + reinterpret_cast<std::uintptr_t>(this));
+     pSaveController1->m_fPlaybackSpeedScale = mBlendInfo.mfMilestoneScale[index1][nMilestone];
+     if (fStartPercent[index1] > 0.0f)
+     {
+@@ -3371,7 +3371,7 @@ cPoseNode* Goalie::SetupBlender(bool bPrimary, const float* fStartPercent, int n
+     if (fBlend >= 0.001f)
+     {
+         animID = GetAnimID(mBlendInfo, index2);
+-        cPN_SAnimController* pSaveController2 = NewAnimController(animID, false, false, SaveBlendCallback, index2 + (unsigned int)this);
++        cPN_SAnimController* pSaveController2 = NewAnimController(animID, false, false, SaveBlendCallback, index2 + reinterpret_cast<std::uintptr_t>(this));
+         pSaveController2->m_fPlaybackSpeedScale = mBlendInfo.mfMilestoneScale[index2][nMilestone];
+         if (fStartPercent[index2] > 0.0f)
+         {
+--- a/src/Game/Player.cpp
++++ b/src/Game/Player.cpp
+@@ -1441,14 +1441,14 @@ cPN_SingleAxisBlender* cPlayer::CreateSingleAxisBlender(
+     const int* pSABAnims,
+     int nNumSABAnims,
+     int nPrimaryAnim,
+-    void (*fWeightCB)(unsigned int, cPN_SingleAxisBlender*),
++    void (*fWeightCB)(std::uintptr_t, cPN_SingleAxisBlender*),
+     float fWeightSeek,
+     cPN_SAnimController* pSynchingController)
+ {
+     cPN_SAnimController* pNewCurrentAnimController;
+     pNewCurrentAnimController = NULL;
+ 
+-    cPN_SingleAxisBlender* pSAB = ::new (AllocateSingleAxisBlender()) cPN_SingleAxisBlender(nNumSABAnims, fWeightCB, (unsigned int)this, fWeightSeek);
++    cPN_SingleAxisBlender* pSAB = ::new (AllocateSingleAxisBlender()) cPN_SingleAxisBlender(nNumSABAnims, fWeightCB, reinterpret_cast<std::uintptr_t>(this), fWeightSeek);
+ 
+     const int* pAnims = pSABAnims;
+     for (int i = 0; i < nNumSABAnims; i++)
+--- a/src/Game/Render/Bowser.cpp
++++ b/src/Game/Render/Bowser.cpp
+@@ -880,7 +880,7 @@ void Bowser::ActionThrow()
+         mpAnim[BOWSER_ANIM_THROW],
+         (const AnimRetarget*)0,
+         PM_HOLD,
+-        (void (*)(unsigned int, cPN_SAnimController*))0,
++        (void (*)(std::uintptr_t, cPN_SAnimController*))0,
+         (unsigned int)0,
+         (bool)0);
+     mpFeatherController = controller;
+@@ -932,7 +932,7 @@ void Bowser::ActionStomp()
+     nlVector3 vel;
+     mAnimID = 1;
+     cPN_SAnimController* controller = AllocateSAnimController();
+-    controller = ::new (controller) cPN_SAnimController(mpAnim[1], (const AnimRetarget*)0, PM_HOLD, (void (*)(unsigned int, cPN_SAnimController*))0, (unsigned int)0, (bool)0);
++    controller = ::new (controller) cPN_SAnimController(mpAnim[1], (const AnimRetarget*)0, PM_HOLD, (void (*)(std::uintptr_t, cPN_SAnimController*))0, (std::uintptr_t)0, (bool)0);
+     if (mpFeatherBlender->GetChild(0) != NULL)
+     {
+         delete mpFeatherBlender->GetChild(0);
+@@ -1009,7 +1009,7 @@ void Bowser::ActionFall()
+     mAnimID = BOWSER_ANIM_LAND;
+ 
+     cPN_SAnimController* controller = ::new (AllocateSAnimController()) cPN_SAnimController(
+-        mpAnim[BOWSER_ANIM_LAND], (const AnimRetarget*)0, PM_HOLD, (void (*)(unsigned int, cPN_SAnimController*))0, (unsigned int)0, (bool)0);
++        mpAnim[BOWSER_ANIM_LAND], (const AnimRetarget*)0, PM_HOLD, (void (*)(std::uintptr_t, cPN_SAnimController*))0, (std::uintptr_t)0, (bool)0);
+ 
+     if (mpFeatherBlender->GetChild(0) != NULL)
+     {
+@@ -1656,7 +1656,7 @@ void Bowser::PlaySFX(Audio::eCharSFX type, PosUpdateMethod posUpdateMethod, floa
+ 
+ void Bowser::SetBowserAnimState(eBowserAnim anim, ePlayMode playMode, float fBlendTime)
+ {
+-    cPN_SAnimController* controller = ::new (AllocateSAnimController()) cPN_SAnimController(mpAnim[anim], (const AnimRetarget*)0, playMode, (void (*)(unsigned int, cPN_SAnimController*))0, (unsigned int)0, (bool)0);
++    cPN_SAnimController* controller = ::new (AllocateSAnimController()) cPN_SAnimController(mpAnim[anim], (const AnimRetarget*)0, playMode, (void (*)(std::uintptr_t, cPN_SAnimController*))0, (std::uintptr_t)0, (bool)0);
+ 
+     cPoseNode* pNewPoseTree;
+ 
+@@ -1690,7 +1690,7 @@ void Bowser::SetBowserFeatherAnimState(eBowserAnim anim, float fBlendTime)
+     }
+ 
+     mpFeatherController = ::new (AllocateSAnimController()) cPN_SAnimController(
+-        mpAnim[anim], (const AnimRetarget*)0, PM_HOLD, (void (*)(unsigned int, cPN_SAnimController*))0, (unsigned int)0, (bool)0);
++        mpAnim[anim], (const AnimRetarget*)0, PM_HOLD, (void (*)(std::uintptr_t, cPN_SAnimController*))0, (std::uintptr_t)0, (bool)0);
+     mpFeatherBlender->ClearNodeWeights();
+     mpFeatherBlender->SetNodeWeight(0xE, 1.0f, 0.2f);
+     mpFeatherBlender->SetChild(1, mpFeatherController);
+--- a/src/Game/Render/SkinAnimatedNPC.cpp
++++ b/src/Game/Render/SkinAnimatedNPC.cpp
+@@ -158,7 +158,7 @@ void SkinAnimatedNPC::DrawShadow(const cPoseAccumulator& poseAccumulator, const
+  */
+ void SkinAnimatedNPC::SetAnimState(cSAnim& pAnim, float fBlendTime, ePlayMode playMode)
+ {
+-    cPN_SAnimController* controller = ::new (AllocateSAnimController()) cPN_SAnimController(&pAnim, (const AnimRetarget*)0, playMode, (void (*)(unsigned int, cPN_SAnimController*))0, (unsigned int)0, (bool)0);
++    cPN_SAnimController* controller = ::new (AllocateSAnimController()) cPN_SAnimController(&pAnim, (const AnimRetarget*)0, playMode, (void (*)(std::uintptr_t, cPN_SAnimController*))0, (std::uintptr_t)0, (bool)0);
+ 
+     if (mpPoseTree != NULL && fBlendTime > 0.0f)
+     {
+--- a/src/Game/SAnim/pnSAnimController.cpp
++++ b/src/Game/SAnim/pnSAnimController.cpp
+@@ -7,7 +7,7 @@ SlotPool<cPN_SAnimController> cPN_SAnimController::m_SAnimControllerSlotPool(0x1
+ /**
+  * Offset/Address/Size: 0xDC0 | 0x801EB41C | size: 0x98
+  */
+-cPN_SAnimController::cPN_SAnimController(cSAnim* pSAnim, const AnimRetarget* pAnimRetarget, ePlayMode playMode, void (*funcPlaybackSpeedCallback)(unsigned int, cPN_SAnimController*), unsigned int nPlaybackSpeedCallbackParam, bool bMirror)
++cPN_SAnimController::cPN_SAnimController(cSAnim* pSAnim, const AnimRetarget* pAnimRetarget, ePlayMode playMode, void (*funcPlaybackSpeedCallback)(std::uintptr_t, cPN_SAnimController*), std::uintptr_t nPlaybackSpeedCallbackParam, bool bMirror)
+     : cPoseNode()
+ {
+     m_pSAnim = pSAnim;
+--- a/src/Game/SAnim/pnSingleAxisBlender.cpp
++++ b/src/Game/SAnim/pnSingleAxisBlender.cpp
+@@ -7,7 +7,7 @@ SlotPool<cPN_SingleAxisBlender> cPN_SingleAxisBlender::m_SingleAxisBlenderSlotPo
+ /**
+  * Offset/Address/Size: 0x5DC | 0x801EF320 | size: 0xD4
+  */
+-cPN_SingleAxisBlender::cPN_SingleAxisBlender(int numChildren, void (*callback)(unsigned int, cPN_SingleAxisBlender*), unsigned int callbackParam, float weightSeek)
++cPN_SingleAxisBlender::cPN_SingleAxisBlender(int numChildren, void (*callback)(std::uintptr_t, cPN_SingleAxisBlender*), std::uintptr_t callbackParam, float weightSeek)
+     : cPoseNode(numChildren)
+ {
+     m_fSmoothedWeight = 0.0f;
+--- a/src/Game/world.cpp
++++ b/src/Game/world.cpp
+@@ -886,7 +886,7 @@ void World::CreateHelperObjFromChunk(nlChunk* chunk)
+         u8* pChunkData = (u8*)chunk;
+         pChunkData = pChunkData + alignBytes;
+         pChunkData = pChunkData + 7;
+-        pWorldHelperChunkData = (WorldHelperChunkData*)((u32)pChunkData & ~(alignBytes - 1));
++        pWorldHelperChunkData = (WorldHelperChunkData*)(reinterpret_cast<std::uintptr_t>(pChunkData) & ~static_cast<std::uintptr_t>(alignBytes - 1));
+     }
+     else
+     {

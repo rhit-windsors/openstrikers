@@ -1,0 +1,35 @@
+# The stock AI clear-shot path converts its sub-second windup range to an
+# integer before calling nlRandom, producing a zero range. PowerPC's divwu does
+# not trap for a zero divisor, but the host integer remainder does. Treat an
+# empty range as zero while still advancing the seed, preserving the only
+# useful result and the random sequence without crashing on x86.
+--- a/src/Game/AI/FielderDesires.cpp
++++ b/src/Game/AI/FielderDesires.cpp
+@@ -2562,6 +2562,10 @@ void cFielder::DesireShoot(float fDeltaT)
+             {
+                 if (ShouldIClearBall())
+                 {
++                    // The integer nlRandom overload, not nlRandomf: with the stock
++                    // 0.75s windup this asks for a random number in [0, 0), so
++                    // the windup is always the 0.1f floor. Faithful to the disc;
++                    // nlRandom now survives the empty range instead of trapping.
+                     m_pShotMeter->m_fTime = 0.1f + (float)nlRandom((unsigned int)(g_pGame->m_pGameTweaks->fShotWindupTime - 0.2f), &nlDefaultSeed);
+                 }
+                 m_pShotMeter->ShotReleased(this);
+--- a/src/NL/nlMath.cpp
++++ b/src/NL/nlMath.cpp
+@@ -424,7 +424,13 @@ uint nlRandom(uint range, uint* seed)
+     uint next;
+     uint temp;
+ 
+-    uint result = *seed % range;
++    // A zero range reaches here from cFielder::DesireShoot, which casts a
++    // sub-second float windup to an integer. On the Gekko, divwu by zero
++    // leaves the result undefined but raises nothing, so the shipped game
++    // never noticed. On x86 the same divide raises #DE (0xC0000094) and
++    // takes the process down. Pick the only answer an empty range has, and
++    // still advance the seed so the caller sequence stays in step.
++    uint result = (range != 0) ? (*seed % range) : 0;
+     next = *seed ^ 0x1d872b41;
+     temp = next ^ (next >> 5);
+     *seed = temp ^ (next ^ (temp << 0x1b));

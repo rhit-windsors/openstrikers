@@ -6,14 +6,21 @@ issue is reproduced, narrowed down, or fixed.
 
 ## Active issues
 
-### Pressing R with the ball makes the player hover
+### Players sometimes float above the pitch
 
-- **Expected:** A player carrying the ball stays planted on the pitch, and the
-  ball remains in the correct dribbling position relative to the player.
-- **Actual:** Pressing **R** on the GameCube controller while carrying the ball
-  lifts the player into the air; the ball then trails behind them.
-- **Reproduce:** Take possession, press R. (Previously logged as an
-  intermittent hover with no known trigger -- R is the trigger.)
+- **Expected:** Outfield players and goalkeepers stay planted on the pitch
+  except while an animation intentionally takes them into the air.
+- **Actual:** Players sometimes begin floating above the pitch during normal
+  play, including AI-controlled players and the goalkeeper. A ball carrier can
+  also rise while the ball trails behind them.
+- **Known reproduction:** Take possession and press **R** on a GameCube
+  controller. This reliably triggers the problem for the ball carrier, but the
+  apparently random floating seen on other players and goalkeepers shows that
+  R is not the complete explanation. Confirm whether both cases share the same
+  bad vertical position/velocity transition before splitting this issue.
+- **Goalkeeper status:** Keepers now defend, move, and animate normally. Their
+  only known remaining problem is the occasional floating already tracked by
+  this issue.
 - **Nothing in gameplay reads R, which is the interesting part.** R is
   `PAD_TRIGGER_R`, `0x20`. Four `ePadActions` remap to `0x20` in
   `g_pPadRemapArray` (`src/Game/PadActions.cpp:14`): `PAD_CAMERA_UP`,
@@ -22,10 +29,11 @@ issue is reproduced, narrowed down, or fixed.
   binds to a different button: pass/switch = A, shoot/slide = B, use = X,
   hit/deke = Y, powerup = Z, aim = L. So a button that no gameplay code
   consumes is visibly changing the ball carrier's state.
-- **Therefore start below the action layer, not in the gameplay code.** Log the
-  raw `PadStatus` button bits and both trigger axes on the frames where the
-  hover begins and find out what the game actually received when R went down --
-  whether an extra bit rides along with it, or something reads the pad directly
+- **Investigate below the action layer first.** Log vertical position and
+  velocity, movement state, current animation/root motion, grounded/contact
+  state, and raw `PadStatus` on the frame each affected character begins to
+  rise. For the R reproduction, also log both trigger axes and determine
+  whether an extra input bit rides along or something reads the pad directly
   rather than through `JustPressed`/`IsPressed`. `PAD_TURBO` being defined and
   never used is suspicious on its own: if the retail game sprints on R, the
   handler for it may be missing here and the physics may be falling through to
@@ -102,46 +110,6 @@ issue is reproduced, narrowed down, or fixed.
   `OPENSTRIKERS_SKIP_FE=1 OPENSTRIKERS_AUTO_A=1` and no input script, and get a
   stack under gdb rather than from the crash handler.
 
-### AI shooting can divide by zero
-
-- **Expected:** An AI fielder choosing a shot always produces a valid shot
-  windup time.
-- **Actual:** An unattended match can raise `0xC0000094` in
-  `nlRandom(unsigned int, unsigned int*)` after `cFielder::DesireShoot` converts
-  `(fShotWindupTime - 0.2f)` to a zero integer range.
-- **Status:** Reproduced once while verifying replays, after replay playback had
-  already completed and returned to gameplay. Guard or correct the range at
-  `FielderDesires.cpp:2565`; keep this separate from the replay fix.
-
-### Goalkeepers do not defend
-
-- **Expected:** Goalkeepers track play, position themselves, and attempt saves.
-- **Actual:** Goalkeepers do not defend the goal during a match.
-- **Additional symptom:** Goalkeepers sometimes move erratically, as though
-  their animations or state updates are playing too quickly.
-- **Partial cause found, needs re-testing.** The goalie save table is built from
-  animation *milestone* percentages, and every one of them was zero, so a keeper
-  had no idea when in a dive animation the hands actually reach the ball.
-  Milestones come from animation trigger callbacks, and no trigger ever matched:
-  `CharacterTriggers` read `cb->m_nParam1` as a `cSAnim*` and compared
-  `GetHashID()` against the trigger id, when `m_nParam1` is really the
-  `AnimTagCBInfo`. That cast worked on the GameCube by coincidence --
-  `cSAnim::m_uHashID` and `AnimTagCBInfo::ScriptInfo.Trigger` are both at 0x4
-  there -- but `AnimTagCBInfo` leads with an eight-byte pointer here, so the
-  comparison read the top half of that pointer. Fixed in
-  `patches/decomp-late/110-anim-trigger-callback-info-cast.patch`. Nothing
-  crashed; the whole trigger system just silently did nothing, which is why this
-  took so long to see.
-- **Also suspect:** `Goalie.cpp` still casts `this` to `unsigned int` in four
-  places (`DoNavigation`, `SetupBlender`) to pass itself as an animation
-  callback parameter -- lines 1787, 1807, 3355 and 3374. Those truncate on this
-  host, so the callback recovers a bad `Goalie*`. This is the same bug class as
-  the replay fix and is a likely cause of the erratic movement.
-- **Status:** Re-test before investigating further. Two real faults underneath
-  this have been fixed or identified since it was last observed, so confirm
-  whether keepers still fail to defend at all, and whether the erratic movement
-  survives fixing the four truncating casts above.
-
 ### Match intro screen textures are wrong
 
 - **Expected:** The pre-match intro scene looks like the original game's.
@@ -174,6 +142,34 @@ spent three times over.
 
 ## Recently fixed
 
+### Goalkeepers did not defend
+
+- The goalie save table was built from animation milestones, but every
+  milestone was zero because `CharacterTriggers` interpreted its callback data
+  as a `cSAnim*` instead of the actual `AnimTagCBInfo`. The corrected callback
+  lookup in `patches/decomp-late/110-anim-trigger-callback-info-cast.patch`
+  restores those milestones and lets keepers time their saves.
+- The goalie animation callbacks also carried `this` through 32-bit integers,
+  truncating the pointer on the 64-bit host. Their parameters now use
+  `std::uintptr_t`, restoring normal movement and animation timing.
+  `patches/decomp-late/114-animation-callback-context-host-width.patch`.
+- **Verified:** Goalkeepers now track play and defend the goal. Their only known
+  remaining defect is occasional floating, tracked under **Players sometimes
+  float above the pitch** above.
+
+### AI shooting could divide by zero
+
+- `cFielder::DesireShoot` uses the integer `nlRandom` overload for its clear-shot
+  windup. With the stock 0.75-second setting, converting
+  `(fShotWindupTime - 0.2f)` to an integer produces a zero range. GameCube's
+  `divwu` did not trap, but the host remainder operation raised `0xC0000094`.
+- `nlRandom` now returns zero for an empty range while still advancing its seed,
+  giving the clear-shot path its intended 0.1-second minimum without crashing.
+  `patches/decomp-late/113-guard-zero-range-nlrandom.patch`.
+- The patch was verified against a clean reconstructed patch stack, and the
+  full project builds and links successfully. The optimized object contains a
+  zero test and branches around the division while retaining the seed update.
+
 ### More 32-bit handles that had to become host width
 
 Found by auditing the tree against the patch stack, alongside the replay work.
@@ -203,7 +199,7 @@ on many remaining sites; that warning list is the working to-do for the rest of
 the 64-bit port. The concentrations are `Game/Sys/GCStream.h`, `Game/SAnim.h`
 and `PowerPC_EABI_Support/.../msl_tree.h` (all header templates, so the counts
 are per-instantiation rather than distinct sites), then `ode/obstack.cpp`,
-`Camera/animcam.cpp`, `Render/Bowser.cpp` and `Goalie.cpp`. Build with
+`Camera/animcam.cpp` and `Render/Bowser.cpp`. Build with
 `cmake --build build --clean-first 2>&1 | grep 'loses precision'` to regenerate
 it.
 
@@ -222,7 +218,7 @@ it.
 - Verified by recording 4.02 seconds of live gameplay, entering replay state,
   playing the entire buffer, and returning to gameplay without the former
   invalid callback jump. A separate AI shooting divide-by-zero occurred later
-  and is tracked above.
+  and has also been fixed.
 
 ### The controlled-player marker did not follow the player
 
