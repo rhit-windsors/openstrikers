@@ -40,6 +40,34 @@ issue is reproduced, narrowed down, or fixed.
   overlay, during the replay, or on the return to kickoff;
   `art/fe/goal_overlay.fen` and `x2_sts.fen` scene pushes bracket the region.
 
+### Replay backgrounds render incorrectly
+
+- **Expected:** A replay looks like the live match it is replaying.
+- **Actual:** The background textures are not right during replay playback.
+- **Worst at the start, over the celebration.** The opening stretch of the
+  replay -- the part where the scoring character is celebrating -- is where the
+  background goes most obviously wrong. Later in the same replay it is less
+  pronounced.
+- **Priority:** Medium. Replays play through and return to gameplay now, so this
+  is cosmetic rather than blocking, but it is on the path every goal takes.
+- **Status:** Reported from watching a replay; not yet characterised here. The
+  first thing to establish is whether this is its own bug or the existing
+  lighting/material issue below showing up more plainly against a replay
+  background -- capture the same camera angle live and in replay and compare,
+  rather than assuming either way.
+- **Reproduce without scoring:** `OPENSTRIKERS_TEST_AUTO_REPLAY=1` forces a goal
+  replay once the buffer fills (see the README). Note that it fabricates its
+  `GoalScoredData` with a null scorer, so it is good for the playback path but
+  may not reproduce a celebration that depends on a real scorer -- for the
+  celebration specifically, let the AI actually score.
+- **Lead worth checking first.** `DrawableCharacter::Replay` restores
+  `mEffectsTexturing` only under `ReplayFrameTraits<T>::IsLoadFrame &&
+  frame.mInterval == 1`, while the save path writes it unconditionally
+  (`patches/decomp-late/106`). That guard mirrors what the original pointer-cast
+  version did, but it is the one texturing-related pointer that replay restores
+  conditionally, and this is a texturing symptom. Confirm the interval actually
+  is 1 on the frames that look wrong before going further afield.
+
 ### The match crashes when A is held down through play
 
 - **Expected:** Mashing or holding A during a match shoots and passes; it does
