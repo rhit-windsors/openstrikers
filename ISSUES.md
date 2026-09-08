@@ -45,6 +45,13 @@ issue is reproduced, narrowed down, or fixed.
   lighting/material issue below showing up more plainly against a replay
   background -- capture the same camera angle live and in replay and compare,
   rather than assuming either way.
+- **The auto-replay hook does not currently render a replay.** A run on
+  2026-09-08 printed `AUTO_REPLAY_TEST begin=0.020 end=6.040` and
+  `completed time=3.060` on consecutive lines, between host frames 360 and 420,
+  and every dumped frame either side is live gameplay with the match clock still
+  running. So it enters and leaves the replay without playing it back, and it
+  cannot be used to reproduce this issue until that is understood -- let the AI
+  actually score instead. Worth fixing first, since it is the cheap path.
 - **Reproduce without scoring:** `OPENSTRIKERS_TEST_AUTO_REPLAY=1` forces a goal
   replay once the buffer fills (see the README). Note that it fabricates its
   `GoalScoredData` with a null scorer, so it is good for the playback path but
