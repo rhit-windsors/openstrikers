@@ -484,6 +484,22 @@ against silently discarding work that has not been saved as a patch yet.
 
 To throw the submodule edits away and start clean: `just unpatch`.
 
+**On Windows, a fresh clone looks dirty before you touch anything.**
+`git status` in `extern/decomp` reports `include/dolphin/GX.h` and
+`include/dolphin/VI.h` as modified. They are symlinks whose targets are `gx.h`
+and `vi.h` — the same names on a case-insensitive filesystem — so git writes the
+target's content and then sees the link as changed. Nothing is wrong and there
+is no edit to save; `apply_patches.sh` knows about these two by name and steps
+over them. Any *other* path in that list is a real unsaved edit.
+
+**Patch files must not be line-ending normalised.** A diff of CRLF sources
+carries a literal CR at the end of every context, `+` and `-` line, as content,
+while its `---`/`+++`/`@@` headers do not. Normalisation cannot tell the two
+apart, so it rewrites the file uniformly and the patch stops applying — one
+`.patch` here went from 275 CR bytes to 0 on the way into git. `.gitattributes`
+marks `*.patch` as `-text` to keep them byte-exact. If you add a patch directory,
+make sure it is covered.
+
 ### Patch stages, and why the order matters
 
 The patches are applied in four stages, in this order:

@@ -6,8 +6,18 @@ EXTERN_DIR="$ROOT/extern"
 cd "$EXTERN_DIR"
 
 for repo in decomp decomp/extern/musyx aurora; do
-  if [ -n "$(git -C "$repo" status --porcelain)" ]; then
+  dirty="$(git -C "$repo" status --porcelain)"
+  # A fresh clone on Windows reports include/dolphin/GX.h and VI.h as modified.
+  # They are symlinks to gx.h and vi.h, which collide with their own targets on
+  # a case-insensitive filesystem, so git checks out the target's content and
+  # then sees the symlink as changed. It is not an unsaved edit.
+  if [ "$repo" = decomp ]; then
+    dirty="$(printf '%s\n' "$dirty" | grep -v ' include/dolphin/GX\.h$' | grep -v ' include/dolphin/VI\.h$' || true)"
+  fi
+  dirty="$(printf '%s' "$dirty" | sed '/^$/d')"
+  if [ -n "$dirty" ]; then
     echo "WARNING: $repo has edits that aren't saved as a patch. Aborting...."
+    printf '%s\n' "$dirty" | sed 's/^/    /'
     echo "Generate the missing patch with: git -C $repo diff > patches/.../name.patch"
     exit 1
   fi
