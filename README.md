@@ -29,7 +29,8 @@ of the capture.
 |---|---|
 | Windows (native, MSYS2 UCRT64) | front end complete; a match loads and runs -- `smoke-test.ps1` passes |
 | Linux / WSL (GCC) | builds and boots (not re-verified since the render/input work) |
-| Rendering | 2D/front end, the in-match HUD, stadium and animated characters draw correctly |
+| Rendering | 2D/front end, the in-match HUD, stadium and animated characters draw correctly; lighting and some background surfaces are still wrong -- see `ISSUES.md` |
+| Characters | stay planted on the pitch -- see [Characters floated because a mirrored blend read a dead stack slot](#characters-floated-because-a-mirrored-blend-read-a-dead-stack-slot) |
 | 3D models | `.bmd` loads (342 models for the palace) plus skin meshes; shared-array geometry corruption is fixed -- see [The match rendering fix](#the-match-rendering-fix) |
 | Leaving a match | quitting from the pause menu returns to the main menu and keeps running |
 | Replays | snapshot playback completes on the 64-bit host; pointer-width and highlight-layout faults fixed |
@@ -153,6 +154,71 @@ The lesson worth keeping: three of those four never crashed. A truncated pointer
 that happens to land on mapped memory, or a comparison that simply never matches,
 just makes a feature quietly do nothing. Grep the build warnings before assuming
 a subsystem is unimplemented.
+
+### Characters floated because a mirrored blend read a dead stack slot
+
+Outfield players and goalkeepers used to rise off the pitch during normal play.
+The ball carrier did too, and the ball kept trailing along the ground behind
+them -- which is the whole diagnosis in one sentence, because it says the drawn
+skeleton and `m_v3Position` had come apart. Gameplay, physics and the ball all
+follow `m_v3Position`; only the pose was moving.
+
+`cPoseAccumulator::BlendTrans` handles a mirrored animation by rewriting the
+incoming translation into a local and repointing its parameter at it:
+
+```cpp
+if (bMirror) {
+    nlVector3 vtemp;          // declared inside the block
+    ...
+    pTrans = &vtemp;
+}                             // vtemp's lifetime ends here
+...
+e->t.z = inv * e->t.z + t * pTrans->z;   // read afterwards
+```
+
+`BlendRot`, immediately above it, declares its `qtemp` *outside* the block.
+That is the correct shape; this one had drifted. MWCC left the slot alone and
+the retail game worked by accident, but GCC reuses it, so every mirrored blend
+picked up whatever the compiler had since put there. On a limb node that is a
+small wrong offset. On the animated root node, whose translation is the
+character's hip height, it is the whole skeleton's height.
+`patches/decomp-late/115-mirrored-blend-trans-dangling-local.patch`.
+
+R "causing" the hover was a red herring twice over. Gameplay *does* read R --
+`cAIPad::IsTurboPressed` calls `GetPressure(0x14, true)`, and `0x14` is
+`PAD_TURBO` written as a literal, which is why grepping for the enum name found
+nothing. R plus a deflected stick is turbo, and the turbo run states force
+mirror swaps (`mActionRunningWBTurboVars.bForcedMirrorSwap`), so holding R with
+the ball reliably put a mirrored controller in the pose tree. The button was
+never doing anything to the physics.
+
+**Two lessons worth more than the fix.**
+
+*Measure the layer, not the symptom.* "Floating" could be a bad vertical
+position or a bad pose, and those live in different code. Logging the lower
+foot's posed world height next to `m_v3Position.z` separated them in one run:
+`m_v3Position.z` never left zero. A second pass walked the pose tree and
+re-derived what the blend should have produced -- every animation feeding the
+root node read about 0.29 while the accumulator held 0.84. A convex blend cannot
+do that, which is what named the accumulator rather than the animations.
+
+*Undefined behaviour moves when you look at it.* Adding an **inert** branch to
+`cSAnim::BlendTrans` -- code that could not change behaviour -- made the float
+disappear entirely, twice, because a different tenant landed in the stack slot.
+If a symptom vanishes when you add a probe that cannot possibly matter, stop
+treating it as noise. Diagnostics for this class have to live in cold code; the
+ones that worked hung off `cCharacter::PostPhysicsUpdate` and touched nothing in
+the animation path.
+
+Verified by instrumenting the lower foot's posed height: before the fix a
+two-minute match logged 46-93 sustained lifts, feet held about 0.87 above the
+pitch for up to 320 frames. After it, none, with or without R held. The one
+detection left is a *far* goalkeeper holding a frozen pose, which is the
+original game's own optimisation -- `cCharacter::PrePhysicsUpdate` and
+`PostPhysicsUpdate` both skip posing a keeper while the ball is on the other
+half, so the node matrices simply stay where they were. The give-away is that
+every joint height is bit-identical frame to frame while the animation id keeps
+changing.
 
 ### The match rendering fix
 
@@ -1169,6 +1235,25 @@ every consumer takes a bare `const unsigned short*` and compares against native
 literals like `LocalizationTableNotFound`. `Load` byte-swaps the whole string
 block once, in place, and everything downstream stays native. `StringOffset`
 counts characters from `m_FirstString`, not bytes.
+
+**Not every class here is a width or an endianness bug: some are undefined
+behaviour that MWCC happened to tolerate.** `cPoseAccumulator::BlendTrans`
+declared a local *inside* the `if (bMirror)` block that fills it, repointed its
+`pTrans` parameter at that local, and dereferenced it after the block closed.
+MWCC left the stack slot alone, so the retail game worked; GCC reuses it, and
+every mirrored blend read whatever the compiler had since put there. On the
+animated root node that value is the character's height, which is why players
+floated off the pitch (`patches/decomp-late/115`). `BlendRot`, ten lines above,
+declares its `qtemp` outside the block and is correct -- so the grep shape is a
+`p = &local;` on the last line of a block, where `p` outlives it.
+
+This class behaves differently from the rest and that matters more than the
+fix. A width bug is deterministic; this one **moves when you measure it**.
+Adding an inert branch to a *neighbouring* function made the float disappear
+twice without changing any behaviour, because a different tenant landed in the
+slot. If a symptom vanishes when you add a probe that cannot possibly matter,
+that is evidence, not noise -- and the diagnostics have to move to cold code
+well away from the path being measured.
 
 **A struct passed by value is not always passed by value.** `SHCrossFader.cpp`
 and `SHChooseCup.cpp` reach the scene-graph finder through a union of two
