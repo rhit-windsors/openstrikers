@@ -6,15 +6,30 @@ issue is reproduced, narrowed down, or fixed.
 
 ## Active issues
 
-### Players sometimes hover while running with the ball
+### Pressing R with the ball makes the player hover
 
 - **Expected:** A player carrying the ball stays planted on the pitch, and the
   ball remains in the correct dribbling position relative to the player.
-- **Actual:** Players sometimes lift into the air while running with the ball;
-  when this happens, the ball trails behind them.
-- **Status:** Reported, not yet reproduced here. Capture which movement,
-  possession, or animation-state transition starts the hover, then compare the
-  player's ground height and the ball attachment/offset before and after it.
+- **Actual:** Pressing **R** on the GameCube controller while carrying the ball
+  lifts the player into the air; the ball then trails behind them.
+- **Reproduce:** Take possession, press R. (Previously logged as an
+  intermittent hover with no known trigger -- R is the trigger.)
+- **Nothing in gameplay reads R, which is the interesting part.** R is
+  `PAD_TRIGGER_R`, `0x20`. Four `ePadActions` remap to `0x20` in
+  `g_pPadRemapArray` (`src/Game/PadActions.cpp:14`): `PAD_CAMERA_UP`,
+  `PAD_REPLAY_FORWARD`, `PAD_TURBO` and `PAD_RESET_PLAYER_HOLD`. **None of the
+  four is referenced anywhere in `src/`.** Every action gameplay actually reads
+  binds to a different button: pass/switch = A, shoot/slide = B, use = X,
+  hit/deke = Y, powerup = Z, aim = L. So a button that no gameplay code
+  consumes is visibly changing the ball carrier's state.
+- **Therefore start below the action layer, not in the gameplay code.** Log the
+  raw `PadStatus` button bits and both trigger axes on the frames where the
+  hover begins and find out what the game actually received when R went down --
+  whether an extra bit rides along with it, or something reads the pad directly
+  rather than through `JustPressed`/`IsPressed`. `PAD_TURBO` being defined and
+  never used is suspicious on its own: if the retail game sprints on R, the
+  handler for it may be missing here and the physics may be falling through to
+  an unintended path.
 
 ### The game crashes after a goal is scored
 
@@ -127,14 +142,17 @@ issue is reproduced, narrowed down, or fixed.
   whether keepers still fail to defend at all, and whether the erratic movement
   survives fixing the four truncating casts above.
 
-### Match intro screens do not display
+### Match intro screen textures are wrong
 
-- **Expected:** The pre-match intro scene is visible before gameplay begins.
-- **Actual:** The intro scene runs without displaying correctly and still waits
-  for input.
-- **Harness behavior:** `capture.ps1` pulses A with `OPENSTRIKERS_AUTO_A=1` to
-  skip the invisible intro and reach gameplay.
-- **Status:** Reproducible; not yet investigated.
+- **Expected:** The pre-match intro scene looks like the original game's.
+- **Was:** The intro ran without displaying at all while still waiting for
+  input. **That part is fixed** -- the intro screen now runs and is visible.
+- **Actual:** It draws, but with texture oddities, and the background textures
+  in particular look wrong.
+- **Harness behavior:** `capture.ps1` still pulses A with `OPENSTRIKERS_AUTO_A=1`
+  to skip the intro and reach gameplay, which is worth keeping regardless.
+- **Status:** Reproducible. Treat it as one of the background-texture group
+  below rather than as an intro-specific bug until that is ruled out.
 
 ### Lighting and some character materials look incorrect
 
@@ -145,6 +163,14 @@ issue is reproduced, narrowed down, or fixed.
   texture-bundle loading are present.
 - **Status:** Likely a lighting or material-state translation issue; not yet
   isolated.
+
+**These three are probably one bug.** Background textures now look wrong in
+replays, on the match intro screen, and materials look wrong in open play --
+three different scenes, one symptom family. Before investigating any of them
+separately, get the same background captured in two of those contexts and
+compare; a single texture-format, material-state or TEV-stage translation fault
+would explain all three, and chasing them as three bugs is how a session gets
+spent three times over.
 
 ## Recently fixed
 
