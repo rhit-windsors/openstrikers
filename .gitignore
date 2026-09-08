@@ -20,3 +20,8 @@ texture_dumps/
 *.glg
 *.fen
 *.gci
+
+
+# Reference captures of the retail game, used to diff our render against.
+# Retail frames: keep them local, never commit them.
+dolphinscreenshots/

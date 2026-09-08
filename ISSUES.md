@@ -142,11 +142,67 @@ Frames 600/900/1200 of that run are the evidence below.
   falling through to the rasterized colour. Aurora has no magenta placeholder,
   so the flat colour is the game's own.
 
-**The fastest next step is a reference, not more code reading.** Dolphin is
-installed on this machine; one screenshot of the same intro camera from the
-retail game turns "these quads look wrong" into a diff that says exactly what
-should be there -- clouds, banners, flags or something else -- and that names
-the geometry to trace. Without it the next session is guessing at intent.
+### The reference comparison
+
+Dolphin screenshots of the retail game arrived on 2026-09-08 (16 shots of
+Peach & Toad Stadium and the tunnel intro, 4813x2688). The clean pair to work
+from is **our intro frame 240** against **the retail wide stadium shot**: same
+camera, same scene, so the differences are the bug list.
+
+**Two distinct defects, not one.**
+
+1. **The dome-top pennants draw as flat white rectangles.** Retail has small
+   textured flags -- yellow and red on a purple pole -- on the domes and towers.
+   We draw a plain white quad, larger than the pennant, in the same place. The
+   flat quads in the other intro frames are the same thing seen from other
+   angles: white rectangles in the sky at frame 600, magenta parallelograms at
+   900, red and purple at 1200. The geometry and its position are right; what it
+   is filled with is not.
+
+2. **The stonework is far too bright and too saturated.** Retail's stadium is
+   dark olive-grey stone with vines; ours is a bright yellow-green, same hue but
+   washed out, and the crowd is vivid where retail's is muted. The purple tower
+   banners and the vines are close to correct in both, so this is not a global
+   tint -- it is the lit surfaces that are wrong. This is the same defect as the
+   "lighting and some character materials look incorrect" entry above; the
+   retail tunnel shots make it plainest, where retail is nearly black and ours
+   is fully lit.
+
+### What has been ruled out
+
+- **Texture decoding.** `OPENSTRIKERS_TEXTURE_DUMPS=1` uploads and decodes 161
+  textures to RGBA8 (127 CMPR, 31 C8 with TLUTs resolved, 2 RGBA8, 1 I8) and
+  every one wrote a file; the dump path skips a texture whose conversion fails
+  or whose TLUT is missing. The 161 `texture_replacement: missing runtime key`
+  warnings are the replacement system reporting no HD pack, not errors.
+- **Untextured draws.** Flipping `EnableDebugPrints` in
+  `extern/aurora/lib/gx/gx.hpp` dumps every distinct shader config. The intro
+  builds 230 of them and **not one** has all its TEV stages sampling
+  `GX_TEXMAP_NULL`, and none has zero stages. So the white quads are not draws
+  that were never given a texture -- they sample a texmap and get white.
+- **Alpha compare.** The 230 configs use four settings, all sensible:
+  183 `GX_ALWAYS`, 24 `GX_GREATER ref 0`, 22 `GX_GREATER ref 64`, 1
+  `GX_GREATER ref 3`. Cutout billboards are being asked for correctly.
+- **Texgen.** 212 of the texgens are `GX_TG_TEX0` through `GX_IDENTITY`, with a
+  normal-mapped `GX_TEXMTX9` set for environment mapping and a few `GX_TG_SRTG`.
+  Nothing looks mis-translated at the config level.
+
+### Where to pick it up
+
+For (1): the shader samples a texmap and the result is white, so the question is
+what is *bound* at that draw -- a stale or wrong `GXTexObj`, or a texture whose
+data pointer no longer refers to what it did when it was uploaded. Log the bound
+texture's source key per draw and find the one the pennant uses.
+
+For (2): 107 of the 230 configs light `GX_COLOR0` with `mat GX_SRC_VTX amb
+GX_SRC_REG`, so the ambient term comes from a register. An ambient register
+being set to white would produce exactly this -- fully lit, hue preserved,
+detail washed out. Dump the channel material/ambient colours and the light
+objects at runtime and compare them against what the decomp sets. That is a
+much smaller search than "lighting is off".
+
+The screenshots are in `dolphinscreenshots/` (not committed -- they are retail
+game frames).
 
 ## Recently fixed
 

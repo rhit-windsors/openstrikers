@@ -873,6 +873,15 @@ A SIDE"** on a loop, which looks exactly like a hang and is not one.
   itself the finding. Note that it also makes aurora log a
   `texture_replacement: missing runtime key` warning per texture -- that is the
   replacement system saying no HD replacement pack is installed, not an error.
+* **Flipping `EnableDebugPrints` in `extern/aurora/lib/gx/gx.hpp`** (a
+  `constexpr bool`, so it needs a rebuild) makes aurora log every distinct
+  shader config it builds -- TEV stages with their texmap and channel ids, the
+  colour channels' lighting/material/ambient sources, the texgens and the alpha
+  compare. That is the fastest way to answer "is this draw even being asked to
+  sample a texture?" or "is lighting enabled on this surface?" without guessing
+  from pixels. The intro builds about 230 configs, so aggregate the log rather
+  than reading it. Turn it back off when done; it is not a patch.
+
 * `OPENSTRIKERS_TEST_AUTO_REPLAY=1` triggers a goal replay without scoring a
   goal. Waiting for the AI to score is slow and not reproducible; with this set,
   once the replay buffer holds about six seconds the hook fills in
