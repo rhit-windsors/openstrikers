@@ -865,9 +865,14 @@ A SIDE"** on a loop, which looks exactly like a hang and is not one.
   The define lands on `aurora_gx`, not `openstrikers` -- `recording.cpp` belongs to
   that target, so putting it in `CMAKE_CXX_FLAGS` for the main target silently does
   nothing. Toggling the option rebuilds one file.
-* `AuroraConfig::allowTextureDumps` in `src/main.cpp` writes every uploaded
-  texture to `%APPDATA%/openstrikers/texture_dumps` as DDS, which answers
-  "is the right asset being decoded?" directly.
+* `OPENSTRIKERS_TEXTURE_DUMPS=1` writes every uploaded texture to
+  `%APPDATA%/openstrikers/texture_dumps` as DDS, named by its source key
+  (format, dimensions, hash), which answers "is the right asset being decoded?"
+  directly. The dump is skipped when the conversion fails or a palette
+  texture's TLUT is missing, so a texture that is *absent* from the dump is
+  itself the finding. Note that it also makes aurora log a
+  `texture_replacement: missing runtime key` warning per texture -- that is the
+  replacement system saying no HD replacement pack is installed, not an error.
 * `OPENSTRIKERS_TEST_AUTO_REPLAY=1` triggers a goal replay without scoring a
   goal. Waiting for the AI to score is slow and not reproducible; with this set,
   once the replay buffer holds about six seconds the hook fills in

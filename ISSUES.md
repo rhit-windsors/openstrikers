@@ -107,6 +107,40 @@ compare; a single texture-format, material-state or TEV-stage translation fault
 would explain all three, and chasing them as three bugs is how a session gets
 spent three times over.
 
+### What the captures say so far
+
+Captured 2026-09-08 off the match intro, which is the cheapest of the three to
+reproduce: run with `OPENSTRIKERS_SKIP_FE=1` and **no** `OPENSTRIKERS_AUTO_A`,
+so the intro sits there waiting on A, and dump with `AURORA_DUMP_FRAME=every:30`.
+Frames 600/900/1200 of that run are the evidence below.
+
+- **The symptom is narrower than "background textures are wrong".** Characters,
+  grass, tunnel, stadium arches, brickwork and sky all render correctly and look
+  right. What is wrong is a handful of **billboard-shaped quads that draw as a
+  flat untextured colour** -- hard-edged rectangles and parallelograms hanging
+  in the background.
+- **The flat colour changes between shots**: white rectangles in the sky at
+  frame 600, magenta parallelograms above the characters at 900, red and dark
+  purple at 1200. So it is the *material/vertex* colour showing through, not one
+  bad asset. Correctly-textured soft clouds appear in the same skies as the flat
+  white rectangles, so it is not "clouds are broken" either.
+- **Texture decoding is not the fault.** A run with
+  `OPENSTRIKERS_TEXTURE_DUMPS=1` uploads and successfully decodes 161 textures
+  to RGBA8 (127 CMPR, 31 C8 with their TLUTs resolved, 2 RGBA8, 1 I8); every one
+  of them wrote a DDS, which the dump path skips when conversion fails or a TLUT
+  is missing. The 161 `texture_replacement: missing runtime key` warnings are
+  the replacement system reporting no HD replacement pack, not an error.
+- **So the remaining suspects are binding and TEV**, which is where the entry
+  above already pointed: a draw that should sample a texmap sampling nothing and
+  falling through to the rasterized colour. Aurora has no magenta placeholder,
+  so the flat colour is the game's own.
+
+**The fastest next step is a reference, not more code reading.** Dolphin is
+installed on this machine; one screenshot of the same intro camera from the
+retail game turns "these quads look wrong" into a diff that says exactly what
+should be there -- clouds, banners, flags or something else -- and that names
+the geometry to trace. Without it the next session is guessing at intent.
+
 ## Recently fixed
 
 ### Players sometimes floated above the pitch

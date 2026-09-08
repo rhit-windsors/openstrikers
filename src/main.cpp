@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include <aurora/main.h>   // DEVE venire prima della tua definizione di main,
                             // altrimenti la macro non si applica e hai un
                             // vero secondo main() -> conflitto di link
@@ -48,7 +49,13 @@ int main(int argc, char* argv[])   // <-- diventa aurora_main via macro
         .appName = "openstrikers",
         .vsync = false,
         .startFullscreen = false,
-        .allowTextureDumps = false,
+        // OPENSTRIKERS_TEXTURE_DUMPS=1 writes every uploaded texture to
+        // %APPDATA%/openstrikers/texture_dumps as DDS, named by its source key
+        // (format, dimensions, hash). It answers "is the right asset being
+        // decoded?" directly, and it is worth being able to turn on without a
+        // rebuild -- the runs it is useful for are the ones you are already
+        // repeating.
+        .allowTextureDumps = std::getenv("OPENSTRIKERS_TEXTURE_DUMPS") != nullptr,
         .mem1Size = OPENSTRIKERS_MEM1_SIZE,
         .mem2Size = OPENSTRIKERS_MEM2_SIZE,
     };
