@@ -615,27 +615,46 @@ void logFrameRate() {
 // The default hold is 6 frames -- long enough for an edge-triggered
 // JustPressed, short enough not to trip a menu's auto-repeat.
 //
+// SUP/SDOWN/SLEFT/SRIGHT deflect the *analog* stick, not the D-pad: gameplay
+// reads the stick and ignores the D-pad. L and R also drive their analog
+// trigger axes, because the game asks for R through `GetPressure(PAD_TURBO)`,
+// which reads `triggerRight` -- a script that set only the digital bit could
+// never turn turbo on. Turbo wants both, R held *and* the stick off centre, so
+// "run with turbo" is `frame:R+SUP:600`, not `frame:R:600`.
+//
 // Setting OPENSTRIKERS_INPUT also stands OPENSTRIKERS_AUTO_A down at the first
 // scripted frame: auto-A gets the run to kickoff, and would otherwise keep
 // mashing A through whatever menu the script opens.
+// The stick directions ride above the 16-bit pad word so one parsed value can
+// carry both; they are masked back out before the word reaches PADStatus.
+enum ScriptedStickBits : u32 {
+    SCRIPT_STICK_UP = 0x00010000u,
+    SCRIPT_STICK_DOWN = 0x00020000u,
+    SCRIPT_STICK_LEFT = 0x00040000u,
+    SCRIPT_STICK_RIGHT = 0x00080000u,
+    SCRIPT_STICK_MASK = 0x000F0000u,
+};
+
 struct ScriptedPress {
     u32 frame;
     u32 hold;
-    u16 buttons;
+    u32 controls;
 };
 
-u16 padButtonByName(const char* name, std::size_t len) {
+u32 padButtonByName(const char* name, std::size_t len) {
     struct Entry {
         const char* name;
-        u16 mask;
+        u32 mask;
     };
     static const Entry kButtons[] = {
-        {"A", PAD_BUTTON_A},        {"B", PAD_BUTTON_B},
-        {"X", PAD_BUTTON_X},        {"Y", PAD_BUTTON_Y},
-        {"Z", PAD_TRIGGER_Z},       {"L", PAD_TRIGGER_L},
-        {"R", PAD_TRIGGER_R},       {"START", PAD_BUTTON_START},
-        {"DUP", PAD_BUTTON_UP},     {"DDOWN", PAD_BUTTON_DOWN},
-        {"DLEFT", PAD_BUTTON_LEFT}, {"DRIGHT", PAD_BUTTON_RIGHT},
+        {"A", PAD_BUTTON_A},          {"B", PAD_BUTTON_B},
+        {"X", PAD_BUTTON_X},          {"Y", PAD_BUTTON_Y},
+        {"Z", PAD_TRIGGER_Z},         {"L", PAD_TRIGGER_L},
+        {"R", PAD_TRIGGER_R},         {"START", PAD_BUTTON_START},
+        {"DUP", PAD_BUTTON_UP},       {"DDOWN", PAD_BUTTON_DOWN},
+        {"DLEFT", PAD_BUTTON_LEFT},   {"DRIGHT", PAD_BUTTON_RIGHT},
+        {"SUP", SCRIPT_STICK_UP},     {"SDOWN", SCRIPT_STICK_DOWN},
+        {"SLEFT", SCRIPT_STICK_LEFT}, {"SRIGHT", SCRIPT_STICK_RIGHT},
     };
     for (const Entry& e : kButtons) {
         if (std::strlen(e.name) == len && std::strncmp(e.name, name, len) == 0) {
@@ -645,6 +664,34 @@ u16 padButtonByName(const char* name, std::size_t len) {
     std::fprintf(stderr, "openstrikers: OPENSTRIKERS_INPUT: unknown button '%.*s'\n", (int)len,
                  name);
     return 0;
+}
+
+// Full deflection in PADStatus units: the game normalises stickX/Y by 56 and
+// the triggers by 150, so these are the raw values that read back as 1.0.
+constexpr s8 kScriptStickFull = 56;
+constexpr u8 kScriptTriggerFull = 150;
+
+// Fill in the analog axes the digital bits imply, so a scripted press looks
+// like a real pad rather than a button word over a dead stick.
+void applyScriptedAnalog(PADStatus& st, u32 controls) {
+    if ((controls & SCRIPT_STICK_UP) != 0) {
+        st.stickY = kScriptStickFull;
+    }
+    if ((controls & SCRIPT_STICK_DOWN) != 0) {
+        st.stickY = (s8)-kScriptStickFull;
+    }
+    if ((controls & SCRIPT_STICK_LEFT) != 0) {
+        st.stickX = (s8)-kScriptStickFull;
+    }
+    if ((controls & SCRIPT_STICK_RIGHT) != 0) {
+        st.stickX = kScriptStickFull;
+    }
+    if ((controls & PAD_TRIGGER_L) != 0) {
+        st.triggerLeft = kScriptTriggerFull;
+    }
+    if ((controls & PAD_TRIGGER_R) != 0) {
+        st.triggerRight = kScriptTriggerFull;
+    }
 }
 
 // Parsed once. A malformed entry is reported and skipped rather than fatal:
@@ -696,18 +743,18 @@ const std::vector<ScriptedPress>& scriptedInput() {
                 if (plus == std::string::npos || plus > namesEnd) {
                     plus = namesEnd;
                 }
-                press.buttons |= padButtonByName(entry.c_str() + namePos, plus - namePos);
+                press.controls |= padButtonByName(entry.c_str() + namePos, plus - namePos);
                 namePos = plus + 1;
             }
-            if (press.buttons == 0) {
+            if (press.controls == 0) {
                 continue;
             }
             script.push_back(press);
         }
         for (const ScriptedPress& press : script) {
             std::fprintf(stderr,
-                         "openstrikers: scripted input: frame %u buttons 0x%04x hold %u\n",
-                         press.frame, press.buttons, press.hold);
+                         "openstrikers: scripted input: frame %u controls 0x%05x hold %u\n",
+                         press.frame, press.controls, press.hold);
         }
         return script;
     }();
@@ -729,15 +776,16 @@ u32 scriptedInputFirstFrame() {
     return sFirst;
 }
 
-// Buttons the script wants held on `frame`, or 0. Overlapping entries merge.
-u16 scriptedInputButtons(u32 frame) {
-    u16 buttons = 0;
+// Controls the script wants held on `frame`, or 0 -- pad buttons in the low
+// 16 bits, stick directions above them. Overlapping entries merge.
+u32 scriptedInputControls(u32 frame) {
+    u32 controls = 0;
     for (const ScriptedPress& press : scriptedInput()) {
         if (frame >= press.frame && frame < press.frame + press.hold) {
-            buttons |= press.buttons;
+            controls |= press.controls;
         }
     }
-    return buttons;
+    return controls;
 }
 } // namespace
 
@@ -776,7 +824,7 @@ bool osHostFrameBegin() {
         static u32 sFrame = 0;
         const u32 frame = sFrame++;
 
-        const u16 scripted = scriptedInputButtons(frame);
+        const u32 scripted = scriptedInputControls(frame);
         const u32 scriptStart = scriptedInputFirstFrame();
         // Auto-A stands down once the script is due, so it cannot mash A
         // through the menus the script exists to navigate.
@@ -785,7 +833,8 @@ bool osHostFrameBegin() {
         if (sAutoA || scriptStart != 0) {
             PADStatus st{};
             st.err = PAD_ERR_NONE;
-            st.button = scripted;
+            st.button = (u16)(scripted & ~SCRIPT_STICK_MASK);
+            applyScriptedAnalog(st, scripted);
             if (autoAActive && ((frame / 15) % 2) == 0) {
                 st.button |= PAD_BUTTON_A;
             }
@@ -794,8 +843,8 @@ bool osHostFrameBegin() {
             PADSetVirtualStatus(0, &st);
         }
 
-        if (scripted != 0 && (frame == 0 || scriptedInputButtons(frame - 1) != scripted)) {
-            std::fprintf(stderr, "openstrikers: frame %u: scripted buttons 0x%04x\n", frame,
+        if (scripted != 0 && (frame == 0 || scriptedInputControls(frame - 1) != scripted)) {
+            std::fprintf(stderr, "openstrikers: frame %u: scripted controls 0x%05x\n", frame,
                          scripted);
         }
     }

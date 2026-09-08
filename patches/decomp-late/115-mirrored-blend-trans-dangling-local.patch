@@ -1,0 +1,47 @@
+Mirrored pose blending read a dead stack slot, which is why characters float.
+
+cPoseAccumulator::BlendTrans handles a mirrored animation by rewriting the
+incoming translation into a local, `vtemp`, and repointing `pTrans` at it. The
+local was declared *inside* the `if (bMirror)` block, but `pTrans` is
+dereferenced after that block closes -- so every mirrored blend read a slot
+whose lifetime had ended. BlendRot, right above it, declares its `qtemp`
+outside the block and is correct; this is the one that drifted.
+
+MWCC left the slot untouched and the retail game worked by accident. GCC reuses
+it, so the mirrored path blended whatever the compiler had put there since.
+On limb nodes that is a small wrong offset; on the animated root node, whose
+translation is the character's hip height, it is the whole skeleton's height --
+the character lifts off the pitch while m_v3Position, which the ball and the
+gameplay code follow, stays on it. That is the "ball trails behind a floating
+carrier" shape exactly.
+
+Measured before the fix: with the root node's blend inputs all reading ~0.29
+from the animations, the accumulator held 0.84, and the posed feet sat ~0.87
+above the pitch for hundreds of frames at a time. Mirrored controllers were
+active in every occurrence. After the fix a two-minute match logs no sustained
+foot lift at all.
+
+Because it is undefined behaviour rather than bad data, it is sensitive to
+codegen: adding unrelated code to cSAnim::BlendTrans made the symptom vanish
+--- a/src/Game/PoseAccumulator.cpp
++++ b/src/Game/PoseAccumulator.cpp
+@@ -393,11 +393,18 @@
+     if (fabsf(fWeight) < 0.001f)
+         return;
+ 
++    // vtemp has to outlive the block that fills it: pTrans is repointed at it
++    // and dereferenced further down, after the mirror block has closed. It was
++    // declared inside that block, so the read was of a dead stack slot -- the
++    // same shape BlendRot avoids by declaring its qtemp out here. MWCC kept the
++    // slot alive and the original worked by accident; GCC reuses it, and the
++    // mirrored path then blended whatever landed there. On the root node that
++    // is the whole character's height, which is the players-float bug.
++    nlVector3 vtemp;
+     if (bMirror)
+     {
+         cSHierarchy* h = m_BaseSHierarchy;
+ 
+-        nlVector3 vtemp;
+         if (nNode <= h->m_nPelvisNodeIndex || nNode == h->m_nSpineNodeIndex)
+         {
+             vtemp.x = pTrans->x;

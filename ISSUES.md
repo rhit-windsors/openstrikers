@@ -6,39 +6,6 @@ issue is reproduced, narrowed down, or fixed.
 
 ## Active issues
 
-### Players sometimes float above the pitch
-
-- **Expected:** Outfield players and goalkeepers stay planted on the pitch
-  except while an animation intentionally takes them into the air.
-- **Actual:** Players sometimes begin floating above the pitch during normal
-  play, including AI-controlled players and the goalkeeper. A ball carrier can
-  also rise while the ball trails behind them.
-- **Known reproduction:** Take possession and press **R** on a GameCube
-  controller. This reliably triggers the problem for the ball carrier, but the
-  apparently random floating seen on other players and goalkeepers shows that
-  R is not the complete explanation. Confirm whether both cases share the same
-  bad vertical position/velocity transition before splitting this issue.
-- **Goalkeeper status:** Keepers now defend, move, and animate normally. Their
-  only known remaining problem is the occasional floating already tracked by
-  this issue.
-- **Nothing in gameplay reads R, which is the interesting part.** R is
-  `PAD_TRIGGER_R`, `0x20`. Four `ePadActions` remap to `0x20` in
-  `g_pPadRemapArray` (`src/Game/PadActions.cpp:14`): `PAD_CAMERA_UP`,
-  `PAD_REPLAY_FORWARD`, `PAD_TURBO` and `PAD_RESET_PLAYER_HOLD`. **None of the
-  four is referenced anywhere in `src/`.** Every action gameplay actually reads
-  binds to a different button: pass/switch = A, shoot/slide = B, use = X,
-  hit/deke = Y, powerup = Z, aim = L. So a button that no gameplay code
-  consumes is visibly changing the ball carrier's state.
-- **Investigate below the action layer first.** Log vertical position and
-  velocity, movement state, current animation/root motion, grounded/contact
-  state, and raw `PadStatus` on the frame each affected character begins to
-  rise. For the R reproduction, also log both trigger axes and determine
-  whether an extra input bit rides along or something reads the pad directly
-  rather than through `JustPressed`/`IsPressed`. `PAD_TURBO` being defined and
-  never used is suspicious on its own: if the retail game sprints on R, the
-  handler for it may be missing here and the physics may be falling through to
-  an unintended path.
-
 ### The game crashes after a goal is scored
 
 - **Expected:** A goal plays its celebration and replay, then the match resumes
@@ -142,6 +109,50 @@ spent three times over.
 
 ## Recently fixed
 
+### Players sometimes floated above the pitch
+
+- Outfield players and goalkeepers rose off the pitch during normal play, the
+  ball carrier included -- the ball kept trailing along the ground behind them,
+  which was the clue: the drawn skeleton and `m_v3Position` had come apart.
+- `cPoseAccumulator::BlendTrans` rewrites a mirrored animation's translation
+  into a local, `vtemp`, and repoints `pTrans` at it. `vtemp` was declared
+  *inside* the `if (bMirror)` block while `pTrans` is dereferenced after that
+  block closes, so every mirrored blend read a stack slot whose lifetime had
+  ended. `BlendRot` directly above declares its `qtemp` outside the block and is
+  correct; this one had drifted.
+- MWCC left the slot alone and the retail game worked by accident. GCC reuses
+  it, so a mirrored blend picked up whatever was there. On a limb that is a
+  small wrong offset; on the animated root node, whose translation is the
+  character's hip height, it lifts the entire skeleton.
+  `patches/decomp-late/115-mirrored-blend-trans-dangling-local.patch`.
+- **Verified.** Instrumented against the lower foot's posed world height: before
+  the fix a two-minute match logged 46-93 sustained lifts, feet held ~0.87 above
+  the pitch for up to 320 frames, with the root node's accumulator reading 0.84
+  while every animation feeding it read ~0.29. After the fix the same run logs
+  none, with or without R held.
+- **It is undefined behaviour, so it moves when you look at it.** Adding an
+  inert branch to `cSAnim::BlendTrans` made the symptom disappear without
+  fixing anything, twice. Any future diagnostic for this class of bug has to sit
+  outside the animation path -- the working one hung off
+  `cCharacter::PostPhysicsUpdate` and walked the pose tree from cold code.
+- **R was a red herring, and the old note here was wrong.** Gameplay does read
+  R: `cAIPad::IsTurboPressed` (`src/Game/AIPad.cpp:53`) asks for
+  `GetPressure(0x14, true)`, and `0x14` is `PAD_TURBO` written as a literal,
+  which is why grepping for the enum name found nothing. R plus a deflected
+  stick is turbo, and the turbo run states force mirror swaps
+  (`mActionRunningWBTurboVars.bForcedMirrorSwap`), which is why holding R with
+  the ball reproduced a mirrored blend so reliably.
+
+### Far goalkeepers hold a stale pose
+
+Not a bug, but it looks like one and it tripped the float investigation. A
+goalkeeper is only posed while the ball is on their half -- both
+`cCharacter::PrePhysicsUpdate` and `PostPhysicsUpdate` guard on
+`m_v3Position.x * g_pBall->m_v3Position.x > 0`. With play at the other end the
+far keeper's node matrices stay frozen at whatever they last were, feet
+included. The give-away is that every joint height is bit-identical frame to
+frame while the animation id keeps changing.
+
 ### Goalkeepers did not defend
 
 - The goalie save table was built from animation milestones, but every
@@ -153,9 +164,9 @@ spent three times over.
   truncating the pointer on the 64-bit host. Their parameters now use
   `std::uintptr_t`, restoring normal movement and animation timing.
   `patches/decomp-late/114-animation-callback-context-host-width.patch`.
-- **Verified:** Goalkeepers now track play and defend the goal. Their only known
-  remaining defect is occasional floating, tracked under **Players sometimes
-  float above the pitch** above.
+- **Verified:** Goalkeepers now track play and defend the goal. The floating
+  that was still left after this is fixed too -- see **Players sometimes floated
+  above the pitch** above; it was never goalie-specific.
 
 ### AI shooting could divide by zero
 

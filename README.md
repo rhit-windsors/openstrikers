@@ -817,10 +817,19 @@ off its default NO, A.
 
 Entries are `frame:BUTTONS[:holdFrames]` separated by `;` or `,`. Frames are
 host frames since process start. `BUTTONS` is one or more of `A B X Y Z L R
-START DUP DDOWN DLEFT DRIGHT`, joined with `+`. The hold defaults to 6 frames --
-long enough for an edge-triggered `JustPressed`, short enough not to trip a
-menu's auto-repeat. Every press is echoed to stderr as it fires, so the log says
-what the game was actually handed.
+START DUP DDOWN DLEFT DRIGHT SUP SDOWN SLEFT SRIGHT`, joined with `+`. The hold
+defaults to 6 frames -- long enough for an edge-triggered `JustPressed`, short
+enough not to trip a menu's auto-repeat. Every press is echoed to stderr as it
+fires, so the log says what the game was actually handed.
+
+**Gameplay needs the analog axes, not just the button word.** `SUP`, `SDOWN`,
+`SLEFT` and `SRIGHT` deflect the *analog stick*; the D-pad entries do not move
+it, and nothing in a match reads the D-pad. `L` and `R` drive their analog
+trigger axes as well as their digital bits, which matters because the game asks
+for R through `GetPressure(PAD_TURBO)` -- that reads `triggerRight`, so a script
+that set only the digital bit could never turn turbo on. Turbo wants both, R
+held *and* the stick off centre, so running with turbo is `frame:R+SUP:600`,
+not `frame:R:600`.
 
 Setting `OPENSTRIKERS_INPUT` also stands `OPENSTRIKERS_AUTO_A` down at the first
 scripted frame: auto-A is useful for reaching kickoff and actively harmful once
