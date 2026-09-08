@@ -1,0 +1,104 @@
+--- a/src/Game/DB/SaveLoad.cpp
++++ b/src/Game/DB/SaveLoad.cpp
+@@ -112,9 +112,13 @@
+     IconCfg.BannerFormat = 2;
+ }
+ 
+-static inline TEXHeaderPtr GetTPLImageHeader(TEXPalettePtr tpl)
++// Returns the offset of the first image's TEXHeader from the start of the .tpl,
++// which is what the file stores. It was typed TEXHeaderPtr because the SDK
++// header typed the field that way, and every caller immediately cast it back to
++// u32 to add it to the buffer base.
++static inline u32 GetTPLImageHeader(TEXPalettePtr tpl)
+ {
+-    return ((TEXDescriptorPtr)((u8*)tpl + (u32)tpl->descriptorArray))->textureHeader;
++    return ((TEXDescriptorPtr)((u8*)tpl + tpl->descriptorArray))->textureHeader;
+ }
+ 
+ /**
+@@ -486,8 +490,8 @@
+         m_pSaveFile->IconCfg.GetValidDataInfo(bannerDataInfo);
+         bannerDataInfo.pHeaderData = (unsigned char*)gIconDataCache.mIconHdrBuffer;
+         TEXPalettePtr bannerTpl = (TEXPalettePtr)gIconDataCache.mBannerBuffer;
+-        TEXHeaderPtr bannerHeader = GetTPLImageHeader(bannerTpl);
+-        void* srcBanner = (u8*)bannerTpl + (u32)((TEXHeaderPtr)((u8*)bannerTpl + (u32)bannerHeader))->data;
++        u32 bannerHeaderOffset = GetTPLImageHeader(bannerTpl);
++        void* srcBanner = (u8*)bannerTpl + ((TEXHeaderPtr)((u8*)bannerTpl + bannerHeaderOffset))->data;
+         void* destBanner = bannerDataInfo.pHeaderData + bannerDataInfo.BannerOffset;
+         u8 bannerFmt = m_pSaveFile->IconCfg.BannerFormat;
+         memcpy(destBanner, srcBanner, ((bannerFmt == 1) ? 0x200 : 0) + bannerFmt * 0xC00);
+@@ -496,10 +500,10 @@
+         m_pSaveFile->IconCfg.GetValidDataInfo(iconDataInfo);
+         iconDataInfo.pHeaderData = (unsigned char*)gIconDataCache.mIconHdrBuffer;
+         TEXPalettePtr iconTpl = (TEXPalettePtr)gIconDataCache.mIconBuffer;
+-        TEXHeaderPtr iconHeader = GetTPLImageHeader(iconTpl);
++        u32 iconHeaderOffset = GetTPLImageHeader(iconTpl);
+         memcpy(
+             iconDataInfo.pHeaderData + iconDataInfo.IconOffset[0],
+-            (u8*)iconTpl + (u32)((TEXHeaderPtr)((u8*)iconTpl + (u32)iconHeader))->data,
++            (u8*)iconTpl + ((TEXHeaderPtr)((u8*)iconTpl + iconHeaderOffset))->data,
+             m_pSaveFile->IconCfg.IconFormat << 10);
+ 
+         char iconFmtH = m_pSaveFile->IconCfg.IconFormat;
+@@ -574,7 +578,12 @@
+         return -1;
+     }
+ 
+-    DoSave(Slot);
++    // MWCC left DoSave's result in r3 and fell off the end, so the function
++    // returned it. GCC treats falling off the end of a non-void function as
++    // unreachable and lets control run straight into the cold block laid out
++    // after it, which dereferences m_pSaveFile with a clobbered register.
++    // Return the value the original code returned.
++    return (unsigned long)DoSave(Slot);
+ }
+ 
+ /**
+@@ -597,8 +606,8 @@
+     m_pSaveFile->IconCfg.GetValidDataInfo(bannerDataInfo);
+     bannerDataInfo.pHeaderData = (unsigned char*)gIconDataCache.mIconHdrBuffer;
+     TEXPalettePtr bannerTpl = (TEXPalettePtr)gIconDataCache.mBannerBuffer;
+-    TEXHeaderPtr bannerHeader = GetTPLImageHeader(bannerTpl);
+-    void* srcBanner = (u8*)bannerTpl + (u32)((TEXHeaderPtr)((u8*)bannerTpl + (u32)bannerHeader))->data;
++    u32 bannerHeaderOffset = GetTPLImageHeader(bannerTpl);
++    void* srcBanner = (u8*)bannerTpl + ((TEXHeaderPtr)((u8*)bannerTpl + bannerHeaderOffset))->data;
+     u8 bannerFmt = m_pSaveFile->IconCfg.BannerFormat;
+     memcpy((u8*)gIconDataCache.mIconHdrBuffer + bannerDataInfo.BannerOffset, srcBanner, ((bannerFmt == 1) ? 0x200 : 0) + bannerFmt * 0xC00);
+ 
+@@ -606,10 +615,10 @@
+     m_pSaveFile->IconCfg.GetValidDataInfo(iconDataInfo);
+     iconDataInfo.pHeaderData = (unsigned char*)gIconDataCache.mIconHdrBuffer;
+     TEXPalettePtr iconTpl = (TEXPalettePtr)gIconDataCache.mIconBuffer;
+-    TEXHeaderPtr iconHeader = GetTPLImageHeader(iconTpl);
++    u32 iconHeaderOffset = GetTPLImageHeader(iconTpl);
+     memcpy(
+         iconDataInfo.pHeaderData + iconDataInfo.IconOffset[0],
+-        (u8*)iconTpl + (u32)((TEXHeaderPtr)((u8*)iconTpl + (u32)iconHeader))->data,
++        (u8*)iconTpl + ((TEXHeaderPtr)((u8*)iconTpl + iconHeaderOffset))->data,
+         m_pSaveFile->IconCfg.IconFormat << 10);
+ 
+     char iconFmtH = m_pSaveFile->IconCfg.IconFormat;
+@@ -710,8 +719,8 @@
+         m_pSaveFile->IconCfg.GetValidDataInfo(bannerDataInfo);
+         bannerDataInfo.pHeaderData = (unsigned char*)gIconDataCache.mIconHdrBuffer;
+         TEXPalettePtr bannerTpl = (TEXPalettePtr)gIconDataCache.mBannerBuffer;
+-        TEXHeaderPtr bannerHeader = GetTPLImageHeader(bannerTpl);
+-        void* srcBanner = (u8*)bannerTpl + (u32)((TEXHeaderPtr)((u8*)bannerTpl + (u32)bannerHeader))->data;
++        u32 bannerHeaderOffset = GetTPLImageHeader(bannerTpl);
++        void* srcBanner = (u8*)bannerTpl + ((TEXHeaderPtr)((u8*)bannerTpl + bannerHeaderOffset))->data;
+         void* destBanner = bannerDataInfo.pHeaderData + bannerDataInfo.BannerOffset;
+         u8 bannerFmt = m_pSaveFile->IconCfg.BannerFormat;
+         memcpy(
+@@ -721,10 +730,10 @@
+         m_pSaveFile->IconCfg.GetValidDataInfo(iconDataInfo);
+         iconDataInfo.pHeaderData = (unsigned char*)gIconDataCache.mIconHdrBuffer;
+         TEXPalettePtr iconTpl = (TEXPalettePtr)gIconDataCache.mIconBuffer;
+-        TEXHeaderPtr iconHeader = GetTPLImageHeader(iconTpl);
++        u32 iconHeaderOffset = GetTPLImageHeader(iconTpl);
+         memcpy(
+             iconDataInfo.pHeaderData + iconDataInfo.IconOffset[0],
+-            (u8*)iconTpl + (u32)((TEXHeaderPtr)((u8*)iconTpl + (u32)iconHeader))->data,
++            (u8*)iconTpl + ((TEXHeaderPtr)((u8*)iconTpl + iconHeaderOffset))->data,
+             m_pSaveFile->IconCfg.IconFormat << 10);
+ 
+         MemCard::MC_FILE* fileH = m_pSaveFile;

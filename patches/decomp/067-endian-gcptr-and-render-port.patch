@@ -1,0 +1,2662 @@
+--- a/include/Game/Audio/StreamTrack.h
++++ b/include/Game/Audio/StreamTrack.h
+@@ -386,7 +386,9 @@
+ 
+         m_FadeMgr.Update(dT);
+ 
+-        for (track = 0, trackOffset = 0; track < m_Tracks.GetEntryCount(); track++, trackOffset += 8)
++        typedef typename nlSortedSlot<StreamTrack, N>::template EntryLookup<StreamTrack> Lookup;
++        // The stride was the GameCube size of Lookup: a hash and a 4-byte pointer.
++        for (track = 0, trackOffset = 0; track < m_Tracks.GetEntryCount(); track++, trackOffset += sizeof(Lookup))
+         {
+             ((typename nlSortedSlot<StreamTrack, N>::template EntryLookup<StreamTrack>*)((char*)m_Tracks.m_pEntryLookup + trackOffset))
+                 ->pEntry->Update(dT);
+@@ -427,7 +429,8 @@
+         unsigned long track;
+         float vol = ::gfVolumeGroups[VolumeGroup];
+ 
+-        for (track = 0, trackOffset = 0; track < m_Tracks.GetEntryCount(); trackOffset += 8, track++)
++        typedef typename nlSortedSlot<StreamTrack, N>::template EntryLookup<StreamTrack> Lookup;
++        for (track = 0, trackOffset = 0; track < m_Tracks.GetEntryCount(); trackOffset += sizeof(Lookup), track++)
+         {
+             StreamTrack::QUEUED_STREAM* qs
+                 = ((typename nlSortedSlot<StreamTrack, N>::template EntryLookup<StreamTrack>*)((char*)m_Tracks.m_pEntryLookup + trackOffset))
+--- a/include/Game/FE/feAnimation.h
++++ b/include/Game/FE/feAnimation.h
+@@ -3,6 +3,9 @@
+ 
+ #include "types.h"
+ 
++#include "NL/nlEndian.h"
++#include "NL/nlGCPtr.h"
++
+ #include "Game/FE/tlInstance.h"
+ #include "NL/nlDLRing.h"
+ 
+@@ -20,43 +23,55 @@
+ class FEAnimationKeyframe
+ {
+ public:
+-    /* 0x00 */ float m_fPoint;
+-    /* 0x04 */ float m_fControl1;
+-    /* 0x08 */ float m_fControl2;
+-    /* 0x0C */ float m_fTime;
++    /* 0x00 */ bef32 m_fPoint;
++    /* 0x04 */ bef32 m_fControl1;
++    /* 0x08 */ bef32 m_fControl2;
++    /* 0x0C */ bef32 m_fTime;
+ }; /* size: 0x10 */
++NL_GC_LAYOUT(FEAnimationKeyframe, 0x10);
+ 
+ typedef struct fAnimationKeyframe
+ {
+     /* 0x00 */ FEAnimationKeyframe pKeyFrameData;
+-    /* 0x10 */ fAnimationKeyframe* m_next;
+-    /* 0x14 */ fAnimationKeyframe* m_prev;
++    /* 0x10 */ nlGCPtr32<fAnimationKeyframe> m_next;
++    /* 0x14 */ nlGCPtr32<fAnimationKeyframe> m_prev;
+ } fAnimationKeyframe; /* size: 0x18 */
++NL_GC_LAYOUT(fAnimationKeyframe, 0x18);
+ 
+ typedef struct v3AnimationKeyframe
+ {
+     /* 0x00 */ FEAnimationKeyframe pKeyFrameDataX;
+     /* 0x10 */ FEAnimationKeyframe pKeyFrameDataY;
+     /* 0x20 */ FEAnimationKeyframe pKeyFrameDataZ;
+-    /* 0x30 */ v3AnimationKeyframe* m_next;
+-    /* 0x34 */ v3AnimationKeyframe* m_prev;
++    /* 0x30 */ nlGCPtr32<v3AnimationKeyframe> m_next;
++    /* 0x34 */ nlGCPtr32<v3AnimationKeyframe> m_prev;
+ } v3AnimationKeyframe; /* size: 0x38 */
++NL_GC_LAYOUT(v3AnimationKeyframe, 0x38);
+ 
+-class FEAnimation /* size >= 0x1C */
++class FEAnimation /* size: 0x1C */
+ {
+ public:
+-    virtual ~FEAnimation() { }
++    // Animations are serialized into the package, which reserves four bytes at
++    // offset 0 for the vtable pointer the GameCube build had here. Nothing ever
++    // deletes one through a base pointer or calls a virtual on it, so the port
++    // keeps the slot as dead space rather than growing it to eight bytes and
++    // sliding every field after it.
++    /* 0x00 */ u32 m_vtableSlot;
+ 
+     void Update(float fCurrentTime);
+     void AnimateTargetAtTimeWithVector3(float fCurrentTime);
+ 
+-    /* 0x04 */ FEAnimation* m_next;
+-    /* 0x08 */ FEAnimation* m_prev;
+-    /* 0x0C */ TLInstance* m_pTLInstanceTarget;
+-    /* 0x10 */ u16 m_cast_type;
++    /* 0x04 */ nlGCPtr32<FEAnimation> m_next;
++    /* 0x08 */ nlGCPtr32<FEAnimation> m_prev;
++    /* 0x0C */ nlGCPtr32<TLInstance> m_pTLInstanceTarget;
++    /* 0x10 */ beu16 m_cast_type;
+     /* 0x12 */ char pad12[2];
+-    /* 0x14 */ AnimType m_type;
+-    /* 0x18 */ void* m_DLRingHead;
++    /* 0x14 */ nlBEEnum<AnimType> m_type;
++    /* 0x18 */ u32 m_DLRingHead;
+ };
++NL_GC_LAYOUT(FEAnimation, 0x1C);
++NL_GC_FIELD(FEAnimation, m_next, 0x04);
++NL_GC_FIELD(FEAnimation, m_type, 0x14);
++NL_GC_FIELD(FEAnimation, m_DLRingHead, 0x18);
+ 
+ #endif // _FEANIMATION_H_
+--- a/include/Game/FE/feAsyncImage.h
++++ b/include/Game/FE/feAsyncImage.h
+@@ -9,8 +9,9 @@
+ class TLImageInstance : public TLInstance
+ {
+ public:
+-    /* 0x80 */ FETextureResource* m_pTextureResource;
++    /* 0x80 */ nlGCPtr32<FETextureResource> m_pTextureResource;
+ }; // total size: 0x84
++NL_GC_LAYOUT(TLImageInstance, 0x84);
+ 
+ enum LoadState
+ {
+--- a/include/Game/FE/feFinder.h
++++ b/include/Game/FE/feFinder.h
+@@ -62,6 +62,14 @@
+     template <typename U>
+     inline static T* Find(U* pTopLevel, InlineHasher Level1, InlineHasher Level2 = 0, InlineHasher Level3 = 0, InlineHasher Level4 = 0, InlineHasher Level5 = 0, InlineHasher Level6 = 0);
+ 
++    // Package data stores these lists as GameCube-width pointers, so let callers
++    // pass one straight through rather than spelling out the conversion.
++    template <typename U>
++    inline static T* Find(nlGCPtr32<U> pTopLevel, InlineHasher Level1, InlineHasher Level2 = 0, InlineHasher Level3 = 0, InlineHasher Level4 = 0, InlineHasher Level5 = 0, InlineHasher Level6 = 0)
++    {
++        return Find(static_cast<U*>(pTopLevel), Level1, Level2, Level3, Level4, Level5, Level6);
++    }
++
+     template <typename U>
+     inline static T* _Find(U* pTopLevel, const unsigned long Level1, const unsigned long Level2,
+         const unsigned long Level3, const unsigned long Level4, const unsigned long Level5, const unsigned long Level6);
+--- a/include/Game/FE/feFontResource.h
++++ b/include/Game/FE/feFontResource.h
+@@ -9,7 +9,8 @@
+ public:
+     void SetFontReference(nlFont* pFontReference);
+ 
+-    /* 0x14 */ nlFont* m_pFontReference;
+-};
++    /* 0x14 */ nlGCPtr32<nlFont> m_pFontReference;
++}; // total size: 0x18
++NL_GC_LAYOUT(FEFontResource, 0x18);
+ 
+ #endif // _FEFONTRESOURCE_H_
+--- a/include/Game/FE/feImage.h
++++ b/include/Game/FE/feImage.h
+@@ -9,8 +9,9 @@
+ class FEImage : public FELibObject
+ {
+ public:
+-    /* 0x68 */ FETextureResource* m_pFeTextureResource;
++    /* 0x68 */ nlGCPtr32<FETextureResource> m_pFeTextureResource;
+ }; // total size: 0x6C
++NL_GC_LAYOUT(FEImage, 0x6C);
+ 
+ // TLInstance's accessor bodies are visible only to this TU chain: retail
+ // tlSlide.o binds them UND, so they must not be inlinable from tlInstance.h,
+--- a/include/Game/FE/feLibObject.h
++++ b/include/Game/FE/feLibObject.h
+@@ -4,8 +4,12 @@
+ #include "types.h"
+ 
+ #include "NL/nlColour.h"
++#include "NL/nlEndian.h"
++#include "NL/nlGCPtr.h"
+ #include "NL/nlMath.h"
+ 
++// feVector3/feVector2 are the on-disc form of a vector: same layout as
++// nlVector3/nlVector2, big-endian like everything else in a .fen.
+ class feVector3
+ {
+ public:
+@@ -16,17 +20,48 @@
+         out.z = f.z;
+     }
+ 
++    operator nlVector3() const
++    {
++        nlVector3 out;
++        GetNLVector3(out);
++        return out;
++    }
++
+     union
+     {               // inferred
+-        float e[3]; // offset 0x0, size 0xC
++        bef32 e[3]; // offset 0x0, size 0xC
+         struct
+         {            // inferred
+-            float x; // offset 0x0, size 0x4
+-            float y; // offset 0x4, size 0x4
+-            float z; // offset 0x8, size 0x4
++            bef32 x; // offset 0x0, size 0x4
++            bef32 y; // offset 0x4, size 0x4
++            bef32 z; // offset 0x8, size 0x4
+         } f;
+     };
+ }; // total size: 0xC
++NL_GC_LAYOUT(feVector3, 0xC);
++
++class feVector2
++{
++public:
++    operator nlVector2() const
++    {
++        nlVector2 out;
++        out.x = x;
++        out.y = y;
++        return out;
++    }
++
++    feVector2& operator=(const nlVector2& v)
++    {
++        x = v.x;
++        y = v.y;
++        return *this;
++    }
++
++    /* 0x0 */ bef32 x;
++    /* 0x4 */ bef32 y;
++}; // total size: 0x8
++NL_GC_LAYOUT(feVector2, 0x8);
+ 
+ enum eFELibObjectType
+ {
+@@ -48,6 +83,8 @@
+     /* 0x30 */ bool bVisible;        // offset 0x30, size 0x1
+     /* 0x31 */ nlColour colour;      // offset 0x31, size 0x4
+ }; // total size: 0x38
++NL_GC_LAYOUT(FELibObjectAttributes, 0x38);
++NL_GC_FIELD(FELibObjectAttributes, colour, 0x31);
+ 
+ class FELibObject
+ {
+@@ -57,12 +94,17 @@
+     feVector3& GetPosition() const;
+     nlColour& GetColour() const;
+ 
+-    /* 0x00 */ FELibObject* next;
+-    /* 0x04 */ FELibObject* prev;
++    /* 0x00 */ nlGCPtr32<FELibObject> next;
++    /* 0x04 */ nlGCPtr32<FELibObject> prev;
+     /* 0x08 */ FELibObjectAttributes m_attributes; // offset 0x8, size 0x38
+-    /* 0x40 */ unsigned long m_hashID;
++    /* 0x40 */ beu32 m_hashID;
+     /* 0x44 */ char m_szName[32];
+-    /* 0x64 */ eFELibObjectType m_type;
++    /* 0x64 */ nlBEEnum<eFELibObjectType> m_type;
+ }; // total size: 0x68
++NL_GC_LAYOUT(FELibObject, 0x68);
++NL_GC_FIELD(FELibObject, m_attributes, 0x08);
++NL_GC_FIELD(FELibObject, m_hashID, 0x40);
++NL_GC_FIELD(FELibObject, m_szName, 0x44);
++NL_GC_FIELD(FELibObject, m_type, 0x64);
+ 
+ #endif // _FELIBOBJECT_H_
+--- a/include/Game/FE/fePackage.h
++++ b/include/Game/FE/fePackage.h
+@@ -13,12 +13,15 @@
+     void Update(float deltaTime);
+     FEPresentation* GetPresentation() const;
+ 
+-    /* 0x00 */ TLComponent* m_pComponentList;
+-    /* 0x04 */ FEPresentation* m_pFEPresentation;
+-    /* 0x08 */ FEResourceHandle* m_pResourceList;
+-    /* 0x0C */ FELibObject* m_pFEObjectLibrary;
+-    /* 0x10 */ unsigned long m_uUniqueID;
+-    /* 0x14 */ unsigned long m_uResourceCount;
++    // FEPackage is the root of a .fen image: it is never constructed, only
++    // pointed at the loaded file, so its layout is the file's.
++    /* 0x00 */ nlGCPtr32<TLComponent> m_pComponentList;
++    /* 0x04 */ nlGCPtr32<FEPresentation> m_pFEPresentation;
++    /* 0x08 */ nlGCPtr32<FEResourceHandle> m_pResourceList;
++    /* 0x0C */ nlGCPtr32<FELibObject> m_pFEObjectLibrary;
++    /* 0x10 */ beu32 m_uUniqueID;
++    /* 0x14 */ beu32 m_uResourceCount;
+ }; // total size: 0x18
++NL_GC_LAYOUT(FEPackage, 0x18);
+ 
+ #endif // _FEPACKAGE_H_
+--- a/include/Game/FE/fePresentation.h
++++ b/include/Game/FE/fePresentation.h
+@@ -37,9 +37,10 @@
+     void SetActiveSlide(unsigned long hash);
+     void SetActiveSlide(const char* slideName);
+ 
+-    /* 0x0 */ TLSlide* m_slides;
+-    /* 0x4 */ TLSlide* m_currentSlide;
+-    /* 0x8 */ f32 m_fadeDuration;
+-};
++    /* 0x0 */ nlGCPtr32<TLSlide> m_slides;
++    /* 0x4 */ nlGCPtr32<TLSlide> m_currentSlide;
++    /* 0x8 */ bef32 m_fadeDuration;
++}; // total size: 0xC
++NL_GC_LAYOUT(FEPresentation, 0xC);
+ 
+ #endif // _FEPRESENTATION_H_
+--- a/include/Game/FE/feResourceManager.h
++++ b/include/Game/FE/feResourceManager.h
+@@ -5,6 +5,8 @@
+ #include "NL/nlTask.h"
+ #include "NL/nlSingleton.h"
+ #include "NL/nlBundleFile.h"
++#include "NL/nlEndian.h"
++#include "NL/nlGCPtr.h"
+ 
+ enum eFEResourceType
+ {
+@@ -21,11 +23,13 @@
+     FEResourceHandle() { };
+     ~FEResourceHandle() { };
+ 
+-    /* 0x00 */ FEResourceHandle* m_next;
+-    /* 0x04 */ FEResourceHandle* m_prev;
++    // Resource handles live both in a .fen image and on the heap, and the two
++    // kinds share one ring, so the serialized layout wins for both.
++    /* 0x00 */ nlGCPtr32<FEResourceHandle> m_next;
++    /* 0x04 */ nlGCPtr32<FEResourceHandle> m_prev;
+ 
+-    /* 0x08 */ eFEResourceType m_type;
+-    /* 0x0C */ unsigned long m_hashID;
++    /* 0x08 */ nlBEEnum<eFEResourceType> m_type;
++    /* 0x0C */ beu32 m_hashID;
+     bool IsValid() const
+     {
+         return m_bValid;
+@@ -43,6 +47,9 @@
+ 
+     /* 0x10 */ bool m_bValid;
+ }; // total size: 0x14
++NL_GC_LAYOUT(FEResourceHandle, 0x14);
++NL_GC_FIELD(FEResourceHandle, m_type, 0x08);
++NL_GC_FIELD(FEResourceHandle, m_hashID, 0x0C);
+ 
+ enum ResourceResult
+ {
+--- a/include/Game/FE/feText.h
++++ b/include/Game/FE/feText.h
+@@ -8,8 +8,9 @@
+ class FEText : public FELibObject
+ {
+ public:
+-    /* 0x68 */ const FEFontResource* m_pFeFontResource;
++    /* 0x68 */ nlGCPtr32<const FEFontResource> m_pFeFontResource;
+     /* 0x6C */ FETextLibObjectAttributes m_TextAttributes;
+ }; // total size: 0x78
++NL_GC_LAYOUT(FEText, 0x78);
+ 
+ #endif // _FETEXT_H_
+--- a/include/Game/FE/feTextureResource.h
++++ b/include/Game/FE/feTextureResource.h
+@@ -14,7 +14,8 @@
+         return m_glTextureHandle;
+     }
+ 
+-    /* 0x14 */ u32 m_glTextureHandle;
+-};
++    /* 0x14 */ beu32 m_glTextureHandle;
++}; // total size: 0x18
++NL_GC_LAYOUT(FETextureResource, 0x18);
+ 
+ #endif // _FETEXTURERESOURCE_H_
+--- a/include/Game/FE/tlComponent.h
++++ b/include/Game/FE/tlComponent.h
+@@ -18,11 +18,21 @@
+     void SetActiveSlide(unsigned long hash);
+     void SetActiveSlide(const char* name);
+ 
+-    /* 0x68 */ TLSlide* pChildren;
+-    /* 0x6C */ TLSlide* m_pActiveSlide;
+-    /* 0x70 */ nlVector2 m_BoxSize; // something is fishy here -> feHelpFuncs/MakeTextBoxReallyWide needs a nlVector2 here.
+-    /* 0x70 */ char m_szName[32];
+-    /* 0x90 */ unsigned long m_hashID;
++    /* 0x68 */ nlGCPtr32<TLSlide> pChildren;
++    /* 0x6C */ nlGCPtr32<TLSlide> m_pActiveSlide;
++    // A text component stores its box size in the bytes a normal component uses
++    // for its name; that is why both were documented at 0x70. The documented
++    // total size of 0x94 only works if they overlap, so say so.
++    union
++    {
++        /* 0x70 */ feVector2 m_BoxSize;
++        /* 0x70 */ char m_szName[32];
++    };
++    /* 0x90 */ beu32 m_hashID;
+ }; // total size: 0x94
++NL_GC_LAYOUT(TLComponent, 0x94);
++NL_GC_FIELD(TLComponent, pChildren, 0x68);
++NL_GC_FIELD(TLComponent, m_szName, 0x70);
++NL_GC_FIELD(TLComponent, m_hashID, 0x90);
+ 
+ #endif // _TLCOMPONENT_H_
+--- a/include/Game/FE/tlComponentInstance.h
++++ b/include/Game/FE/tlComponentInstance.h
+@@ -15,7 +15,8 @@
+     void SetActiveSlide(const char* name);
+     void Update(float dt);
+ 
+-    /* 0x80 */ f32 m_fCurrentTime;
++    /* 0x80 */ bef32 m_fCurrentTime;
+ }; // total size: 0x84
++NL_GC_LAYOUT(TLComponentInstance, 0x84);
+ 
+ #endif // _TLCOMPONENTINSTANCE_H_
+--- a/include/Game/FE/tlInstance.h
++++ b/include/Game/FE/tlInstance.h
+@@ -3,6 +3,8 @@
+ 
+ #include "NL/nlColour.h"
+ #include "NL/nlMath.h"
++#include "NL/nlEndian.h"
++#include "NL/nlGCPtr.h"
+ 
+ #include "Game/FE/tlComponent.h"
+ #include "Game/FE/FEAudio.h"
+@@ -44,19 +46,24 @@
+     feVector3& GetAssetRotation() const;
+     feVector3& GetAssetPosition() const;
+ 
+-    /* 0x00 */ TLInstance* m_next;
+-    /* 0x04 */ TLInstance* m_prev;
+-    /* 0x08 */ TLInstance* pChildren;
+-    /* 0x0C */ TLComponent* m_component;
+-    /* 0x10 */ f32 m_fStartTime;
+-    /* 0x14 */ f32 m_fDuration;
++    /* 0x00 */ nlGCPtr32<TLInstance> m_next;
++    /* 0x04 */ nlGCPtr32<TLInstance> m_prev;
++    /* 0x08 */ nlGCPtr32<TLInstance> pChildren;
++    /* 0x0C */ nlGCPtr32<TLComponent> m_component;
++    /* 0x10 */ bef32 m_fStartTime;
++    /* 0x14 */ bef32 m_fDuration;
+     /* 0x18 */ char m_szName[32];
+-    /* 0x38 */ unsigned long m_hash;
++    /* 0x38 */ beu32 m_hash;
+     /* 0x3C */ FELibObjectAttributes m_overloadedAttributes;
+-    /* 0x74 */ unsigned long m_overloadFlags;
+-    /* 0x78 */ eTimeLineAssetType m_type;
+-    /* 0x7C */ unsigned short m_priority;
++    /* 0x74 */ beu32 m_overloadFlags;
++    /* 0x78 */ nlBEEnum<eTimeLineAssetType> m_type;
++    /* 0x7C */ beu16 m_priority;
+     /* 0x7E */ bool m_bVisible;
+ }; // total size: 0x80
++NL_GC_LAYOUT(TLInstance, 0x80);
++NL_GC_FIELD(TLInstance, m_szName, 0x18);
++NL_GC_FIELD(TLInstance, m_overloadedAttributes, 0x3C);
++NL_GC_FIELD(TLInstance, m_type, 0x78);
++NL_GC_FIELD(TLInstance, m_bVisible, 0x7E);
+ 
+ #endif // _TLINSTANCE_H_
+--- a/include/Game/FE/tlSlide.h
++++ b/include/Game/FE/tlSlide.h
+@@ -3,6 +3,9 @@
+ 
+ #include "types.h"
+ 
++#include "NL/nlEndian.h"
++#include "NL/nlGCPtr.h"
++
+ #include "Game/FE/tlInstance.h"
+ #include "Game/FE/feAnimation.h"
+ 
+@@ -22,16 +25,20 @@
+     void Update(float time);
+     void UpdateAsset(TLInstance* instance, float time);
+ 
+-    /* 0x00 */ TLSlide* m_next;
++    /* 0x00 */ nlGCPtr32<TLSlide> m_next;
+     /* 0x04 */ char pad0[0x4];
+-    /* 0x08 */ TLInstance* m_instances;
+-    /* 0x0C */ FEAnimation* m_animations;
+-    /* 0x10 */ f32 m_start;
+-    /* 0x14 */ f32 m_duration;
+-    /* 0x18 */ f32 m_time;
+-    /* 0x1C */ eTimeLinePlayMode m_uPlayMode;
++    /* 0x08 */ nlGCPtr32<TLInstance> m_instances;
++    /* 0x0C */ nlGCPtr32<FEAnimation> m_animations;
++    /* 0x10 */ bef32 m_start;
++    /* 0x14 */ bef32 m_duration;
++    /* 0x18 */ bef32 m_time;
++    /* 0x1C */ nlBEEnum<eTimeLinePlayMode> m_uPlayMode;
+     /* 0x20 */ char m_szName[32];
+-    /* 0x40 */ u32 m_hash;
+-};
++    /* 0x40 */ beu32 m_hash;
++}; // total size: 0x44
++NL_GC_LAYOUT(TLSlide, 0x44);
++NL_GC_FIELD(TLSlide, m_instances, 0x08);
++NL_GC_FIELD(TLSlide, m_szName, 0x20);
++NL_GC_FIELD(TLSlide, m_hash, 0x40);
+ 
+ #endif // _TLSLIDE_H_
+--- a/include/Game/FE/tlTextInstance.h
++++ b/include/Game/FE/tlTextInstance.h
+@@ -9,12 +9,14 @@
+ #include "NL/nlTextBox.h"
+ 
+ #include "Game/FE/tlInstance.h"
++#include "Game/FE/feLibObject.h"
+ 
+ struct FETextLibObjectAttributes
+ {
+     /* 0x0 */ nlColour EffectColour;
+-    /* 0x4 */ nlVector2 BoxSize;
++    /* 0x4 */ feVector2 BoxSize;
+ }; // total size: 0xC
++NL_GC_LAYOUT(FETextLibObjectAttributes, 0xC);
+ 
+ class TLTextInstance : public TLInstance
+ {
+@@ -30,16 +32,20 @@
+     }
+     void Render(eGLView view, const nlColour& colour) const;
+ 
+-    /* 0x80 */ unsigned long m_LocStrId;
++    /* 0x80 */ beu32 m_LocStrId;
+     /* 0x84 */ FETextLibObjectAttributes m_OverloadedAttributes;
+-    /* 0x90 */ unsigned long m_OverloadFlags;
++    /* 0x90 */ beu32 m_OverloadFlags;
+     /* 0x94 */ mutable nlTextBox::StringDrawInfo m_DrawInfo;
+-    /* 0xEC */ FontCharString* m_pFontString;
+-    /* 0xF0 */ unsigned long m_DrawOptions;
+-    /* 0xF4 */ const unsigned short* m_wcUserString;
++    /* 0xEC */ nlGCPtr32<FontCharString> m_pFontString;
++    /* 0xF0 */ beu32 m_DrawOptions;
++    /* 0xF4 */ nlGCPtr32<const unsigned short> m_wcUserString;
+     /* 0xF8 */ bool m_UseScissorRect;
+     /* 0xFA */ nlFont::ScissorBox m_ScissorRect;
+ 
+ }; // total size: 0x104
++NL_GC_LAYOUT(TLTextInstance, 0x104);
++NL_GC_FIELD(TLTextInstance, m_DrawInfo, 0x94);
++NL_GC_FIELD(TLTextInstance, m_pFontString, 0xEC);
++NL_GC_FIELD(TLTextInstance, m_ScissorRect, 0xFA);
+ 
+ #endif // _TLTEXTINSTANCE_H_
+--- a/include/Game/InterpreterCore.h
++++ b/include/Game/InterpreterCore.h
+@@ -3,15 +3,32 @@
+ 
+ #include "types.h"
+ #include "NL/nlAlgorithm.h"
++#include "NL/nlEndian.h"
+ 
++// Read straight out of a compiled script file, so big-endian.
+ struct FunctionEntryPoint
+ {
+-    /* 0x0 */ u32 hash;
+-    /* 0x4 */ u32 offset;
++    /* 0x0 */ beu32 hash;
++    /* 0x4 */ beu32 offset;
+ 
+     operator unsigned long() const { return hash; }
+ }; // total size: 0x8
+ 
++// The 0x24 bytes at the head of a script file. The GameCube build overlaid
++// ByteCodeHeader on the file and patched the four segment pointers into the
++// 0x10 bytes following the counts; four 64-bit pointers do not fit there, so the
++// port reads the file through this view and keeps the patched-up header beside
++// the interpreter instead.
++struct ByteCodeFileHeader
++{
++    /* 0x00 */ beu32 signature;
++    /* 0x04 */ beu32 numFunctions;
++    /* 0x08 */ beu32 dataSegmentSize;
++    /* 0x0C */ beu32 codeSegmentSize;
++    /* 0x10 */ beu32 stringSegmentSize;
++    /* 0x14 */ beu32 reservedForPointers[4];
++}; // total size: 0x24
++
+ struct ByteCodeHeader
+ {
+     /* 0x00 */ u32 signature;
+@@ -20,7 +37,7 @@
+     /* 0x0C */ u32 codeSegmentSize;
+     /* 0x10 */ u32 stringSegmentSize;
+     /* 0x14 */ FunctionEntryPoint* m_FunctionTable;
+-    /* 0x18 */ u32* m_DataSegment;
++    /* 0x18 */ beu32* m_DataSegment;
+     /* 0x1C */ u16* m_CodeSegment;
+     /* 0x20 */ u8* m_StringSegment;
+ }; // total size: 0x24
+@@ -52,6 +69,8 @@
+ public:
+     /* 0x04 */ u32 m_Return;
+     /* 0x08 */ ByteCodeHeader* m_Header;
++    // Backing store for m_Header; see ByteCodeFileHeader.
++    ByteCodeHeader m_HeaderStorage;
+     /* 0x0C */ u32* m_StackSegment;
+     /* 0x10 */ u16* m_IP;
+     /* 0x14 */ u32* m_SP;
+--- a/include/Game/Render/Wiper.h
++++ b/include/Game/Render/Wiper.h
+@@ -26,7 +26,7 @@
+ 
+         if (ScreenTransitionManager::s_pInstance == NULL)
+         {
+-            ScreenTransitionManager::s_pInstance = new (nlMalloc(0x40, 8, 0)) ScreenTransitionManager();
++            ScreenTransitionManager::s_pInstance = new (nlMalloc(sizeof(ScreenTransitionManager), 8, 0)) ScreenTransitionManager();
+         }
+         glLoadTextureBundle("transitions/transitions.glt");
+         fileSize = 0;
+--- a/include/NL/MemAlloc.h
++++ b/include/NL/MemAlloc.h
+@@ -3,31 +3,16 @@
+ 
+ #include "types.h"
+ 
++#include "NL/nlGCPtr.h"
++
+ #include <stdint.h>
+ 
+ // MemoryAllocator stores its free-list nodes *inside* the free memory they
+ // describe, and clamps its minimum block size to 0xC (see MemAlloc.cpp) because
+ // FreeBlockList is exactly 12 bytes on GameCube. With native 64-bit pointers the
+ // node becomes 24 bytes and every minimum-sized block overruns into its
+-// neighbour's header, corrupting the ring on the second allocation.
+-//
+-// MEM1 is mapped at a GameCube-like 0x8xxxxxxx address, so a block address always
+-// fits in 32 bits losslessly. Store one instead of a pointer to keep the original
+-// layout and all of the allocator's 32-bit address arithmetic valid.
+-template <typename T>
+-struct nlGCPtr32
+-{
+-    u32 m_addr;
+-
+-    operator T*() const { return reinterpret_cast<T*>(static_cast<uintptr_t>(m_addr)); }
+-    T* operator->() const { return operator T*(); }
+-    nlGCPtr32& operator=(T* p)
+-    {
+-        m_addr = static_cast<u32>(reinterpret_cast<uintptr_t>(p));
+-        return *this;
+-    }
+-};
+-
++// neighbour's header, corrupting the ring on the second allocation. Store
++// GameCube-width pointers instead; see nlGCPtr.h.
+ struct FreeBlockList
+ {
+     /* 0x0 */ nlGCPtr32<FreeBlockList> m_next;
+--- a/include/NL/gl/glStateBundle.h
++++ b/include/NL/gl/glStateBundle.h
+@@ -3,8 +3,18 @@
+ 
+ #include "types.h"
+ 
++#ifdef __MWERKS__
+ #pragma push
+ #pragma pack(1)
++#else
++// GCC does not implement Metrowerks' #pragma push/#pragma pop, so a bare
++// pack(1) here leaks into everything included after this point. On GameCube
++// that is invisible -- these structs are all 4-byte members either way -- but
++// on a 64-bit host it silently repacks unrelated structs behind 8-byte
++// pointers, and a struct laid out differently in two translation units is a
++// very quiet way to corrupt memory.
++#pragma pack(push, 1)
++#endif
+ struct glStateBundle
+ {
+     /* 0x00 */ unsigned long long texturestate; // size 0x8
+@@ -24,6 +34,10 @@
+     /* 0x04 */ s32 numBits;
+ }; // total size: 0x8
+ 
++#ifdef __MWERKS__
+ #pragma pop
++#else
++#pragma pack(pop)
++#endif
+ 
+ #endif // _GLSTATEBUNDLE_H_
+--- a/include/NL/gl/glUserData.h
++++ b/include/NL/gl/glUserData.h
+@@ -37,8 +37,18 @@
+     /* 0x0C */ u32 projection;
+ }; // total size: 0x10
+ 
++#ifdef __MWERKS__
+ #pragma push
+ #pragma pack(1)
++#else
++// GCC does not implement Metrowerks' #pragma push/#pragma pop, so a bare
++// pack(1) here leaks into everything included after this point. On GameCube
++// that is invisible -- these structs are all 4-byte members either way -- but
++// on a 64-bit host it silently repacks unrelated structs behind 8-byte
++// pointers, and a struct laid out differently in two translation units is a
++// very quiet way to corrupt memory.
++#pragma pack(push, 1)
++#endif
+ struct glModelStream
+ {
+     /* 0x0 */ unsigned long address;
+@@ -57,7 +67,11 @@
+     /* 0x10 */ glStateBundle state;
+     /* 0x46 */ u32 materialset;
+ }; // total size: 0x4A
++#ifdef __MWERKS__
+ #pragma pop
++#else
++#pragma pack(pop)
++#endif
+ 
+ bool glUserHasType(eGLUserData type, const glModelPacket* pPacket);
+ void glUserDetach(eGLUserData type, glModelPacket* pPacket);
+--- a/include/NL/glx/glxTexture.h
++++ b/include/NL/glx/glxTexture.h
+@@ -5,6 +5,7 @@
+ #include "dolphin/gx/GXEnum.h"
+ #include "dolphin/gx/GXStruct.h"
+ 
++#include "NL/nlEndian.h"
+ #include "NL/nlMemory.h"
+ 
+ typedef unsigned long (*glxTextureLoadCallback_t)(unsigned long);
+@@ -78,12 +79,13 @@
+     eGLTextureFormatType_0,
+ };
+ 
++// Read verbatim out of a .glt bundle, so every field is big-endian on disc.
+ struct BundleEntry
+ {
+-    /* 0x0 */ unsigned long hash;
+-    /* 0x4 */ unsigned long offset;
+-    /* 0x8 */ unsigned long fileSize;
+-    /* 0xC */ unsigned long pad;
++    /* 0x0 */ beu32 hash;
++    /* 0x4 */ beu32 offset;
++    /* 0x8 */ beu32 fileSize;
++    /* 0xC */ beu32 pad;
+ }; // total size: 0x10
+ 
+ struct glTexBundleDict : public BundleEntry
+@@ -92,27 +94,28 @@
+ 
+ struct BundleHeader
+ {
+-    /* 0x0 */ unsigned long magic;
+-    /* 0x4 */ unsigned long numTextures;
+-    /* 0x8 */ unsigned long pad1;
+-    /* 0xC */ unsigned long pad2;
++    /* 0x0 */ beu32 magic;
++    /* 0x4 */ beu32 numTextures;
++    /* 0x8 */ beu32 pad1;
++    /* 0xC */ beu32 pad2;
+ }; // total size: 0x10
+ 
+ struct glTexBundleHeader : public BundleHeader
+ {
+-    /* 0x10 */ unsigned long pad[4]; // size 0x10
++    /* 0x10 */ beu32 pad[4]; // size 0x10
+ }; // total size: 0x20
+ 
++// Also straight from disc: this is the per-texture header inside a bundle.
+ struct GXTextureHeader
+ {
+-    /* 0x00 */ unsigned long numLevels;
+-    /* 0x04 */ eGXTextureFormat format;
++    /* 0x00 */ beu32 numLevels;
++    /* 0x04 */ nlBEEnum<eGXTextureFormat> format;
+     /* 0x08 */ unsigned char numBits[4];
+     /* 0x0C */ unsigned char missingTexture;
+-    /* 0x0E */ unsigned short width;
+-    /* 0x10 */ unsigned short height;
+-    /* 0x14 */ unsigned long numEntries;
+-    /* 0x18 */ unsigned long pad[2];
++    /* 0x0E */ beu16 width;
++    /* 0x10 */ beu16 height;
++    /* 0x14 */ beu32 numEntries;
++    /* 0x18 */ beu32 pad[2];
+ }; // total size: 0x20
+ 
+ class PlatTexture
+--- a/include/NL/nlBundleFile.h
++++ b/include/NL/nlBundleFile.h
+@@ -2,24 +2,26 @@
+ #define _NLBUNDLEFILE_H_
+ 
+ #include "NL/nlWare.h"
++#include "NL/nlEndian.h"
+ #include "NL/nlFileGC.h"
+ #include "NL/nlString.h"
+ 
+ typedef void (*FileReadAsyncCallback)(void*, unsigned long, unsigned long);
+ 
++// Both of these are read verbatim out of a .Res bundle, so big-endian.
+ typedef struct
+ {
+-    /* 0x00 */ u32 nSectorSize;
+-    /* 0x04 */ u32 nNumFiles;
+-    /* 0x08 */ u32 nDirectoryOffsetInSectors;
+-    /* 0x0C */ u32 nDataOffsetInSectors;
++    /* 0x00 */ beu32 nSectorSize;
++    /* 0x04 */ beu32 nNumFiles;
++    /* 0x08 */ beu32 nDirectoryOffsetInSectors;
++    /* 0x0C */ beu32 nDataOffsetInSectors;
+ } BundleFileHeader;
+ 
+ typedef struct
+ {
+-    /* 0x00 */ u32 m_hash;
+-    /* 0x04 */ u32 m_blockNumber;
+-    /* 0x08 */ u32 m_length;
++    /* 0x00 */ beu32 m_hash;
++    /* 0x04 */ beu32 m_blockNumber;
++    /* 0x08 */ beu32 m_length;
+ } BundleFileDirectoryEntry, *BundleFileDirectoryEntryPtr;
+ 
+ static void cbFileReadAsyncCallback(nlFile* file, void* buffer, unsigned int arg, unsigned long bundlePtr);
+--- a/include/NL/nlEndian.h
++++ b/include/NL/nlEndian.h
+@@ -3,4 +3,122 @@
+ 
+ void nlSwapEndian(unsigned short in, unsigned short* out);
+ 
++#include "types.h"
++
++// Every byte the game reads off the disc was authored for a big-endian PowerPC.
++// The original code could point a struct straight at the file bytes; on a
++// little-endian host it cannot, so file-format structs declare their scalars as
++// nlBE<T> instead.
++//
++// On a big-endian target nlBE<T> is a plain T with the same layout and the
++// conversions fold away, so the generated code is unchanged and the decomp still
++// matches. Only use it for data that comes from a file -- in-memory structures
++// are native either way.
++
++#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
++#define NL_HOST_BIG_ENDIAN 1
++#else
++#define NL_HOST_BIG_ENDIAN 0
++#endif
++
++inline u16 nlByteSwap(u16 v) { return (u16)((v >> 8) | (v << 8)); }
++inline s16 nlByteSwap(s16 v) { return (s16)nlByteSwap((u16)v); }
++inline u32 nlByteSwap(u32 v)
++{
++    return (v >> 24) | ((v >> 8) & 0x0000FF00u) | ((v << 8) & 0x00FF0000u) | (v << 24);
++}
++inline s32 nlByteSwap(s32 v) { return (s32)nlByteSwap((u32)v); }
++inline unsigned long nlByteSwap(unsigned long v)
++{
++    // 32 bits under both the GameCube ABI and LLP64; LP64 hosts must not use
++    // unsigned long in a file-format struct at all.
++    return (unsigned long)nlByteSwap((u32)v);
++}
++inline f32 nlByteSwap(f32 v)
++{
++    union
++    {
++        f32 f;
++        u32 u;
++    } c;
++    c.f = v;
++    c.u = nlByteSwap(c.u);
++    return c.f;
++}
++
++#if NL_HOST_BIG_ENDIAN
++
++template <typename T>
++struct nlBE
++{
++    T m_raw;
++    operator T() const { return m_raw; }
++    nlBE& operator=(T v)
++    {
++        m_raw = v;
++        return *this;
++    }
++    nlBE& operator+=(T v) { return *this = (T)(operator T() + v); }
++    nlBE& operator-=(T v) { return *this = (T)(operator T() - v); }
++    nlBE& operator*=(T v) { return *this = (T)(operator T() * v); }
++    nlBE& operator/=(T v) { return *this = (T)(operator T() / v); }
++    nlBE& operator|=(T v) { return *this = (T)(operator T() | v); }
++    nlBE& operator&=(T v) { return *this = (T)(operator T() & v); }
++    nlBE& operator^=(T v) { return *this = (T)(operator T() ^ v); }
++};
++
++#else
++
++template <typename T>
++struct nlBE
++{
++    T m_raw;
++    operator T() const { return nlByteSwap(m_raw); }
++    nlBE& operator=(T v)
++    {
++        m_raw = nlByteSwap(v);
++        return *this;
++    }
++    nlBE& operator+=(T v) { return *this = (T)(operator T() + v); }
++    nlBE& operator-=(T v) { return *this = (T)(operator T() - v); }
++    nlBE& operator*=(T v) { return *this = (T)(operator T() * v); }
++    nlBE& operator/=(T v) { return *this = (T)(operator T() / v); }
++    nlBE& operator|=(T v) { return *this = (T)(operator T() | v); }
++    nlBE& operator&=(T v) { return *this = (T)(operator T() & v); }
++    nlBE& operator^=(T v) { return *this = (T)(operator T() ^ v); }
++};
++
++#endif
++
++// Enumerations stored in a file occupy four bytes there regardless of what the
++// compiler picks for the enum itself, so they get their own wrapper that reads
++// through a u32 and hands back the enum type.
++template <typename E>
++struct nlBEEnum
++{
++    u32 m_raw;
++#if NL_HOST_BIG_ENDIAN
++    operator E() const { return (E)m_raw; }
++    nlBEEnum& operator=(E v)
++    {
++        m_raw = (u32)v;
++        return *this;
++    }
++#else
++    operator E() const { return (E)nlByteSwap(m_raw); }
++    nlBEEnum& operator=(E v)
++    {
++        m_raw = nlByteSwap((u32)v);
++        return *this;
++    }
++#endif
++};
++
++typedef nlBE<u16> beu16;
++typedef nlBE<s16> bes16;
++typedef nlBE<u32> beu32;
++typedef nlBE<s32> bes32;
++typedef nlBE<f32> bef32;
++
++
+ #endif // _NLENDIAN_H_
+--- a/include/NL/nlGCPtr.h
++++ b/include/NL/nlGCPtr.h
+@@ -0,0 +1,43 @@
++#ifndef _NLGCPTR_H_
++#define _NLGCPTR_H_
++
++#include "types.h"
++
++#include <stdint.h>
++
++// A pointer the width the GameCube had: four bytes.
++//
++// Serialized images (.fen scene packages and friends) bake the pointer size into
++// their layout and are fixed up in place by a relocation table, so any field the
++// relocation pass touches has to stay four bytes wide on a 64-bit host or every
++// offset after it slides. MEM1 is mapped at its real 0x8xxxxxxx address, so every
++// pointer that can appear in one of these images fits losslessly.
++//
++// Relocation writes these in native byte order -- it is the point where the image
++// stops being file data -- so unlike the scalars beside them this is not a nlBE.
++// Anything a serialized struct points at must live in MEM1: a pointer to a static
++// object in the executable image does not fit in 32 bits and will truncate.
++template <typename T>
++struct nlGCPtr32
++{
++    u32 m_addr;
++
++    operator T*() const { return reinterpret_cast<T*>(static_cast<uintptr_t>(m_addr)); }
++    T* operator->() const { return operator T*(); }
++    T& operator*() const { return *operator T*(); }
++    T& operator[](int i) const { return operator T*()[i]; }
++    nlGCPtr32& operator=(T* p)
++    {
++        m_addr = static_cast<u32>(reinterpret_cast<uintptr_t>(p));
++        return *this;
++    }
++};
++
++// The decomp records the GameCube offset of every field and the size of every
++// struct in comments. For anything that is read straight out of a file those
++// comments are a contract, not documentation, so state them to the compiler.
++#define NL_GC_LAYOUT(type, size) static_assert(sizeof(type) == (size), #type " is not its GameCube size")
++#define NL_GC_FIELD(type, field, offset) \
++    static_assert(__builtin_offsetof(type, field) == (offset), #type "::" #field " moved")
++
++#endif // _NLGCPTR_H_
+--- a/include/NL/nlMemory.h
++++ b/include/NL/nlMemory.h
+@@ -30,7 +30,10 @@
+ void nlFree(void* ptr);
+ void* nlMalloc(unsigned long size, unsigned int alignment, bool atEnd);
+ void* nlMalloc(unsigned long size);
+-void* operator new(unsigned long size);
++// The global operator new must take size_t exactly. 'unsigned long' happens to
++// be size_t on LP64 targets but is only 32 bits on Windows (LLP64), which makes
++// the replacement disagree with every caller the compiler generates.
++void* operator new(size_t size);
+ 
+ inline void* operator new(unsigned long size, unsigned int alignment, bool atEnd)
+ {
+--- a/include/NL/nlTextBox.h
++++ b/include/NL/nlTextBox.h
+@@ -4,6 +4,7 @@
+ #include "NL/nlMath.h"
+ #include "NL/nlFont.h"
+ #include "NL/nlColour.h"
++#include "NL/nlGCPtr.h"
+ #include "NL/gl/gl.h"
+ #include "NL/gl/glMatrix.h"
+ 
+@@ -34,14 +35,19 @@
+     {
+         static const unsigned long MAX_ROWS = 16;
+ 
+-        /* 0x00 */ const nlFont* pFont;
+-        /* 0x04 */ const unsigned short* String;
+-        /* 0x08 */ const nlMatrix4* pMatrix;
++        // StringDrawInfo is pure render-time scratch, but it is embedded in
++        // TLTextInstance, which lives inside a .fen image -- so it has to keep
++        // the GameCube's size or every field after it in the instance slides,
++        // and writes to those run off the end of the object.
++        /* 0x00 */ nlGCPtr32<const nlFont> pFont;
++        /* 0x04 */ nlGCPtr32<const unsigned short> String;
++        /* 0x08 */ nlGCPtr32<const nlMatrix4> pMatrix;
+         /* 0x0C */ unsigned long DrawOptions;
+         /* 0x10 */ unsigned short RowCount;
+         /* 0x12 */ signed short YOffset;
+         /* 0x14 */ Row Rows[MAX_ROWS + 1];
+     }; // total size: 0x58
++    static_assert(sizeof(StringDrawInfo) == 0x58, "StringDrawInfo is not its GameCube size");
+ 
+     nlTextBox();
+ 
+--- a/include/PowerPC_EABI_Support/MSL_C++/MSL_Common/msl_tree.h
++++ b/include/PowerPC_EABI_Support/MSL_C++/MSL_Common/msl_tree.h
+@@ -10,6 +10,13 @@
+ namespace std
+ {
+ 
++// The includes above can drag in the host standard library's own
++// <bits/stl_function.h> (libstdc++ routes "stdlib.h" through its C++ wrapper,
++// and <cmath> reaches stl_function.h via bits/specfun.h). Redefining these
++// there is an error, and the real ones are a superset of these stubs, so only
++// declare them when the standard library has not already done so.
++#if !defined(_STL_FUNCTION_H) && !defined(_LIBCPP_FUNCTIONAL)
++
+ template <class Arg1, class Arg2, class Result>
+ struct binary_function
+ {
+@@ -20,6 +27,8 @@
+ {
+ };
+ 
++#endif
++
+ template <int N>
+ class __red_black_tree
+ {
+--- a/include/PowerPC_EABI_Support/MSL_C/MSL_Common/FILE_POS.h
++++ b/include/PowerPC_EABI_Support/MSL_C/MSL_Common/FILE_POS.h
+@@ -1,4 +1,7 @@
+-#ifndef _STDIO_H
++// These MSL prototypes disagree with the host libc's (fseek takes a long, not
++// an unsigned long), so skip them once a real stdio.h has been seen. Each libc
++// spells its include guard its own way -- see ansi_files.h.
++#if !defined(_STDIO_H) && !defined(_INC_STDIO) && !defined(_STDIO_H_)
+ #ifndef _MSL_COMMON_FILE_POS_H
+ #define _MSL_COMMON_FILE_POS_H
+ 
+--- a/include/PowerPC_EABI_Support/MSL_C/MSL_Common/ansi_files.h
++++ b/include/PowerPC_EABI_Support/MSL_C/MSL_Common/ansi_files.h
+@@ -1,4 +1,8 @@
+-#ifdef _STDIO_H
++// The MSL FILE/fpos_t definitions below collide with the host libc's <stdio.h>,
++// which compat_shims/runtime.h pulls into every translation unit. Skip them once
++// a real stdio.h has been seen -- each libc spells its include guard its own way
++// (glibc _STDIO_H, UCRT/mingw _INC_STDIO, BSD/macOS _STDIO_H_).
++#if defined(_STDIO_H) || defined(_INC_STDIO) || defined(_STDIO_H_)
+ #define _ANSI_FILES_H_SKIP
+ #endif
+ #ifndef _ANSI_FILES_H_SKIP
+--- a/include/PowerPC_EABI_Support/MSL_C/MSL_Common/stdarg.h
++++ b/include/PowerPC_EABI_Support/MSL_C/MSL_Common/stdarg.h
+@@ -1,26 +1,23 @@
+ #ifndef _STDARG_H_
+ #define _STDARG_H_
+-#ifndef __VA_LIST_COMPAT_DEFINED
+-typedef struct __va_list_struct
+-{
+-    char gpr;
+-    char fpr;
+-    char reserved[2];
+-    char* input_arg_area;
+-    char* reg_save_area;
+-} __va_list[1];
+-typedef __va_list va_list;
+-#endif
+-extern void __builtin_va_info(void*);
+ 
+-void* __va_arg(va_list v_list, unsigned char type);
++// The MSL macros that used to live here expanded to __builtin_va_info() and
++// __va_arg(), which are Metrowerks compiler builtins that exist nowhere else.
++// MSL_Common is on the include path via -idirafter, so this angle-bracket
++// include resolves to the toolchain's own <stdarg.h> and gives us working
++// va_start/va_arg/va_end.
++//
++// On glibc this used to work by accident: its <stdio.h> pulls in <stdarg.h>, so
++// the real macros were already defined by the time this header redefined them.
++// mingw-w64's <stdio.h> does not, which is how __builtin_va_info reached the
++// linker on Windows.
++#include <stdarg.h>
+ 
+-#ifndef __MWERKS__
+-#define _var_arg_typeof(e) 0
++// nlPrint.h declares nlVSNPrintf() in terms of __va_list. compat_shims/runtime.h
++// normally defines it; keep a fallback for translation units that do not use the
++// shim header.
++#ifndef __VA_LIST_COMPAT_DEFINED
++typedef __builtin_va_list __va_list;
+ #endif
+ 
+-#define va_start(ap, fmt) ((void)fmt, __builtin_va_info(&ap))
+-#define va_arg(ap, t)     (*((t*)__va_arg(ap, _var_arg_typeof(t))))
+-#define va_end(ap)        (void)0
+-
+ #endif
+--- a/include/dolphin/gx.h
++++ b/include/dolphin/gx.h
+@@ -1,40 +1,40 @@
+-#ifndef _DOLPHIN_GX_H_
+-#define _DOLPHIN_GX_H_
+-
+-#include <dolphin/gx/GXStruct.h>
+-#include <dolphin/gx/GXTransform.h>
+-#include <dolphin/gx/GXTev.h>
+-#include <dolphin/gx/GXPixel.h>
+-#include <dolphin/gx/GXManage.h>
+-#include <dolphin/gx/GXFifo.h>
+-#include <dolphin/gx/GXCull.h>
+-#include <dolphin/gx/GXGeometry.h>
+-#include <dolphin/gx/GXVert.h>
+-#include <dolphin/gx/GXTexture.h>
+-#include <dolphin/gx/GXTev.h>
+-#include <dolphin/gx/GXLighting.h>
+-#include <dolphin/gx/GXDispList.h>
+-#include <dolphin/gx/GXCommandList.h>
+-#include <dolphin/gx/GXBump.h>
+-#include <dolphin/gx/GXFrameBuffer.h>
+-#include <dolphin/gx/GXGet.h>
+-#include <dolphin/gx/GXDraw.h>
+-#include <dolphin/gx/GXPerf.h>
+-#include <dolphin/gx/GXCpu2Efb.h>
+-#include <dolphin/gx/GXVerify.h>
+-
+-// unsorted GX externs
+-
+-#ifdef __cplusplus
+-extern "C" {
+-#endif
+-
+-// GXMisc
+-void (*GXSetDrawSyncCallback(void (*cb)(u16)))(u16);
+-void GXSetDrawSync(u16 token);
+-
+-#ifdef __cplusplus
+-}
+-#endif
+-
+-#endif
++#ifndef _DOLPHIN_GX_H_
++#define _DOLPHIN_GX_H_
++
++#include <dolphin/gx/GXStruct.h>
++#include <dolphin/gx/GXTransform.h>
++#include <dolphin/gx/GXTev.h>
++#include <dolphin/gx/GXPixel.h>
++#include <dolphin/gx/GXManage.h>
++#include <dolphin/gx/GXFifo.h>
++#include <dolphin/gx/GXCull.h>
++#include <dolphin/gx/GXGeometry.h>
++#include <dolphin/gx/GXVert.h>
++#include <dolphin/gx/GXTexture.h>
++#include <dolphin/gx/GXTev.h>
++#include <dolphin/gx/GXLighting.h>
++#include <dolphin/gx/GXDispList.h>
++#include <dolphin/gx/GXCommandList.h>
++#include <dolphin/gx/GXBump.h>
++#include <dolphin/gx/GXFrameBuffer.h>
++#include <dolphin/gx/GXGet.h>
++#include <dolphin/gx/GXDraw.h>
++#include <dolphin/gx/GXPerf.h>
++#include <dolphin/gx/GXCpu2Efb.h>
++#include <dolphin/gx/GXVerify.h>
++
++// unsorted GX externs
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++// GXMisc
++void (*GXSetDrawSyncCallback(void (*cb)(u16)))(u16);
++void GXSetDrawSync(u16 token);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif
+--- a/include/dolphin/vi.h
++++ b/include/dolphin/vi.h
+@@ -1,7 +1,7 @@
+-#ifndef _DOLPHIN_VI_H_
+-#define _DOLPHIN_VI_H_
+-
+-#include <dolphin/vi/vifuncs.h>
+-#include <dolphin/vi/vitypes.h>
+-
+-#endif
++#ifndef _DOLPHIN_VI_H_
++#define _DOLPHIN_VI_H_
++
++#include <dolphin/vi/vifuncs.h>
++#include <dolphin/vi/vitypes.h>
++
++#endif
+--- a/include/types.h
++++ b/include/types.h
+@@ -9,7 +9,10 @@
+ typedef int BOOL;
+ #endif
+ typedef unsigned int uint;
+-typedef unsigned long size_t;
++// size_t must come from the toolchain. It is 'unsigned long' on LP64 targets
++// (Linux/macOS) but 'unsigned long long' on Windows (LLP64), so hardcoding
++// either spelling conflicts with the platform headers on the other.
++#include <stddef.h>
+ 
+ // Standard types
+ typedef signed char s8;
+--- a/src/Game/AI/FielderActions.cpp
++++ b/src/Game/AI/FielderActions.cpp
+@@ -3460,7 +3460,7 @@
+                 }
+                 else
+                 {
+-                    MatrixEffectCam* pMatrixCam = new (nlMalloc(0x140, 8, false)) MatrixEffectCam();
++                    MatrixEffectCam* pMatrixCam = new (nlMalloc(sizeof(MatrixEffectCam), 8, false)) MatrixEffectCam();
+                     pMatrixCam->mbUseGameplayTransparencyFlags = true;
+                     pMatrixCam->m_pFilter = &rumbleFilter;
+                     pMatrixCam->mfSpinDuration = sfOtherMatrixCamDuration;
+@@ -3584,7 +3584,7 @@
+                     FixedUpdateTask::mTimeScale = sfMatrixCamTimeScale;
+                     ParticleUpdateTask::SetTimeScale(sfMatrixCamParticleTimeScale);
+ 
+-                    MatrixEffectCam* pMatrixCam2 = new (nlMalloc(0x140, 8, false)) MatrixEffectCam();
++                    MatrixEffectCam* pMatrixCam2 = new (nlMalloc(sizeof(MatrixEffectCam), 8, false)) MatrixEffectCam();
+                     cCameraManager::PushCamera(pMatrixCam2);
+                     pMatrixCam2->m_pFilter = &rumbleFilter;
+ 
+--- a/src/Game/AI/FielderDesires.cpp
++++ b/src/Game/AI/FielderDesires.cpp
+@@ -1304,7 +1304,7 @@
+     nlVector3 v3TargetPosition = *pTargetPosition;
+     v3TargetPosition.z = 0.0f;
+ 
+-    SetSpaceSearch(new (nlMalloc(0x78, 8, false)) SSearchBestPass(m_DesireCommonVars.pSBC, this, false, false));
++    SetSpaceSearch(new (nlMalloc(sizeof(SSearchBestPass), 8, false)) SSearchBestPass(m_DesireCommonVars.pSBC, this, false, false));
+     m_pSpaceSearch->m_bDebugOn = false;
+     m_pSpaceSearch->FindBestPosition(v3BestPosition, v3FormationPosition, DIR_TOWARD_TARGET, &v3TargetPosition, 4.0f, 0x8000);
+ 
+@@ -2349,7 +2349,7 @@
+         return 0;
+     }
+ 
+-    SpaceSearch* pSpaceSearch = new (nlMalloc(0x4C, 8, false)) SSearchRunToNet(this);
++    SpaceSearch* pSpaceSearch = new (nlMalloc(sizeof(SSearchRunToNet), 8, false)) SSearchRunToNet(this);
+     SetSpaceSearch(pSpaceSearch);
+ 
+     m_pSpaceSearch->m_bDebugOn = false;
+@@ -3064,7 +3064,7 @@
+     SkillTweaks* pSkillTweaks = SkillTweaks::GetSkillTweaks(g_pCurrentlyUpdatingTeam->m_nSide);
+     float fReactionTimeRange = 0.85f * (0.3f * (1.0f - pSkillTweaks->Off_Reaction));
+     m_DesireCommonVars.fMisc = 0.85f + (nlRandomf(fReactionTimeRange, &nlDefaultSeed) - (0.5f * fReactionTimeRange));
+-    SetSpaceSearch(new (nlMalloc(0x28, 8, false)) SSearchOpenLane(this, pTarget));
++    SetSpaceSearch(new (nlMalloc(sizeof(SSearchOpenLane), 8, false)) SSearchOpenLane(this, pTarget));
+     m_pSpaceSearch->m_bDebugOn = false;
+     m_pSpaceSearch->FindBestPosition(m_DesireCommonVars.v3DesiredPosition, m_v3Position, DIR_UPFIELD, &pTarget->m_v3Position, 4.5f, 0x8000);
+     m_pAvoidance->SetThingsToAvoid(0x1F);
+@@ -3244,7 +3244,7 @@
+         return false;
+     }
+ 
+-    SetSpaceSearch(new (nlMalloc(0x14, 8, false)) SSearchCutAndBreak(this));
++    SetSpaceSearch(new (nlMalloc(sizeof(SSearchCutAndBreak), 8, false)) SSearchCutAndBreak(this));
+     m_pSpaceSearch->m_bDebugOn = false;
+     m_pSpaceSearch->FindBestPosition(m_DesireCommonVars.v3DesiredPosition, m_v3Position, DIR_NONE, NULL, 4.0f, 0x8000);
+     m_pAvoidance->SetThingsToAvoid(0x1F);
+--- a/src/Game/AI/GoalieSave.cpp
++++ b/src/Game/AI/GoalieSave.cpp
+@@ -276,7 +276,8 @@
+     }
+ 
+     muNumSaveEntries = 0x45;
+-    mpSaveTable = (SaveData*)__construct_new_array(nlMalloc(0x2290, 8, false), NULL, NULL, 0x80, 0x45);
++    mpSaveTable = (SaveData*)__construct_new_array(nlMalloc(sizeof(SaveData) * 0x45, 8, false), NULL, NULL,
++        sizeof(SaveData), 0x45);
+ 
+     muSTSGoalIndexStart = 0;
+     muSTSGoalCount = 0;
+@@ -337,7 +338,8 @@
+     }
+ 
+     muNumPositionEntries = 6;
+-    mpPositionTable = (SavePositionData*)__construct_new_array(nlMalloc(0x70, 8, false), NULL, NULL, 0x10, 6);
++    mpPositionTable = (SavePositionData*)__construct_new_array(nlMalloc(sizeof(SavePositionData) * 6, 8, false),
++        NULL, NULL, sizeof(SavePositionData), 6);
+ 
+     for (unsigned int count = 0; count < muNumPositionEntries; count++)
+     {
+--- a/src/Game/Audio/CrowdMood.cpp
++++ b/src/Game/Audio/CrowdMood.cpp
+@@ -49,8 +49,12 @@
+     Value = (T)(Value + 1);
+ }
+ 
+-static const MOOD_DEFINITION g_MoodDefs[5] = { };
+-static const CROWD_SETTINGS g_Settings = { };
++// Not actually constant: ReadConfig() casts the const away and fills both of
++// these from CrowdMood.ini. The GameCube had no read-only memory, so writing
++// through the cast worked there; on a hosted platform it lands in .rodata and
++// faults.
++static MOOD_DEFINITION g_MoodDefs[5] = { };
++static CROWD_SETTINGS g_Settings = { };
+ 
+ CROWD_AUDIO_INIT g_CrowdAudio;
+ CROWD_STATE g_CrowdState;
+@@ -72,8 +76,9 @@
+     char Files[32][256];
+ };
+ 
+-static const RANDOM_STREAMS g_RandomChants = { };
+-static const RANDOM_STREAMS g_RandomHeckles = { };
++// Same story as g_MoodDefs: ReadConfig() casts the const away and fills these.
++static RANDOM_STREAMS g_RandomChants = { };
++static RANDOM_STREAMS g_RandomHeckles = { };
+ 
+ template <int N>
+ /**
+--- a/src/Game/Camera/CameraMan.cpp
++++ b/src/Game/Camera/CameraMan.cpp
+@@ -329,40 +329,40 @@
+         switch (g_eCurrentCameraType)
+         {
+         case eCameraType_Debug:
+-            pBaseCamera = (cBaseCamera*)new ((cDebugCamera*)nlMalloc(0x8C, 8, false)) cDebugCamera();
++            pBaseCamera = (cBaseCamera*)new ((cDebugCamera*)nlMalloc(sizeof(cDebugCamera), 8, false)) cDebugCamera();
+             break;
+         case eCameraType_Replay:
+-            pBaseCamera = (cBaseCamera*)new ((ReplayCamera*)nlMalloc(0x8C, 8, false)) ReplayCamera();
++            pBaseCamera = (cBaseCamera*)new ((ReplayCamera*)nlMalloc(sizeof(ReplayCamera), 8, false)) ReplayCamera();
+             break;
+         case eCameraType_TopDown:
+-            pBaseCamera = (cBaseCamera*)new ((TopDownCamera*)nlMalloc(0x78, 8, false)) TopDownCamera();
++            pBaseCamera = (cBaseCamera*)new ((TopDownCamera*)nlMalloc(sizeof(TopDownCamera), 8, false)) TopDownCamera();
+             break;
+         case eCameraType_FollowCharacter:
+-            pBaseCamera = (cBaseCamera*)new ((cFollowCamera*)nlMalloc(0xA0, 8, false)) cFollowCamera(cFollowCamera::FOLLOW_CHARACTER);
++            pBaseCamera = (cBaseCamera*)new ((cFollowCamera*)nlMalloc(sizeof(cFollowCamera), 8, false)) cFollowCamera(cFollowCamera::FOLLOW_CHARACTER);
+             break;
+         case eCameraType_FollowBall:
+-            pBaseCamera = (cBaseCamera*)new ((cFollowCamera*)nlMalloc(0xA0, 8, false)) cFollowCamera(cFollowCamera::FOLLOW_BALL);
++            pBaseCamera = (cBaseCamera*)new ((cFollowCamera*)nlMalloc(sizeof(cFollowCamera), 8, false)) cFollowCamera(cFollowCamera::FOLLOW_BALL);
+             break;
+         case eCameraType_Animated:
+-            pBaseCamera = (cBaseCamera*)new ((cAnimCamera*)nlMalloc(0xAC, 8, false)) cAnimCamera();
++            pBaseCamera = (cBaseCamera*)new ((cAnimCamera*)nlMalloc(sizeof(cAnimCamera), 8, false)) cAnimCamera();
+             break;
+         case eCameraType_KickOff:
+-            pBaseCamera = (cBaseCamera*)new ((cKickOffCamera*)nlMalloc(0x74, 8, false)) cKickOffCamera();
++            pBaseCamera = (cBaseCamera*)new ((cKickOffCamera*)nlMalloc(sizeof(cKickOffCamera), 8, false)) cKickOffCamera();
+             break;
+         case eCameraType_Gameplay:
+-            pBaseCamera = (cBaseCamera*)new ((GameplayCamera*)nlMalloc(0x14C, 8, false)) GameplayCamera();
++            pBaseCamera = (cBaseCamera*)new ((GameplayCamera*)nlMalloc(sizeof(GameplayCamera), 8, false)) GameplayCamera();
+             break;
+         case eCameraType_Goal:
+-            pBaseCamera = (cBaseCamera*)new ((GoalCamera*)nlMalloc(0x74, 8, false)) GoalCamera();
++            pBaseCamera = (cBaseCamera*)new ((GoalCamera*)nlMalloc(sizeof(GoalCamera), 8, false)) GoalCamera();
+             break;
+         case eCameraType_ShootToScore:
+-            pBaseCamera = (cBaseCamera*)new ((cShootToScoreCamera*)nlMalloc(0x74, 8, false)) cShootToScoreCamera();
++            pBaseCamera = (cBaseCamera*)new ((cShootToScoreCamera*)nlMalloc(sizeof(cShootToScoreCamera), 8, false)) cShootToScoreCamera();
+             break;
+         case eCameraType_AnimViewer:
+-            pBaseCamera = (cBaseCamera*)new ((cAnimViewerCamera*)nlMalloc(0xA4, 8, false)) cAnimViewerCamera();
++            pBaseCamera = (cBaseCamera*)new ((cAnimViewerCamera*)nlMalloc(sizeof(cAnimViewerCamera), 8, false)) cAnimViewerCamera();
+             break;
+         case eCameraType_FaceCloseup:
+-            pBaseCamera = (cBaseCamera*)new ((FaceCam*)nlMalloc(0x80, 8, false)) FaceCam(2.0f);
++            pBaseCamera = (cBaseCamera*)new ((FaceCam*)nlMalloc(sizeof(FaceCam), 8, false)) FaceCam(2.0f);
+             break;
+         default:
+             break;
+--- a/src/Game/CharacterTemplate.cpp
++++ b/src/Game/CharacterTemplate.cpp
+@@ -474,7 +474,7 @@
+         pAnimRetargetList = g_GoalieTemplate->pAnimRetargetListInventory->Find(0);
+     }
+ 
+-    GoalieTweaks* pTweaks = new (nlMalloc(0xF4, 8, false)) GoalieTweaks(g_GoalieTemplateInfo.szTweaksFilename);
++    GoalieTweaks* pTweaks = new (nlMalloc(sizeof(GoalieTweaks), 8, false)) GoalieTweaks(g_GoalieTemplateInfo.szTweaksFilename);
+ 
+     cPlayer* pChar;
+     if (!bForViewer)
+--- a/src/Game/DB/StatsTracker.cpp
++++ b/src/Game/DB/StatsTracker.cpp
+@@ -47,7 +47,7 @@
+     mIsUserCupWinner = false;
+     mHasGameEnded = false;
+ 
+-    m_pSimulator = new (nlMalloc(0xB8, 8, false)) Simulator();
++    m_pSimulator = new (nlMalloc(sizeof(Simulator), 8, false)) Simulator();
+ }
+ 
+ /**
+--- a/src/Game/Effects/EffectsGroup.cpp
++++ b/src/Game/Effects/EffectsGroup.cpp
+@@ -584,7 +584,7 @@
+             if (nlStrCmp<char>(gUserEffectTypes[i]->GetName(), token) == 0)
+             {
+                 UserEffectSpec* pUserSpec = gUserEffectTypes[i]->ParseSpec(parser);
+-                void* mem = nlMalloc(0xC, 8, false);
++                void* mem = nlMalloc(sizeof(DLListEntry<UserEffectSpec*>), 8, false);
+                 DLListEntry<UserEffectSpec*>* pSpecEntry = (DLListEntry<UserEffectSpec*>*)mem;
+                 if (mem != nullptr)
+                 {
+--- a/src/Game/Effects/EffectsTemplate.cpp
++++ b/src/Game/Effects/EffectsTemplate.cpp
+@@ -538,7 +538,7 @@
+         return false;
+     }
+ 
+-    pTemplateMap = new (nlMalloc(0x14, 8, false)) nlAVLTree<unsigned long, EffectsTemplate*, DefaultKeyCompare<unsigned long> >();
++    pTemplateMap = new (nlMalloc(sizeof(nlAVLTree<unsigned long, EffectsTemplate*, DefaultKeyCompare<unsigned long> >), 8, false)) nlAVLTree<unsigned long, EffectsTemplate*, DefaultKeyCompare<unsigned long> >();
+ 
+     SimpleParser parser;
+     parser.StartParsing((char*)data, size, true);
+--- a/src/Game/FE/FEAudio.cpp
++++ b/src/Game/FE/FEAudio.cpp
+@@ -22,7 +22,10 @@
+     /* 0x04 */ unsigned long audioIdentifier;
+ }; // total size: 0x8
+ 
+-extern "C" void qsort(void*, unsigned long, unsigned long, int (*)(const void*, const void*));
++// This re-declaration hardcodes 'unsigned long' for size_t, which is wrong on
++// LLP64 targets (Windows), where size_t is 'unsigned long long'. <stdlib.h>
++// already declares qsort correctly everywhere.
++#include <stdlib.h>
+ 
+ typedef nlListSlotPoolHigh<AnimAudioEventLookup> FELookupPool;
+ 
+@@ -114,6 +117,15 @@
+         event = NULL;
+     }
+ 
++    // A miss walks into event->szSFXType below. On the GameCube address 0 was
++    // ordinary readable memory, so that read returned junk, failed to match
++    // "empty", and the lookup that followed quietly found nothing. Here it is
++    // an access violation, so make the miss explicit.
++    if (event == NULL)
++    {
++        return -1;
++    }
++
+     if (nlStrICmp<char>(event->szSFXType, "empty") == 0)
+     {
+         return -1;
+@@ -151,6 +163,15 @@
+         event = NULL;
+     }
+ 
++    // A miss walks into event->szSFXType below. On the GameCube address 0 was
++    // ordinary readable memory, so that read returned junk, failed to match
++    // "empty", and the lookup that followed quietly found nothing. Here it is
++    // an access violation, so make the miss explicit.
++    if (event == NULL)
++    {
++        return -1;
++    }
++
+     if (nlStrCmp<char>(event->szSFXType, "empty") != 0)
+     {
+         Audio::StopWorldSFXbyStr(event->szSFXType);
+@@ -184,6 +205,15 @@
+         event = NULL;
+     }
+ 
++    // A miss walks into event->szSFXType below. On the GameCube address 0 was
++    // ordinary readable memory, so that read returned junk, failed to match
++    // "empty", and the lookup that followed quietly found nothing. Here it is
++    // an access violation, so make the miss explicit.
++    if (event == NULL)
++    {
++        return -1;
++    }
++
+     if (nlStrICmp<char>(event->szSFXType, "empty") == 0)
+     {
+         return -1;
+--- a/src/Game/FE/feButtonComponent.cpp
++++ b/src/Game/FE/feButtonComponent.cpp
+@@ -73,7 +73,7 @@
+         textPosition = mButtonLabels[i]->GetAssetPosition();
+         mButtonLabels[i]->SetAssetPosition(totalLength, textPosition.f.y, textPosition.f.z);
+ 
+-        const nlFont* pFont = ((FEFontResource*)mButtonLabels[i]->m_component->pChildren)->m_pFontReference;
++        const nlFont* pFont = ((FEFontResource*)(TLSlide*)mButtonLabels[i]->m_component->pChildren)->m_pFontReference;
+ 
+         nlStrNCpy<unsigned short>(buffer, mButtonLabels[i]->GetString(), 0x80);
+         buffer[127] = 0;
+--- a/src/Game/FE/feChooseSideComponent.cpp
++++ b/src/Game/FE/feChooseSideComponent.cpp
+@@ -351,7 +351,9 @@
+     ControllerPos controllerpos = playingside == 0 ? CPOS_HOME : (playingside == 1 ? CPOS_AWAY : CPOS_NEUTRAL);
+ 
+     TLInstance* instance = mInstanceTable[padindex];
+-    feVector3 pos = instance->GetPosition();
++    // The tween reads these as plain floats, so take a native copy rather than
++    // handing it the big-endian storage from the package.
++    nlVector3 pos = instance->GetPosition();
+ 
+     mTweenManager.clearTweensOnObj(instance);
+ 
+--- a/src/Game/FE/feHelpFuncs.cpp
++++ b/src/Game/FE/feHelpFuncs.cpp
+@@ -850,8 +850,11 @@
+  */
+ void MakeTextBoxReallyWide(TLTextInstance& textInstance)
+ {
+-    nlVector2& boxSize = ((textInstance.m_OverloadFlags & 0x4) != 0) ? textInstance.m_OverloadedAttributes.BoxSize : textInstance.m_component->m_BoxSize;
+-    nlVector2 bb = boxSize;
++    // The component's copy is big-endian package data and the overloaded one is
++    // native, so this has to be a value, not a reference into either.
++    nlVector2 bb = ((textInstance.m_OverloadFlags & 0x4) != 0)
++        ? textInstance.m_OverloadedAttributes.BoxSize
++        : nlVector2(textInstance.m_component->m_BoxSize);
+     bb.x = 999.9f;
+     textInstance.m_OverloadedAttributes.BoxSize = bb;
+     textInstance.m_OverloadFlags |= 0x4;
+--- a/src/Game/FE/fePopupMenu.cpp
++++ b/src/Game/FE/fePopupMenu.cpp
+@@ -712,7 +712,7 @@
+         InlineHasher(nlStringLowerHash("Message")));
+ 
+     messagePosition = pText->GetAssetPosition();
+-    const nlFont* pFont = ((const FEText*)pText->m_component)->m_pFeFontResource->m_pFontReference;
++    const nlFont* pFont = ((const FEText*)(TLComponent*)pText->m_component)->m_pFeFontResource->m_pFontReference;
+     nlTextBox::StringDrawInfo drawInfo = nlTextBox::StringDrawInfo(pText->m_DrawInfo);
+     messageHeight = (float)(drawInfo.RowCount * pFont->m_Metrics.Height);
+     totalHeight += messageHeight;
+@@ -763,7 +763,7 @@
+         pText->SetAssetColour(optionColour);
+ 
+         {
+-            pFont = ((const FEText*)pText->m_component)->m_pFeFontResource->m_pFontReference;
++            pFont = ((const FEText*)(TLComponent*)pText->m_component)->m_pFeFontResource->m_pFontReference;
+             nlTextBox::StringDrawInfo info = pText->m_DrawInfo;
+             drawInfo = info;
+             optionHeight = (float)(drawInfo.RowCount * pFont->m_Metrics.Height);
+--- a/src/Game/FE/feRender.cpp
++++ b/src/Game/FE/feRender.cpp
+@@ -293,7 +293,7 @@
+ 
+     nlColour colour = pTLImageInstance->GetAssetColour();
+ 
+-    const FEImage* pFEImage = (const FEImage*)pTLImageInstance->m_component;
++    const FEImage* pFEImage = (const FEImage*)(TLComponent*)pTLImageInstance->m_component;
+     FETextureResource* pTexRes = pFEImage->m_pFeTextureResource;
+ 
+     if (!pTexRes->IsValid())
+@@ -358,6 +358,7 @@
+ 
+     glSetCurrentTexture(textureHandle, GLTT_Diffuse);
+ 
++
+     static int stripmap[4] = { 3, 0, 2, 1 };
+     static int quadmap[4] = { 0, 1, 2, 3 };
+ 
+--- a/src/Game/FE/feScene.cpp
++++ b/src/Game/FE/feScene.cpp
+@@ -1,6 +1,7 @@
+ #include "Game/FE/feScene.h"
+ 
+ #include "NL/nlDebug.h"
++#include "NL/nlEndian.h"
+ #include "NL/nlFileGC.h"
+ #include "NL/nlMemory.h"
+ #include "NL/gl/glMatrix.h"
+@@ -8,12 +9,13 @@
+ 
+ bool gSebringLoadPackageToVirtualMemory = false;
+ 
++// The first 0x10 bytes of a .fen, read straight off disc.
+ struct FE_FILE_HEADER
+ {
+     char Thumbprint[4];
+-    unsigned int Version;
+-    unsigned int DataLength;
+-    unsigned int PointerTableLength;
++    beu32 Version;
++    beu32 DataLength;
++    beu32 PointerTableLength;
+ };
+ 
+ class QueueResourceLoadCallback
+@@ -73,13 +75,17 @@
+     m_resourceManager->UnloadResource(handle);
+ }
+ 
+-static inline void RelocatePointer(unsigned long* pPointer, void* pData)
++// The offsets in a .fen and the pointer slots they point at are stored
++// big-endian. Relocation is the moment the image stops being file data and
++// becomes something the game dereferences, so read big-endian and write the
++// fixed-up value back in native byte order.
++static inline void RelocatePointer(beu32* pPointer, void* pData)
+ {
+     unsigned long value = *pPointer;
+     unsigned long mask = ~((value + 1) | ((unsigned long)-1 - value));
+-    unsigned long sum = value + (unsigned long)pData;
++    unsigned long sum = value + (unsigned long)(uintptr_t)pData;
+     mask = (unsigned long)((long)mask >> 31);
+-    *pPointer = sum & ~mask;
++    *(u32*)pPointer = (u32)(sum & ~mask);
+ }
+ 
+ /**
+@@ -90,10 +96,10 @@
+     nlFile* file;
+     FE_FILE_HEADER FenHdr ATTRIBUTE_ALIGN(32);
+     void* pData;
+-    unsigned long* pPointerLocation;
+-    unsigned long* pLastPointer;
+-    unsigned long* pCurrentPointer;
+-    unsigned long* pPointer;
++    beu32* pPointerLocation;
++    beu32* pLastPointer;
++    beu32* pCurrentPointer;
++    beu32* pPointer;
+ 
+     file = nlOpen(szPackageFileName);
+     nlRead(file, &FenHdr, 0x10);
+@@ -113,16 +119,16 @@
+         nlRead(file, pData, FenHdr.DataLength);
+     }
+ 
+-    pPointerLocation = (unsigned long*)nlMalloc(FenHdr.PointerTableLength, 0x20, true);
++    pPointerLocation = (beu32*)nlMalloc(FenHdr.PointerTableLength, 0x20, true);
+     nlRead(file, pPointerLocation, FenHdr.PointerTableLength);
+     nlClose(file);
+ 
+     m_pFEPackage = (FEPackage*)pData;
+ 
+-    pLastPointer = (unsigned long*)((unsigned char*)pPointerLocation + (FenHdr.PointerTableLength & ~3));
++    pLastPointer = (beu32*)((unsigned char*)pPointerLocation + (FenHdr.PointerTableLength & ~3));
+     for (pCurrentPointer = pPointerLocation; pCurrentPointer < pLastPointer; pCurrentPointer++)
+     {
+-        pPointer = (unsigned long*)((unsigned char*)pData + *pCurrentPointer);
++        pPointer = (beu32*)((unsigned char*)pData + *pCurrentPointer);
+         RelocatePointer(pPointer, pData);
+     }
+ 
+--- a/src/Game/FE/feSceneManager.cpp
++++ b/src/Game/FE/feSceneManager.cpp
+@@ -260,7 +260,7 @@
+     BaseSceneHandler* pHandler)
+ {
+     FESceneManager* pSceneManager = FESceneManager::Instance();
+-    FEScene* pFEScene = new (nlMalloc(0x70, 8, false)) FEScene();
++    FEScene* pFEScene = new (nlMalloc(sizeof(FEScene), 8, false)) FEScene();
+     pFEScene->m_uHashID = nlStringLowerHash(szFilename);
+ 
+     if (!pFEScene->LoadPackage(szFilename))
+--- a/src/Game/FE/feScrollText.cpp
++++ b/src/Game/FE/feScrollText.cpp
+@@ -174,7 +174,7 @@
+ 
+     if (m_textFont == NULL)
+     {
+-        m_textFont = ((FEFontResource*)m_controlText->m_component->pChildren)->m_pFontReference;
++        m_textFont = ((FEFontResource*)(TLSlide*)m_controlText->m_component->pChildren)->m_pFontReference;
+     }
+ 
+     if (m_textFont == NULL)
+--- a/src/Game/FE/tlTextInstance_runtime.cpp
++++ b/src/Game/FE/tlTextInstance_runtime.cpp
+@@ -5,14 +5,18 @@
+ #include "NL/nlLocalization.h"
+ #include "NL/nlTextBox.h"
+ 
++#include "Game/FE/feFontResource.h"
++
++// A text component's pChildren slot holds its FEFontResource, not a slide list.
++// This used to pun through a local struct with a hand-counted 0x14 pad and a
++// bare nlFont*; on a 64-bit host that pointer is eight bytes and gets aligned
++// to 0x18, so the read straddled two of the serialized 32-bit fields and
++// produced a pointer with two addresses packed into it. Use the real type,
++// whose m_pFontReference is an nlGCPtr32 at the offset the file actually uses.
+ static inline const nlFont* GetFontFromComponent(TLComponent* comp)
+ {
+-    struct FontResource
+-    {
+-        unsigned char _pad[0x14];
+-        const nlFont* m_font;
+-    };
+-    return ((const FontResource*)comp->pChildren)->m_font;
++    const FEFontResource* pResource = (const FEFontResource*)(TLSlide*)comp->pChildren;
++    return pResource->m_pFontReference;
+ }
+ 
+ /**
+@@ -42,20 +46,14 @@
+  */
+ void TLTextInstance::Render(eGLView view, const nlColour& colour) const
+ {
+-    struct ResourceHandle
+-    {
+-        unsigned char _pad[0x10];
+-        bool m_bValid;
+-    };
+-
+     nlVector2 drawAt;
+     const nlFont* pFont;
+ 
+     GetPosition();
+ 
+     TLComponent* component = m_component;
+-    const ResourceHandle* resource = (const ResourceHandle*)component->pChildren;
+-    if (!resource->m_bValid)
++    const FEResourceHandle* resource = (const FEResourceHandle*)(TLSlide*)component->pChildren;
++    if (!resource->IsValid())
+     {
+         return;
+     }
+--- a/src/Game/InterpreterCore.cpp
++++ b/src/Game/InterpreterCore.cpp
+@@ -25,9 +25,16 @@
+  */
+ void InterpreterCore::LoadByteCode(void* data)
+ {
+-    m_Header = (ByteCodeHeader*)data;
+-    m_Header->m_FunctionTable = (FunctionEntryPoint*)(m_Header + 1);
+-    m_Header->m_DataSegment = (u32*)(m_Header->m_FunctionTable + m_Header->numFunctions);
++    const ByteCodeFileHeader* file = (const ByteCodeFileHeader*)data;
++    m_Header = &m_HeaderStorage;
++    m_Header->signature = file->signature;
++    m_Header->numFunctions = file->numFunctions;
++    m_Header->dataSegmentSize = file->dataSegmentSize;
++    m_Header->codeSegmentSize = file->codeSegmentSize;
++    m_Header->stringSegmentSize = file->stringSegmentSize;
++
++    m_Header->m_FunctionTable = (FunctionEntryPoint*)(file + 1);
++    m_Header->m_DataSegment = (beu32*)(m_Header->m_FunctionTable + m_Header->numFunctions);
+     m_Header->m_CodeSegment = (u16*)((u8*)m_Header->m_DataSegment + m_Header->dataSegmentSize);
+     m_Header->m_StringSegment = (u8*)m_Header->m_CodeSegment + m_Header->codeSegmentSize;
+ 
+--- a/src/Game/PadActions.cpp
++++ b/src/Game/PadActions.cpp
+@@ -28,14 +28,14 @@
+     {
+         for (int i = 0; i < 4; i++)
+         {
+-            cPadManager::m_aPads[i] = new (nlMalloc(0x1C, 8, false)) cPlatPad(i);
++            cPadManager::m_aPads[i] = new (nlMalloc(sizeof(cPlatPad), 8, false)) cPlatPad(i);
+         }
+     }
+     else
+     {
+         for (int i = 0; i < 4; i++)
+         {
+-            cPadManager::m_aPads[i] = new (nlMalloc(0xD8, 8, false)) PadMonkey(i);
++            cPadManager::m_aPads[i] = new (nlMalloc(sizeof(PadMonkey), 8, false)) PadMonkey(i);
+         }
+     }
+ 
+--- a/src/Game/Physics.cpp
++++ b/src/Game/Physics.cpp
+@@ -36,16 +36,10 @@
+ 
+ void dClearCachedData();
+ 
+-extern "C"
+-{
+-    typedef void* dAllocFunction(unsigned long);
+-    typedef void* dReallocFunction(void*, unsigned long, unsigned long);
+-    typedef void dFreeFunction(void*, unsigned long);
+-
+-    void dSetAllocHandler(dAllocFunction* fn);
+-    void dSetReallocHandler(dReallocFunction* fn);
+-    void dSetFreeHandler(dFreeFunction* fn);
+-}
++// These duplicated ODE's own declarations but hardcoded 'unsigned long' for
++// size_t, which is wrong on LLP64 targets (Windows). ode/memory.h declares
++// them correctly against size_t.
++#include "ode/memory.h"
+ 
+ // SimpleCollisionSpace has no dedicated header; it is declared locally in each
+ // translation unit that constructs one (see CollisionSpace.cpp, PhysicsFakeBall.cpp).
+@@ -121,7 +115,7 @@
+     for (i = 0; i < 4; i++)
+     {
+         const sCornerSegment& corner = cField::GetCorner(i);
+-        PhysicsRoundedCorner* pCorner = new (nlMalloc(0x2C, 8, false)) PhysicsRoundedCorner(
++        PhysicsRoundedCorner* pCorner = new (nlMalloc(sizeof(PhysicsRoundedCorner), 8, false)) PhysicsRoundedCorner(
+             g_CollisionSpace,
+             corner.vCenter,
+             corner.fRadius,
+@@ -172,7 +166,7 @@
+         switch (physElement->uPrimitiveType)
+         {
+         case 1:
+-            obj = new (nlMalloc(0x2C, 8, false)) PhysicsSphere(NULL, NULL, physElement->fRadius);
++            obj = new (nlMalloc(sizeof(PhysicsSphere), 8, false)) PhysicsSphere(NULL, NULL, physElement->fRadius);
+             obj->SetWorldMatrix(physElement->matLocalToParent);
+             {
+                 void* p = nlMalloc(8, 8, false);
+@@ -187,7 +181,7 @@
+             break;
+ 
+         case 2:
+-            obj = new (nlMalloc(0x2C, 8, false)) PhysicsCapsule(NULL, NULL, physElement->fRadius, physElement->fHeight);
++            obj = new (nlMalloc(sizeof(PhysicsCapsule), 8, false)) PhysicsCapsule(NULL, NULL, physElement->fRadius, physElement->fHeight);
+             obj->SetWorldMatrix(physElement->matLocalToParent);
+             {
+                 void* p = nlMalloc(8, 8, false);
+@@ -222,7 +216,7 @@
+             nlVec3Scale(v1, 0.5f * physElement->fWidth);
+             nlVec3Scale(v2, 0.5f * physElement->fLength);
+ 
+-            obj = new (nlMalloc(0x44, 8, false)) PhysicsFinitePlane(NULL, centre, v1, v2, true, normalPointsAwayFromField ? sfStaticFinitePlaneThinDepth : sfStaticFinitePlaneThickDepth);
++            obj = new (nlMalloc(sizeof(PhysicsFinitePlane), 8, false)) PhysicsFinitePlane(NULL, centre, v1, v2, true, normalPointsAwayFromField ? sfStaticFinitePlaneThinDepth : sfStaticFinitePlaneThickDepth);
+             {
+                 void* p = nlMalloc(8, 8, false);
+                 ListEntry<PhysicsObject*>* entry = (ListEntry<PhysicsObject*>*)p;
+--- a/src/Game/Physics/PhysicsCharacter.cpp
++++ b/src/Game/Physics/PhysicsCharacter.cpp
+@@ -37,7 +37,7 @@
+     m_gravity = 0.0f;
+     SetMass(100.0f);
+ 
+-    PhysicsColumn* column = (PhysicsColumn*)nlMalloc(0x30, 8, false);
++    PhysicsColumn* column = (PhysicsColumn*)nlMalloc(sizeof(PhysicsColumn), 8, false);
+     column = new (column) PhysicsColumn(g_CollisionSpace, g_PhysicsWorld, radius);
+     m_pPlayerPlayerColumn = column;
+     m_pPlayerPlayerColumn->SetCategory(0x40);
+--- a/src/Game/PhysicsCompositeObject.cpp
++++ b/src/Game/PhysicsCompositeObject.cpp
+@@ -61,7 +61,8 @@
+ 
+     transform->Attach(object, this);
+ 
+-    DLListEntry<PhysicsTransform*>* entry = (DLListEntry<PhysicsTransform*>*)nlMalloc(0xC, 8, 0);
++    DLListEntry<PhysicsTransform*>* entry =
++        (DLListEntry<PhysicsTransform*>*)nlMalloc(sizeof(DLListEntry<PhysicsTransform*>), 8, 0);
+ 
+     if (entry != nullptr)
+     {
+--- a/src/Game/Render/SidelineExplodable.cpp
++++ b/src/Game/Render/SidelineExplodable.cpp
+@@ -371,7 +371,7 @@
+ 
+         if (!fragment.mbIsStationary)
+         {
+-            PhysicsBox* box = (PhysicsBox*)::operator new(0x30, 8, false);
++            PhysicsBox* box = (PhysicsBox*)::operator new(sizeof(PhysicsBox), 8, false);
+             box = new (box) SidelineExplosionPhysicsObject(g_CollisionSpace, g_PhysicsWorld, dim.mDim.x, dim.mDim.y, dim.mDim.z, &fragment);
+             box->SetDensity(5.0f);
+ 
+@@ -533,7 +533,7 @@
+ void SidelineExplodableManager::Initialize()
+ {
+     sbIsInitialized = true;
+-    sFragmentLookupTable = (ExplosionFragment**)nlMalloc(0x50, 8, false);
++    sFragmentLookupTable = (ExplosionFragment**)nlMalloc(20 * sizeof(ExplosionFragment*), 8, false);
+     for (unsigned short i = 0; i < 20; i++)
+     {
+         ReturnDrawableFragmentToPool(i);
+--- a/src/Game/ReplayManager.cpp
++++ b/src/Game/ReplayManager.cpp
+@@ -62,7 +62,7 @@
+ void ReplayManager::Initialize()
+ {
+     mMemory = (u8*)nlVirtualAlloc(0x1C0000, false);
+-    mReplay = new (nlMalloc(0x48, 8, false)) Replay((char*)mMemory, 0x1C0000, 0x8000);
++    mReplay = new (nlMalloc(sizeof(Replay), 8, false)) Replay((char*)mMemory, 0x1C0000, 0x8000);
+     mTime = 0.0f;
+ }
+ 
+@@ -134,7 +134,7 @@
+ void ReplayManager::Flush()
+ {
+     delete mReplay;
+-    mReplay = new (nlMalloc(0x48, 8, false)) Replay((char*)mMemory, 0x1C0000, 0x8000);
++    mReplay = new (nlMalloc(sizeof(Replay), 8, false)) Replay((char*)mMemory, 0x1C0000, 0x8000);
+ 
+     ResetSnapshots();
+ }
+--- a/src/Game/SH/SHChooseCup.cpp
++++ b/src/Game/SH/SHChooseCup.cpp
+@@ -130,7 +130,7 @@
+ 
+     mCupInProgressDirty = false;
+ 
+-    mCupImage = new ((AsyncImage*)nlMalloc(0x1C, 0x20, true)) AsyncImage(TROPHY_FILE_NAME, NULL);
++    mCupImage = new ((AsyncImage*)nlMalloc(sizeof(AsyncImage), 0x20, true)) AsyncImage(TROPHY_FILE_NAME, NULL);
+ 
+     if (mIsSuperCup)
+     {
+--- a/src/Game/SH/SHCupHub.cpp
++++ b/src/Game/SH/SHCupHub.cpp
+@@ -2306,10 +2306,11 @@
+  */
+ void CupHubScene::MakeTextBoxReallyWide(TLTextInstance& textInstance)
+ {
+-    nlVector2& boxSize = ((textInstance.m_OverloadFlags & 0x4) != 0)
+-                           ? textInstance.m_OverloadedAttributes.BoxSize
+-                           : textInstance.m_component->m_BoxSize;
+-    nlVector2 bb = boxSize;
++    // The component's copy is big-endian package data and the overloaded one is
++    // native, so this has to be a value, not a reference into either.
++    nlVector2 bb = ((textInstance.m_OverloadFlags & 0x4) != 0)
++                       ? textInstance.m_OverloadedAttributes.BoxSize
++                       : nlVector2(textInstance.m_component->m_BoxSize);
+     bb.x = 999.9f;
+     textInstance.m_OverloadedAttributes.BoxSize = bb;
+     textInstance.m_OverloadFlags |= 0x4;
+@@ -2515,8 +2516,11 @@
+         InlineHasher(nlStringLowerHash("Text")));
+ 
+     {
+-        nlVector2& boxSize = ((pText->m_OverloadFlags & 0x4) != 0) ? pText->m_OverloadedAttributes.BoxSize : pText->m_component->m_BoxSize;
+-        nlVector2 bb = boxSize;
++        // The component's copy is big-endian package data and the overloaded one
++        // is native, so this has to be a value, not a reference into either.
++        nlVector2 bb = ((pText->m_OverloadFlags & 0x4) != 0)
++            ? pText->m_OverloadedAttributes.BoxSize
++            : nlVector2(pText->m_component->m_BoxSize);
+         bb.x = 999.9f;
+         pText->m_OverloadedAttributes.BoxSize = bb;
+         pText->m_OverloadFlags |= 0x4;
+--- a/src/Game/SH/SHCupTrophy.cpp
++++ b/src/Game/SH/SHCupTrophy.cpp
+@@ -41,7 +41,7 @@
+     , mButtonState(ButtonComponent::BS_A_AND_B)
+ {
+     const char* asyncPath = "art/fe/TrophiesUI.res";
+-    AsyncImage* image = new (nlMalloc(0x1C, 0x20, true)) AsyncImage(asyncPath, NULL);
++    AsyncImage* image = new (nlMalloc(sizeof(AsyncImage), 0x20, true)) AsyncImage(asyncPath, NULL);
+     mAsyncTrophy = image;
+ }
+ 
+--- a/src/Game/Sys/GCStream.cpp
++++ b/src/Game/Sys/GCStream.cpp
+@@ -1,5 +1,8 @@
+ #include "Game/Sys/GCStream.h"
+ #include "Game/Sys/GCStreamVirtuals.h"
++// This TU emits MonoAudioStream's vtable (DoUpdateRead is its key function),
++// so it needs the inline virtual destructor defined in this header.
++#include "Game/Audio/AudioStreamVirtuals.h"
+ #include "NL/nlAlgorithm.h"
+ #include "NL/nlFileGC.h"
+ #include "NL/nlMemory.h"
+--- a/src/Game/Sys/eventman.cpp
++++ b/src/Game/Sys/eventman.cpp
+@@ -91,7 +91,7 @@
+ #pragma scheduling off
+ EventHandler* EventManager::AddEventHandler(EventCallback pEventHandlerFunc, void* pParam, unsigned long uDestinationMask)
+ {
+-    EventHandler* eventHandler = (EventHandler*)nlMalloc(0x14, 8, 0);
++    EventHandler* eventHandler = (EventHandler*)nlMalloc(sizeof(EventHandler), 8, 0);
+     EventHandler** head = &m_handlers;
+ 
+     eventHandler->m_pCBFunction = pEventHandlerFunc;
+--- a/src/NL/MemAlloc.cpp
++++ b/src/NL/MemAlloc.cpp
+@@ -25,7 +25,15 @@
+ // reentrant -- a free-list walk racing an insert corrupts the ring -- so
+ // serialise every entry point. Statically initialised so it is usable from the
+ // static constructors that allocate before main().
+-static pthread_mutex_t s_nlAllocLock = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
++// glibc spells the static recursive initialiser with an _NP suffix;
++// mingw-w64's winpthreads spells it without one.
++#if defined(PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP)
++#define NL_RECURSIVE_MUTEX_INIT PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP
++#else
++#define NL_RECURSIVE_MUTEX_INIT PTHREAD_RECURSIVE_MUTEX_INITIALIZER
++#endif
++
++static pthread_mutex_t s_nlAllocLock = NL_RECURSIVE_MUTEX_INIT;
+ 
+ namespace
+ {
+@@ -36,6 +44,247 @@
+ };
+ } // namespace
+ 
++// ---------------------------------------------------------------------------
++// Free-ring validator. Off by default; -DNL_MEMALLOC_VALIDATE turns it on.
++//
++// The ring nodes live *inside* the free memory they describe, so any overrun by
++// a caller looks identical to an allocator bug once the damage is visible. The
++// point of checking on entry as well as exit is to tell those apart: a failure
++// on exit means the operation that just ran broke the ring, a failure on the
++// next entry means something outside the allocator wrote over a free block.
++// ---------------------------------------------------------------------------
++#ifdef NL_MEMALLOC_VALIDATE
++#include <cstdio>
++#include <cstdlib>
++
++namespace
++{
++struct nlHeapRange
++{
++    MemoryAllocator* owner;
++    u32 lo;
++    u32 hi;
++};
++nlHeapRange s_nlHeapRanges[4];
++
++void nlRecordHeapRange(MemoryAllocator* owner, void* memory, u32 size)
++{
++    for (unsigned i = 0; i < 4; i++)
++    {
++        if (s_nlHeapRanges[i].owner == owner || s_nlHeapRanges[i].owner == NULL)
++        {
++            s_nlHeapRanges[i].owner = owner;
++            s_nlHeapRanges[i].lo = (u32)(uintptr_t)memory;
++            s_nlHeapRanges[i].hi = s_nlHeapRanges[i].lo + size;
++            return;
++        }
++    }
++}
++
++bool nlLookupHeapRange(MemoryAllocator* owner, u32* lo, u32* hi)
++{
++    for (unsigned i = 0; i < 4; i++)
++    {
++        if (s_nlHeapRanges[i].owner == owner)
++        {
++            *lo = s_nlHeapRanges[i].lo;
++            *hi = s_nlHeapRanges[i].hi;
++            return true;
++        }
++    }
++    return false;
++}
++
++// Every block the allocator hands out, takes back, or carves a new free node
++// out of, in order. On a failure we replay only the entries whose extent covers
++// the offending address, which is the history that explains it.
++struct nlOpLogEntry
++{
++    const char* op;
++    u32 lo;
++    u32 size;
++    u32 detail;
++};
++nlOpLogEntry s_nlOpLog[8192];
++unsigned s_nlOpLogNext = 0;
++
++void nlOpLog(const char* op, u32 lo, u32 size, u32 detail)
++{
++    nlOpLogEntry& e = s_nlOpLog[s_nlOpLogNext % 8192];
++    e.op = op;
++    e.lo = lo;
++    e.size = size;
++    e.detail = detail;
++    s_nlOpLogNext++;
++}
++
++void nlOpLogDump(u32 addr)
++{
++    const unsigned total = s_nlOpLogNext < 8192 ? s_nlOpLogNext : 8192;
++    const unsigned base = s_nlOpLogNext - total;
++
++    fprintf(stderr, "  --- ops touching %08x +/- 64 (%u recorded) ---\n", addr, s_nlOpLogNext);
++    for (unsigned i = 0; i < total; i++)
++    {
++        const nlOpLogEntry& e = s_nlOpLog[(base + i) % 8192];
++        if (addr + 64 < e.lo || addr - 64 >= e.lo + e.size)
++            continue;
++        fprintf(stderr, "  #%-6u %-22s %08x-%08x (size %u, detail %08x)\n", base + i, e.op, e.lo,
++                e.lo + e.size, e.size, e.detail);
++    }
++
++    fprintf(stderr, "  --- last ops ---\n");
++    const unsigned tail = total < 48 ? total : 48;
++    for (unsigned i = total - tail; i < total; i++)
++    {
++        const nlOpLogEntry& e = s_nlOpLog[(base + i) % 8192];
++        fprintf(stderr, "  #%-6u %-22s %08x-%08x (size %u, detail %08x)\n", base + i, e.op, e.lo,
++                e.lo + e.size, e.size, e.detail);
++    }
++}
++
++void nlRingDump(MemoryAllocator* self)
++{
++    FreeBlockList* head = self->m_free_block_list;
++    if (head == NULL)
++    {
++        fprintf(stderr, "  <ring empty>\n");
++        return;
++    }
++    FreeBlockList* start = head->m_next;
++    FreeBlockList* cur = start;
++    for (unsigned i = 0; i < 32; i++)
++    {
++        fprintf(stderr, "  [%2u] node=%08x size=%-10u next=%08x prev=%08x\n", i,
++                (u32)(uintptr_t)cur, cur->m_size, cur->m_next.m_addr, cur->m_prev.m_addr);
++        cur = cur->m_next;
++        if (cur == start || cur == NULL || ((uintptr_t)cur & 3) != 0)
++            return;
++    }
++    fprintf(stderr, "  ... (truncated)\n");
++}
++
++void nlRingFail(MemoryAllocator* self, const char* where, const char* why, FreeBlockList* node)
++{
++    fprintf(stderr, "\n*** free ring corrupt: %s (%s), node=%08x\n", why, where,
++            (u32)(uintptr_t)node);
++    nlRingDump(self);
++    nlOpLogDump((u32)(uintptr_t)node);
++    fflush(stderr);
++    abort();
++}
++
++// Ring consistency alone cannot see the failure mode that actually bites here:
++// a block that is on the free ring *and* handed out to a caller at the same
++// time. Both look fine until the caller writes over the node. Checking the
++// extent of every block we hand out, and of every block we take back, against
++// the live ring catches it at the operation responsible.
++FreeBlockList* nlRingFindOverlap(MemoryAllocator* self, u32 lo, u32 hi, FreeBlockList* ignore)
++{
++    FreeBlockList* head = self->m_free_block_list;
++    if (head == NULL)
++        return NULL;
++
++    FreeBlockList* start = head->m_next;
++    FreeBlockList* cur = start;
++    unsigned count = 0;
++    do
++    {
++        const u32 addr = (u32)(uintptr_t)cur;
++        if (cur != ignore && addr < hi && lo < addr + cur->m_size)
++            return cur;
++        cur = cur->m_next;
++        if (++count > 0x100000)
++            return NULL;
++    } while (cur != start);
++    return NULL;
++}
++
++void nlRingCheckExtent(MemoryAllocator* self, const char* where, const char* why, u32 lo, u32 hi,
++                       FreeBlockList* ignore)
++{
++    FreeBlockList* hit = nlRingFindOverlap(self, lo, hi, ignore);
++    if (hit != NULL)
++    {
++        fprintf(stderr, "\n*** %s (%s): block %08x-%08x overlaps free node %08x size %u\n", why,
++                where, lo, hi, (u32)(uintptr_t)hit, hit->m_size);
++        nlRingDump(self);
++        nlOpLogDump(lo);
++        fflush(stderr);
++        abort();
++    }
++}
++
++void nlRingCheck(MemoryAllocator* self, const char* where)
++{
++    FreeBlockList* head = self->m_free_block_list;
++    if (head == NULL)
++        return;
++
++    u32 lo = 0;
++    u32 hi = 0;
++    const bool haveRange = nlLookupHeapRange(self, &lo, &hi);
++
++    FreeBlockList* start = head->m_next;
++    FreeBlockList* cur = start;
++    unsigned count = 0;
++    do
++    {
++        const u32 addr = (u32)(uintptr_t)cur;
++        if (haveRange && (addr < lo || addr >= hi))
++            nlRingFail(self, where, "node outside heap", cur);
++        if (addr & 3)
++            nlRingFail(self, where, "node misaligned", cur);
++        if (cur->m_size < 0xC || (cur->m_size & 3) != 0)
++            nlRingFail(self, where, "implausible block size", cur);
++        if (haveRange && addr + cur->m_size > hi)
++            nlRingFail(self, where, "block runs past end of heap", cur);
++
++        FreeBlockList* const next = cur->m_next;
++        if ((FreeBlockList*)next->m_prev != cur)
++            nlRingFail(self, where, "next->prev does not point back", next);
++        if (next != start)
++        {
++            // The ring is kept in ascending address order, wrapping only at the
++            // tail; adjacent free blocks are coalesced, so they never touch.
++            if ((u32)(uintptr_t)next <= addr)
++                nlRingFail(self, where, "ring not in ascending order", cur);
++            if (addr + cur->m_size > (u32)(uintptr_t)next)
++                nlRingFail(self, where, "block overlaps its successor", cur);
++        }
++
++        cur = next;
++        if (++count > 0x100000)
++            nlRingFail(self, where, "ring does not terminate", cur);
++    } while (cur != start);
++}
++
++struct nlRingScope
++{
++    MemoryAllocator* self;
++    const char* onExit;
++    nlRingScope(MemoryAllocator* s, const char* enter, const char* exit)
++        : self(s)
++        , onExit(exit)
++    {
++        nlRingCheck(self, enter);
++    }
++    ~nlRingScope() { nlRingCheck(self, onExit); }
++};
++} // namespace
++
++#define NL_RING_SCOPE(name) nlRingScope nlRingScope_(this, name " entry", name " exit")
++#define NL_RING_RECORD(mem, size) nlRecordHeapRange(this, mem, size)
++#define NL_OP_LOG(op, lo, size, detail) nlOpLog(op, (u32)(uintptr_t)(lo), (u32)(size), (u32)(uintptr_t)(detail))
++#define NL_RING_EXTENT(where, why, lo, hi, ignore) \
++    nlRingCheckExtent(this, where, why, (u32)(uintptr_t)(lo), (u32)(uintptr_t)(hi), ignore)
++#else
++#define NL_RING_SCOPE(name) ((void)0)
++#define NL_RING_RECORD(mem, size) ((void)0)
++#define NL_RING_EXTENT(where, why, lo, hi, ignore) ((void)0)
++#define NL_OP_LOG(op, lo, size, detail) ((void)0)
++#endif
++
+ // Built with `-inline deferred`: MWCC emits .text in REVERSE source order, so the
+ // functions below are declared last-to-first relative to their addresses. Parse-time
+ // .data (the ptmf constants) still follows source order, which is what pins
+@@ -47,6 +296,7 @@
+ void MemoryAllocator::Free(void* p)
+ {
+     nlAllocLock nlLock_;
++    NL_RING_SCOPE("Free");
+     FreeBlockList* block;
+     MemoryAllocator* self;
+     FreeBlockList* start;
+@@ -82,6 +332,8 @@
+     }
+ 
+     block->m_size = size;
++    NL_RING_EXTENT("Free", "double free or bogus header", block, (char*)block + size, NULL);
++    NL_OP_LOG("free", block, size, p);
+     start = nlDLRingGetStart<FreeBlockList>(self->m_free_block_list);
+     if ((start > block) || (start == NULL))
+     {
+@@ -108,6 +360,7 @@
+         if (((char*)block + size) == (char*)next)
+         {
+             block->m_size = size + next->m_size;
++            NL_OP_LOG("coalesce with next", block, block->m_size, next);
+             nlDLRingRemove<FreeBlockList>(&self->m_free_block_list, next);
+         }
+     }
+@@ -119,6 +372,7 @@
+         if (((char*)prev + size) == (char*)block)
+         {
+             prev->m_size = size + block->m_size;
++            NL_OP_LOG("coalesce with prev", prev, prev->m_size, block);
+             nlDLRingRemove<FreeBlockList>(&self->m_free_block_list, block);
+         }
+     }
+@@ -130,6 +384,7 @@
+ void* MemoryAllocator::Allocate(unsigned long size, unsigned int alignment, bool fromEnd)
+ {
+     nlAllocLock nlLock_;
++    NL_RING_SCOPE("Allocate");
+     void* result;
+     u32 offset;
+     unsigned int requestSize = size;
+@@ -201,6 +456,14 @@
+                 *(u32*)(((u32)blockEnd + 3) & ~3u) = suffixGap;
+             }
+             *(u32*)((char*)allocPtr - 4) = header;
++            // Free reconstitutes this block as [allocPtr - alignment, +requestSize +
++            // alignment - 4), so that is the extent this allocation owns.
++            NL_RING_EXTENT("Allocate/fromEnd", "handed out a block still on the free ring",
++                           (char*)allocPtr - alignment,
++                           (char*)allocPtr - alignment + requestSize + alignment - 4, cur);
++            NL_OP_LOG("alloc block (end)", (char*)allocPtr - alignment, requestSize + alignment - 4,
++                      allocPtr);
++            NL_OP_LOG("alloc user (end)", allocPtr, savedSize, (size << 8) | alignment);
+             result = allocPtr;
+         }
+     }
+@@ -249,6 +512,7 @@
+             {
+                 FreeBlockList* newFree = (FreeBlockList*)((char*)cur + offset);
+                 newFree->m_size = remaining;
++                NL_OP_LOG("split remainder", newFree, remaining, cur);
+                 if (m_free_block_list == NULL || cur == start)
+                 {
+                     nlDLRingAddStart<FreeBlockList>(&m_free_block_list, newFree);
+@@ -276,6 +540,10 @@
+                 *(u32*)(((u32)blockEnd + 3) & ~3u) = suffixSize;
+             }
+             *(u32*)((char*)allocPtr - 4) = header;
++            NL_RING_EXTENT("Allocate", "handed out a block still on the free ring", cur,
++                           (char*)cur + currentBlockSize, NULL);
++            NL_OP_LOG("alloc block", cur, currentBlockSize, allocPtr);
++            NL_OP_LOG("alloc user", allocPtr, savedSize, (size << 8) | alignment);
+             result = allocPtr;
+         }
+     }
+@@ -294,6 +562,8 @@
+     FreeBlockList* next;
+     FreeBlockList* prev;
+     u32 blockSize;
++    NL_RING_RECORD(memory, size);
++    NL_OP_LOG("initialize", memory, size, 0);
+ 
+     m_free_block_list = NULL;
+     ((FreeBlockList*)memory)->m_size = size;
+--- a/src/NL/gl/glPlat.cpp
++++ b/src/NL/gl/glPlat.cpp
+@@ -259,10 +259,26 @@
+  */
+ void glplatSendFrame()
+ {
++    // On hardware the GP consumed the FIFO continuously and VI scanned out
++    // whatever GXCopyDisp had written, so there was no "frame" for the CPU to
++    // open. The host needs one: aurora records this frame's GX command stream
++    // into a packet, and that packet has to exist before the first command and
++    // be submitted after the copy-to-display. glxSwapPre only waits on the
++    // previous frame's draw-done, so it stays outside.
+     glxSwapPre(true);
++    if (!osHostFrameBegin())
++    {
++        // Minimized or paused: there is nothing to record into. Still advance
++        // the frame allocator so the rest of the engine sees a normal frame.
++        glplatFrameAllocNextFrame();
++        glx_NumVirtMisses = 0U;
++        glx_VirtLatency = 0;
++        return;
++    }
+     glx_SendFrame(true);
+     glx_SendViews();
+     glxSwapPost(true);
++    osHostFrameEnd();
+     glplatFrameAllocNextFrame();
+     glx_NumVirtMisses = 0U;
+     glx_VirtLatency = 0;
+--- a/src/NL/glx/glxSend.cpp
++++ b/src/NL/glx/glxSend.cpp
+@@ -19,6 +19,29 @@
+ #include "NL/glx/glxTexture.h"
+ #include "NL/glx/glxDisplayList.h"
+ #include "dolphin/gx/GXDispList.h"
++#include "dolphin/gx/GXAurora.h"
++
++// aurora's GXAdjustForOverscan rewrites the render mode to the host framebuffer
++// size, so every viewport the game derives from glx_rmode is already in render
++// pixels. These "whole EFB" scissor rects were written against the GameCube's
++// fixed 640x448 EFB, and left as-is they clip the frame to the top-left corner
++// of the real framebuffer.
++static void glx_SetScissorFullScreen()
++{
++    u32 renderWidth = 640;
++    u32 renderHeight = 448;
++    AuroraGetRenderSize(&renderWidth, &renderHeight);
++    GXSetScissor(0, 0, renderWidth, renderHeight);
++}
++
++static void glx_SetViewportFullScreen()
++{
++    u32 renderWidth = 640;
++    u32 renderHeight = 448;
++    AuroraGetRenderSize(&renderWidth, &renderHeight);
++    GXSetViewport(0.0f, 0.0f, (f32)renderWidth, (f32)renderHeight, 0.0f, 1.0f);
++}
++
+ #include "dolphin/gx/GXBump.h"
+ #include "dolphin/gx/GXCull.h"
+ #include "dolphin/gx/GXTexture.h"
+@@ -1286,9 +1309,11 @@
+             }
+             else
+             {
+-                // TODO: check if size and le fields assumptions are correct
+-                // and don't break anything
+-                GXSetArray((GXAttr)attr, (void*)stream->address, pPacket->numVertices * stream->stride, stream->stride, false);
++                // On hardware these arrays were big-endian because everything
++                // was; here they are filled either by GLMeshWriter running on
++                // the host or by a model the loader has already byte-swapped,
++                // so the data aurora indexes is in host order.
++                GXSetArray((GXAttr)attr, (void*)stream->address, pPacket->numVertices * stream->stride, stream->stride, true);
+                 GXSetVtxDesc((GXAttr)attr, GX_INDEX16);
+                 glx_NumIndices++;
+             }
+@@ -1917,11 +1942,12 @@
+         }
+         GXSetProjection(gx_proj, type);
+         GXSetCurrentMtx(0);
+-        GXSetViewport(0.0f, 0.0f, 640.0f, 448.0f, 0.0f, 1.0f);
+-        GXSetScissor(0, 0, 0x280, 0x1C0);
++        glx_SetViewportFullScreen();
++        glx_SetScissorFullScreen();
+     }
+ }
+ 
++
+ static inline void glud_Scissor(const GLScissorUserData* pScissor)
+ {
+     u32 xOrig;
+@@ -1931,18 +1957,14 @@
+ 
+     if (pScissor == NULL)
+     {
+-        xOrig = 0;
+-        yOrig = xOrig;
+-        wd = 640;
+-        ht = 448;
+-    }
+-    else
+-    {
+-        xOrig = pScissor->xOrig;
+-        yOrig = pScissor->yOrig;
+-        wd = pScissor->wd;
+-        ht = pScissor->ht;
++        glx_SetScissorFullScreen();
++        return;
+     }
++
++    xOrig = pScissor->xOrig;
++    yOrig = pScissor->yOrig;
++    wd = pScissor->wd;
++    ht = pScissor->ht;
+     GXSetScissor(xOrig, yOrig, wd, ht);
+ }
+ 
+@@ -2036,7 +2058,7 @@
+     glx_translucent = false;
+     glx_norasterizedalpha = false;
+     glx_NoFog = false;
+-    GXSetScissor(0, 0, 640, 448);
++    glx_SetScissorFullScreen();
+     glx_CoPlanar = false;
+ 
+     if (p == NULL)
+--- a/src/NL/glx/glxSwap.cpp
++++ b/src/NL/glx/glxSwap.cpp
+@@ -614,8 +614,18 @@
+     return glx_FrameBuffer[glx_nBuffer ^ 1];
+ }
+ 
++#ifdef __MWERKS__
+ #pragma push
+ #pragma pack(1)
++#else
++// GCC does not implement Metrowerks' #pragma push/#pragma pop, so a bare
++// pack(1) here leaks into everything included after this point. On GameCube
++// that is invisible -- these structs are all 4-byte members either way -- but
++// on a 64-bit host it silently repacks unrelated structs behind 8-byte
++// pointers, and a struct laid out differently in two translation units is a
++// very quiet way to corrupt memory.
++#pragma pack(push, 1)
++#endif
+ struct TargaHeader
+ {
+     /* 0x00 */ unsigned char imageIDLength;
+@@ -631,7 +641,11 @@
+     /* 0x10 */ unsigned char bitsPerPixel;
+     /* 0x11 */ unsigned char imageDescriptor;
+ }; // total size: 0x12
++#ifdef __MWERKS__
+ #pragma pop
++#else
++#pragma pack(pop)
++#endif
+ 
+ /**
+  * Offset/Address/Size: 0xBAC | 0x801BF8FC | size: 0x1B0
+--- a/src/NL/glx/glxTarget.cpp
++++ b/src/NL/glx/glxTarget.cpp
+@@ -208,10 +208,13 @@
+     u32* pClearColour = glGetClearColour();
+     GXColor clearColour;
+ 
+-    clearColour.r = ((u8*)pClearColour)[0];
+-    clearColour.g = ((u8*)pClearColour)[1];
+-    clearColour.b = ((u8*)pClearColour)[2];
+-    clearColour.a = ((u8*)pClearColour)[3];
++    // gl_clearColour is a packed 0xRRGGBBAA word. Indexing its bytes only
++    // spells r,g,b,a on a big-endian host; on x86 it hands back a,b,g,r, which
++    // put the GameCube's 0x40 EFB alpha into red and painted the screen maroon.
++    clearColour.r = (u8)(*pClearColour >> 24);
++    clearColour.g = (u8)(*pClearColour >> 16);
++    clearColour.b = (u8)(*pClearColour >> 8);
++    clearColour.a = (u8)(*pClearColour);
+ 
+     GXSetCopyClear(clearColour, 0xFFFFFF);
+     GXSetTexCopySrc(0, 0, 640, 448);
+--- a/src/NL/glx/glxTexture.cpp
++++ b/src/NL/glx/glxTexture.cpp
+@@ -106,7 +106,7 @@
+     currentMarkerLevel = -1;
+     for (int level = 0; level < 16; level++)
+     {
+-        textures[level] = new (nlMalloc(0x14, 8, 0)) nlAVLTree<unsigned long, PlatTexture*, DefaultKeyCompare<unsigned long> >();
++        textures[level] = new (nlMalloc(sizeof(nlAVLTree<unsigned long, PlatTexture*, DefaultKeyCompare<unsigned long> >), 8, 0)) nlAVLTree<unsigned long, PlatTexture*, DefaultKeyCompare<unsigned long> >();
+     }
+     currentMarkerLevel += 1;
+ }
+--- a/src/NL/nlConfig.cpp
++++ b/src/NL/nlConfig.cpp
+@@ -222,7 +222,7 @@
+     u32 idx = config->Hash(tag) & 0x3FF;
+     while (true)
+     {
+-        u32 offset = idx * 12;
++        u32 offset = idx * sizeof(TagValuePair);
+         if (config->mTvpHash[idx].tag == NULL || nlStrICmp(config->mTvpHash[idx].tag, tag) == 0)
+         {
+             return (TagValuePair*)((char*)config->mTvpHash + offset);
+@@ -306,7 +306,7 @@
+     u32 idx = ConfigHashFloat(tag) & 0x3FF;
+     while (true)
+     {
+-        u32 offset = idx * 12;
++        u32 offset = idx * sizeof(TagValuePair);
+         if (config->mTvpHash[idx].tag == NULL || nlStrICmp(config->mTvpHash[idx].tag, tag) == 0)
+         {
+             return *(TagValuePair*)((char*)config->mTvpHash + offset);
+@@ -355,7 +355,7 @@
+ 
+     while (true)
+     {
+-        u32 offset = i * 12;
++        u32 offset = i * sizeof(TagValuePair);
+         if (config->mTvpHash[i].tag == NULL || nlStrICmp(config->mTvpHash[i].tag, tag) == 0)
+         {
+             return *(TagValuePair*)((char*)config->mTvpHash + offset);
+@@ -415,7 +415,7 @@
+ 
+     while (true)
+     {
+-        u32 offset = i * 12;
++        u32 offset = i * sizeof(TagValuePair);
+         if (mTvpHash[i].tag == NULL || nlStrICmp(mTvpHash[i].tag, tag) == 0)
+         {
+             return *(TagValuePair*)((char*)mTvpHash + offset);
+@@ -519,16 +519,30 @@
+ Config::Config(Config::AllocateWhere allocateWhere)
+ {
+ #pragma defer_codegen on
++    // ~Config frees mTvpHash - 0x10, so the array has to start 0x10 past the
++    // allocation. MWCC gets there by writing its own array cookie into that
++    // space; the Itanium ABI emits no cookie at all for an element type with a
++    // trivial destructor, so under GCC the offset has to be applied by hand or
++    // the destructor hands nlFree a pointer that was never allocated.
++#ifdef __MWERKS__
++#define NL_TVP_ARRAY(mem) new (mem) TagValuePair[1024]
++#else
++    static_assert(__is_trivially_destructible(TagValuePair),
++        "TagValuePair gained a destructor: GCC now emits an array cookie and the "
++        "manual 0x10 offset below would double-count it");
++#define NL_TVP_ARRAY(mem) new ((char*)(mem) + 0x10) TagValuePair[1024]
++#endif
+     if (allocateWhere == ALLOCATE_LOW)
+     {
+-        mTvpHash = new (nlMalloc(sizeof(TagValuePair) * 1024 + 0x10, 8, false)) TagValuePair[1024];
++        mTvpHash = NL_TVP_ARRAY(nlMalloc(sizeof(TagValuePair) * 1024 + 0x10, 8, false));
+         mStringMemory = (char*)nlMalloc(0x2800, 8, false);
+     }
+     else
+     {
+-        mTvpHash = new (nlMalloc(sizeof(TagValuePair) * 1024 + 0x10, 0x20, true)) TagValuePair[1024];
++        mTvpHash = NL_TVP_ARRAY(nlMalloc(sizeof(TagValuePair) * 1024 + 0x10, 0x20, true));
+         mStringMemory = (char*)nlMalloc(0x2800, 0x20, true);
+     }
++#undef NL_TVP_ARRAY
+     mStringEnd = mStringMemory;
+     mStringMemory[0x27FF] = '\0';
+ }
+--- a/src/NL/nlFileGC.cpp
++++ b/src/NL/nlFileGC.cpp
+@@ -535,7 +535,7 @@
+             for (; i < 64; i++)
+             {
+                 nlDLRingAddStart<AsyncEntry>(&pManager->m_freeEntryList, pEntry);
+-                pEntry = (AsyncEntry*)((u8*)pEntry + 0x28);
++                pEntry = (AsyncEntry*)((u8*)pEntry + sizeof(AsyncEntry));
+             }
+         }
+ 
+--- a/src/NL/nlMemory.cpp
++++ b/src/NL/nlMemory.cpp
+@@ -56,7 +56,7 @@
+ /**
+  * Offset/Address/Size: 0xF0 | 0x801D1FD4 | size: 0x4C
+  */
+-void* operator new(unsigned long size)
++void* operator new(size_t size)
+ {
+     // This replaces the *global* operator new, so it serves the host's C++
+     // libraries (Dawn, and LLVM pulled in by the Vulkan ICD) as well as the game.
+--- a/src/NL/nlTextEscape.cpp
++++ b/src/NL/nlTextEscape.cpp
+@@ -2,7 +2,23 @@
+ 
+ #include "NL/nlAlgorithm.h"
+ 
++// The GameCube's wchar_t is 16-bit, which is why this file hands wcstoul a
++// buffer of unsigned short. Windows' wchar_t is 16-bit too, so the platform
++// wcstoul is the right function there -- but in C++ wchar_t is a distinct type
++// from unsigned short, so the decomp's own prototype clashes with <wchar.h>.
++#if defined(_WIN32)
++#include <wchar.h>
++static inline unsigned long nlWcstoul(const unsigned short* str, unsigned short** end, int base)
++{
++    return wcstoul(reinterpret_cast<const wchar_t*>(str), reinterpret_cast<wchar_t**>(end), base);
++}
++#else
+ extern "C" unsigned long wcstoul(const unsigned short* str, unsigned short** end, int base);
++static inline unsigned long nlWcstoul(const unsigned short* str, unsigned short** end, int base)
++{
++    return wcstoul(str, end, base);
++}
++#endif
+ 
+ const unsigned long nlEscapeSequence::ESCAPE_DEFN[ESC_COUNT] = {
+     0x00000000,
+@@ -124,7 +140,7 @@
+     {
+         str[0] = m_Extended[channel * 2];
+         str[1] = m_Extended[channel * 2 + 1];
+-        colour.c[channel] = (u8)wcstoul(str, 0, 16);
++        colour.c[channel] = (u8)nlWcstoul(str, 0, 16);
+     }
+     colour.c[3] = 0xFF;
+     return colour;
+--- a/src/NL/plat/plataudio.cpp
++++ b/src/NL/plat/plataudio.cpp
+@@ -1030,7 +1030,7 @@
+ 
+     if (bUseARAMStreamCallback)
+     {
+-        pTransferHelperLoadFromDisc = (ARAMTransferHelper*)nlMalloc(0x10, 0x20, true);
++        pTransferHelperLoadFromDisc = (ARAMTransferHelper*)nlMalloc(sizeof(ARAMTransferHelper), 0x20, true);
+         if (pTransferHelperLoadFromDisc != NULL)
+         {
+             const char* szFile = fileData.szSampleFile;

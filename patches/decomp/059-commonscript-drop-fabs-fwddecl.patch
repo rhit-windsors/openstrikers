@@ -1,0 +1,14 @@
+diff --git a/src/Game/AI/Scripts/CommonScript.cpp b/src/Game/AI/Scripts/CommonScript.cpp
+--- a/src/Game/AI/Scripts/CommonScript.cpp
++++ b/src/Game/AI/Scripts/CommonScript.cpp
+@@ -95,7 +95,9 @@
+ extern float StuckOnSidelines(cFielder*);
+ extern float Interpolate(float, float, float);
+ 
+-extern "C" double fabs(double);
++// glibc declares fabs() with an exception specifier, so this local
++// re-declaration is a conflicting decl. <math.h> already provides it.
++// extern "C" double fabs(double);
+ 
+ union FunctionAddress
+ {

@@ -1,0 +1,19 @@
+--- a/src/Game/TransitionTask.cpp
++++ b/src/Game/TransitionTask.cpp
+@@ -926,7 +926,15 @@
+ 
+     FEMusic::ResetCurrentFEStreamHash();
+ 
+-    static bool gAlreadyBooted = false;
++    // Skipping the front end jumps straight to the match, so this is still
++    // false the first time a quit brings us back here. The never-booted branch
++    // below then replays the legal/logo sequence and -- the part that matters
++    // -- skips the AudioLoader::LoadFE that recreates the "FE" stream track,
++    // which InitializeGameState's DestroyAllTracks removed when the match
++    // loaded. TitleScene::SceneCreated then dereferences the null track. A
++    // skipped front end has to count as one already been through.
++    static bool gAlreadyBooted
++        = osHostSkipFrontEnd() || GetConfigBool(Config::Global(), "skipfe", false);
+ 
+     if (!gAlreadyBooted)
+     {

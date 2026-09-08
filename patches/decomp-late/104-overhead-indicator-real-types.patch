@@ -1,0 +1,133 @@
+--- a/src/Game/Render/Indicators.cpp
++++ b/src/Game/Render/Indicators.cpp
+@@ -23,38 +23,30 @@
+ static float s_fGlowIntensityScale;
+ static unsigned char s_bGlowIsRising;
+ 
+-typedef struct
+-{
+-    char pad0[0x19C];
+-    float mSwitchScale;
+-    char pad1[0x28];
+-    void* mPossessionObject;
+-} cPlayerIndicatorState;
+-
+-typedef struct
+-{
+-    void* vtbl;
+-    void* mGameTweaks;
+-} cGameOverlay;
+-
+-typedef struct
+-{
+-    char pad0[0x2B4];
+-    float mVerticalOffset;
+-    float mProjectionYOffset;
+-} GameTweaksOverlay;
+-
+-typedef struct
+-{
+-    nlVector3 mPosition;
+-    char pad0[0x4C];
+-} ReplayIndicatorCharacter;
+-
+-typedef struct
+-{
+-    char pad0[0x68];
+-    ReplayIndicatorCharacter mCharacters[10];
+-} ReplayIndicatorSnapshot;
++// The overhead indicators used to reach the player position, the game tweaks
++// and the player's own state through hand-written stand-in structs that
++// navigated by raw byte offset -- `char pad0[0x68]` into the render snapshot,
++// `char pad0[0x2B4]` into GameTweaks, `char pad0[0x19C]` into cPlayer. Those
++// offsets are GameCube offsets. Every pointer ahead of them is eight bytes
++// here rather than four, so each one landed somewhere else entirely: the
++// position came from the wrong part of the wrong object, and the marker drew
++// at a fixed, wrong place instead of following its player.
++//
++// The types are all reachable by name, and UpdateAndRenderOffScreenIndicators
++// below already uses them, which is why the offscreen arrow tracked correctly
++// while the overhead marker did not. The offsets those stand-ins encoded, for
++// the record:
++//
++//   snapshot + 0x68 + i * 0x58 -> RenderSnapshot::mCharacters is at 0x4C and
++//       DrawableCharacter::mHeadPosition at 0x1C within it, so this resolved
++//       to mCharacters[i].mHeadPosition -- the head, not the origin. It has to
++//       be the head: fIndicatorDistAboveHead is measured from there, and using
++//       mPosition instead puts the marker's centre on the head rather than
++//       clear of it.
++//   tweaks   + 0x2B4 -> GameTweaks::fIndicatorDistAboveHead
++//   tweaks   + 0x2B8 -> GameTweaks::fIndicatorDistInPixels
++//   player   + 0x19C -> cPlayer::m_UserControlledTime
++//   player   + 0x1C8 -> cPlayer::m_pBall
+ 
+ unsigned long uIndicatorTexID[4] = {
+     nlStringLowerHash("fe/controller_1_indicator"),
+@@ -285,11 +277,13 @@
+ 
+     for (i = 0; i < 10; i++)
+     {
+-        ReplayManager* pReplay;
+-        ReplayIndicatorSnapshot* pSnapshot;
+-        GameTweaksOverlay* pTweaks;
++        cPlayer* pPlayer;
++        RenderSnapshot* pSnapshot;
++        GameTweaks* pTweaks;
+ 
+-        if (((cPlayer*)g_pCharacters[i])->GetGlobalPad() == 0)
++        pPlayer = (cPlayer*)g_pCharacters[i];
++
++        if (pPlayer->GetGlobalPad() == 0)
+         {
+             continue;
+         }
+@@ -300,16 +294,19 @@
+             continue;
+         }
+ 
+-        indicatorTexID = GetCharacterTexID((cPlayer*)g_pCharacters[i]);
+-        glowTexID = GetCharacterGlowTexID((cPlayer*)g_pCharacters[i]);
++        indicatorTexID = GetCharacterTexID(pPlayer);
++        glowTexID = GetCharacterGlowTexID(pPlayer);
++
++        pSnapshot = ReplayManager::Instance()->mRender;
++        if (pSnapshot == NULL)
++        {
++            continue;
++        }
++        v3Position = pSnapshot->GetCharacter(i).mHeadPosition;
+ 
+-        pReplay = ReplayManager::Instance();
+-        pSnapshot = (ReplayIndicatorSnapshot*)pReplay->mRender;
+-        v3Position = pSnapshot->mCharacters[i].mPosition;
+-
+-        pTweaks = (GameTweaksOverlay*)((cGameOverlay*)g_pGame)->mGameTweaks;
+-        switchScale = pTweaks->mProjectionYOffset;
+-        v3Position.z += pTweaks->mVerticalOffset;
++        pTweaks = g_pGame->GetGameTweaks();
++        switchScale = pTweaks->fIndicatorDistInPixels;
++        v3Position.z += pTweaks->fIndicatorDistAboveHead;
+ 
+         glViewProjectPoint((eGLView)7, v3Position, v3ScreenPosition);
+ 
+@@ -317,9 +314,9 @@
+         fY = 240.0f * v3ScreenPosition.y + 240.0f;
+         fY -= switchScale;
+ 
+-        if (((cPlayerIndicatorState*)g_pCharacters[i])->mSwitchScale < 0.5f)
++        if (pPlayer->m_UserControlledTime < 0.5f)
+         {
+-            switchScale = (0.5f - ((cPlayerIndicatorState*)g_pCharacters[i])->mSwitchScale) / 0.5f;
++            switchScale = (0.5f - pPlayer->m_UserControlledTime) / 0.5f;
+             sizeScale = Interpolate(1.0f, 2.0f, switchScale);
+ 
+             DrawIndicator((int)fX, (int)fY, s_fAdditiveTextureScale * (s_fOverheadSize * sizeScale), s_fAdditiveTextureScale * (s_fOverheadSize * sizeScale), s_fAdditiveBlendingIntensity * switchScale, glowTexID, 0.0f, 2);
+@@ -327,7 +324,7 @@
+             fDistInPixels = s_fOverheadSize * sizeScale;
+             DrawIndicator((int)fX, (int)fY, fDistInPixels, fDistInPixels, fOpacity, indicatorTexID, 0.0f, 1);
+         }
+-        else if (((cPlayerIndicatorState*)g_pCharacters[i])->mPossessionObject)
++        else if (pPlayer->m_pBall)
+         {
+             whoHasBall = i;
+ 

@@ -1,0 +1,16 @@
+diff --git a/src/NL/glx/glxSend.cpp b/src/NL/glx/glxSend.cpp
+index 55db23d..81c3a74 100644
+--- a/src/NL/glx/glxSend.cpp
++++ b/src/NL/glx/glxSend.cpp
+@@ -1818,7 +1818,10 @@ static void glud_Skin(void* pData, const glModelPacket* pPacket)
+             if (g_bMtxSkinMath && !glx_IsCoPlanarView)
+             {
+                 glxCopyMatrix(gxMat, *(nlMatrix4*)pPacket->state.matrix);
+-                PSMTXConcat(gxMat, gx_mview, modelViewMtx);
++                // nlMatrix4 uses row-vector composition (model * view), while
++                // glxCopyMatrix transposes it for GX's column-vector math.
++                // Therefore the equivalent GX composition is view * model.
++                PSMTXConcat(gx_mview, gxMat, modelViewMtx);
+                 PSMTXConcat(modelViewMtx, *(const Mtx*)pSkin->mat, mSkinConcat);
+             }
+             else

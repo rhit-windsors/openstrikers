@@ -6,6 +6,8 @@
 #include <aurora/dvd.h>
 #include "compat_shims.h"
 
+#include <cstdio>
+
 int game_main(); // dichiarato qui, definito nel decomp rinominato
 
 static const char* disc_path(int argc, char* argv[]) {
@@ -17,15 +19,38 @@ static const char* disc_path(int argc, char* argv[]) {
 
 int main(int argc, char* argv[])   // <-- diventa aurora_main via macro
 {
+    // The game's own diagnostics go to stdout through nlPrintf, and when the
+    // process dies on a fault a block-buffered stdout takes the last few
+    // thousand characters with it -- exactly the ones that say why. Both
+    // streams are unbuffered so a crash log is complete up to the fault.
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+
     const char* disc;
     disc = disc_path(argc, argv);
+    // Check the disc before bringing anything up. aurora_dvd_open() failing
+    // after aurora_initialize() leaves a half-built graphics stack that
+    // aurora_shutdown() faults on, so the useful message is followed by a
+    // crash. Validating here keeps a missing or mistyped path an ordinary
+    // error exit.
+    if (disc == nullptr) {
+        fprintf(stderr, "usage: %s <disc image>\n",
+                argc > 0 ? argv[0] : "openstrikers");
+        return 2;
+    }
+    if (FILE* f = fopen(disc, "rb")) {
+        fclose(f);
+    } else {
+        fprintf(stderr, "openstrikers: cannot read disc image %s\n", disc);
+        return 2;
+    }
     const AuroraConfig config = {
         .appName = "openstrikers",
         .vsync = false,
         .startFullscreen = false,
         .allowTextureDumps = false,
-        .mem1Size = 128 * 1024 * 1024,
-        .mem2Size = ARAM_DEFAULT_SIZE,
+        .mem1Size = OPENSTRIKERS_MEM1_SIZE,
+        .mem2Size = OPENSTRIKERS_MEM2_SIZE,
     };
     const AuroraInfo info = aurora_initialize(argc, argv, &config);
     AuroraSetViewportPolicy(AURORA_VIEWPORT_FIT);

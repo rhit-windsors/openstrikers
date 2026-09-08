@@ -1,8 +1,6 @@
-diff --git a/src/Game/Sys/GCStream.cpp b/src/Game/Sys/GCStream.cpp
-index 45bbbd0a..1941e61b 100644
 --- a/src/Game/Sys/GCStream.cpp
 +++ b/src/Game/Sys/GCStream.cpp
-@@ -32,16 +32,18 @@ inline void GCAudioStreaming::StereoAudioStream::ReadFirst(
+@@ -36,16 +36,18 @@
  
  struct SND_ADPCMSTREAM_INFO;
  
@@ -28,7 +26,7 @@ index 45bbbd0a..1941e61b 100644
  
  namespace GCAudioStreaming
  {
-@@ -50,8 +52,10 @@ inline void AudioStreamBuffer::SetVolume(
+@@ -54,8 +56,10 @@
      unsigned long volume)
  {
      m_Volume = (unsigned char)volume;
@@ -39,7 +37,7 @@ index 45bbbd0a..1941e61b 100644
  }
  
  inline unsigned long AudioStreamBuffer::DoUpdate(unsigned long Length)
-@@ -128,8 +132,10 @@ void GCAudioStreaming::AudioStream::_HdrReadCB(nlFile* pFile, void* pData, unsig
+@@ -132,8 +136,10 @@
          pCBInfo->pStream->m_OldLength = pCBInfo->pStream->m_StreamLength;
  
          pBuffer = pCBInfo->pBuffer;
@@ -50,7 +48,7 @@ index 45bbbd0a..1941e61b 100644
  
          READ_CB_INFO::s_AllocPool.DeleteEntry(pCBInfo);
      }
-@@ -172,7 +178,9 @@ void GCAudioStreaming::AudioStream::_WarmReadCB(nlFile* pFile, void* pData, unsi
+@@ -176,7 +182,9 @@
      else
      {
          unsigned long samples = (Length >> 3) * 0xE;
@@ -60,7 +58,7 @@ index 45bbbd0a..1941e61b 100644
          pCBInfo->pStream->WarmReadDone(pCBInfo->pBuffer);
          READ_CB_INFO::s_AllocPool.DeleteEntry(pCBInfo);
      }
-@@ -181,12 +189,14 @@ void GCAudioStreaming::AudioStream::_WarmReadCB(nlFile* pFile, void* pData, unsi
+@@ -185,12 +193,14 @@
  inline void GCAudioStreaming::AudioStreamBuffer::Update(
      unsigned long Offset, unsigned long Length)
  {
@@ -75,7 +73,7 @@ index 45bbbd0a..1941e61b 100644
  }
  
  /**
-@@ -470,12 +480,16 @@ void GCAudioStreaming::StereoAudioStream::Warm(bool CoolOnStop)
+@@ -478,12 +488,16 @@
      {
          AudioStreamBuffer* pBuf0 = m_Buffers[0];
          pBuf0->m_Pan = 0;
@@ -92,7 +90,7 @@ index 45bbbd0a..1941e61b 100644
      }
  
      AudioStreamBuffer* BufferIndex = NULL;
-@@ -757,6 +771,7 @@ void GCAudioStreaming::AudioBufferMgr::CreateBuffers(unsigned long Count)
+@@ -765,6 +779,7 @@
          m_Buffers[buffer].m_UpdateOffset = 0;
          m_Buffers[buffer].m_pStream = 0;
  
@@ -100,7 +98,7 @@ index 45bbbd0a..1941e61b 100644
          m_Buffers[buffer].m_StreamId = sndStreamAllocEx(
              0xFF,
              m_Buffers[buffer].m_MRAMBuffer,
-@@ -780,6 +795,7 @@ void GCAudioStreaming::AudioBufferMgr::CreateBuffers(unsigned long Count)
+@@ -788,6 +803,7 @@
              m_Buffers[buffer].m_SurroundPan,
              0,
              0);
@@ -108,7 +106,7 @@ index 45bbbd0a..1941e61b 100644
      }
  }
  
-@@ -792,9 +808,11 @@ void GCAudioStreaming::AudioBufferMgr::DeleteBuffers()
+@@ -800,9 +816,11 @@
      for (buffer = 0; buffer < m_BufferCount; buffer++)
      {
          m_Buffers[buffer].m_Volume = 0;
@@ -120,8 +118,6 @@ index 45bbbd0a..1941e61b 100644
      }
      m_BufferCount = 0;
  }
-diff --git a/src/Game/Sys/PlatStream.cpp b/src/Game/Sys/PlatStream.cpp
-index 7dc421fb..9f036ca4 100644
 --- a/src/Game/Sys/PlatStream.cpp
 +++ b/src/Game/Sys/PlatStream.cpp
 @@ -3,11 +3,13 @@
@@ -140,14 +136,3 @@ index 7dc421fb..9f036ca4 100644
  
  GCAudioStreaming::AudioBufferMgr g_BufferMgr;
  
-@@ -121,8 +123,10 @@ void PlatAudio::StopAllStreams()
-             while (buffer != NULL)
-             {
-                 buffer->m_Volume = 0;
-+#ifndef GOLDEN_DISABLE_AUDIO
-                 sndStreamMixParameterEx(buffer->m_StreamId, buffer->m_Volume, buffer->m_Pan, buffer->m_SurroundPan, 0, 0);
-                 sndStreamDeactivate(buffer->m_StreamId);
-+#endif
- 
-                 stream->m_State = SS_Warm;
-                 {

@@ -1,0 +1,181 @@
+--- a/include/Game/Replay.h
++++ b/include/Game/Replay.h
+@@ -113,6 +113,12 @@ struct ReplayableCategory<unsigned long>
+     typedef ReplayablePod Type;
+ };
+ 
++template <>
++struct ReplayableCategory<unsigned long long>
++{
++    typedef ReplayablePod Type;
++};
++
+ template <>
+ struct ReplayableCategory<float>
+ {
+--- a/include/Game/Effects/EmissionController.h
++++ b/include/Game/Effects/EmissionController.h
+@@ -80,8 +80,15 @@ public:
+ template <typename T>
+ inline void EmissionController::Replay(T& frame)
+ {
+-    ::Replayable<0>(frame, (unsigned int&)m_pPose);
+-    ::Replayable<0>(frame, (unsigned int&)m_pAnimController);
++    std::uintptr_t pose = reinterpret_cast<std::uintptr_t>(m_pPose);
++    std::uintptr_t animController = reinterpret_cast<std::uintptr_t>(m_pAnimController);
++    ::Replayable<0>(frame, pose);
++    ::Replayable<0>(frame, animController);
++    if (ReplayFrameTraits<T>::IsLoadFrame)
++    {
++        m_pPose = reinterpret_cast<const cPoseAccumulator*>(pose);
++        m_pAnimController = reinterpret_cast<const cPN_SAnimController*>(animController);
++    }
+     frame.template Replayable<0>(m_uUserData);
+     ::Replayable<0>(frame, m_fGround);
+     frame.template Replayable<0>(m_aFacing);
+@@ -113,20 +120,18 @@ inline void EmissionController::Replay(T& frame)
+         m_ReplayDeltaTime = age - m_Age;
+         m_Age = age;
+ 
+-        unsigned int updateCb = 0;
++        std::uintptr_t updateCb = 0;
+         ::Replayable<0>(frame, updateCb);
+-        unsigned int callback = updateCb;
+-        if (callback != 0)
++        if (updateCb != 0)
+         {
+-            mUpdateCallback = (void (*)(EmissionController&))callback;
++            mUpdateCallback = reinterpret_cast<FnEmissionController*>(updateCb);
+         }
+ 
+-        unsigned int finishedCb = 0;
++        std::uintptr_t finishedCb = 0;
+         ::Replayable<0>(frame, finishedCb);
+-        callback = finishedCb;
+-        if (callback != 0)
++        if (finishedCb != 0)
+         {
+-            mFinishedCallback = (void (*)(EmissionController&))callback;
++            mFinishedCallback = reinterpret_cast<FnEmissionController*>(finishedCb);
+         }
+     }
+     else
+@@ -135,10 +140,10 @@ inline void EmissionController::Replay(T& frame)
+         m_ReplayDeltaTime = 0.0f;
+         ::Replayable<0>(frame, m_Age);
+ 
+-        unsigned int updateCb = (unsigned int)mUpdateCallback.GetFreeFunction();
++        std::uintptr_t updateCb = reinterpret_cast<std::uintptr_t>(mUpdateCallback.GetFreeFunction());
+         ::Replayable<0>(frame, updateCb);
+ 
+-        unsigned int finishedCb = (unsigned int)mFinishedCallback.GetFreeFunction();
++        std::uintptr_t finishedCb = reinterpret_cast<std::uintptr_t>(mFinishedCallback.GetFreeFunction());
+         ::Replayable<0>(frame, finishedCb);
+     }
+ }
+--- a/include/Game/SAnim/pnSAnimController.h
++++ b/include/Game/SAnim/pnSAnimController.h
+@@ -45,10 +45,10 @@ public:
+         Replayable<0>(frame, (cPoseNode&)*this);
+         Replayable<0>(frame, FloatCompressor<0, 1, 15>(m_fTime));
+ 
+-        unsigned int animPtr = 0;
++        std::uintptr_t animPtr = 0;
+         if (!ReplayFrameTraits<T>::IsLoadFrame)
+         {
+-            animPtr = (unsigned int)m_pSAnim;
++            animPtr = reinterpret_cast<std::uintptr_t>(m_pSAnim);
+             if (m_bMirror)
+                 animPtr |= 1;
+         }
+@@ -56,9 +56,15 @@ public:
+         if (ReplayFrameTraits<T>::IsLoadFrame)
+         {
+             m_bMirror = animPtr & 1;
+-            m_pSAnim = (cSAnim*)(animPtr & ~1);
++            m_pSAnim = reinterpret_cast<cSAnim*>(animPtr & ~std::uintptr_t(1));
++        }
++
++        std::uintptr_t animRetarget = reinterpret_cast<std::uintptr_t>(m_pAnimRetarget);
++        Replayable<0>(frame, animRetarget);
++        if (ReplayFrameTraits<T>::IsLoadFrame)
++        {
++            m_pAnimRetarget = reinterpret_cast<const AnimRetarget*>(animRetarget);
+         }
+-        Replayable<0>(frame, (unsigned int&)m_pAnimRetarget);
+     }
+ 
+     void UpdateSynchronized(float time);
+--- a/src/Game/Drawable/DrawableCharacter.cpp
++++ b/src/Game/Drawable/DrawableCharacter.cpp
+@@ -1149,7 +1149,12 @@ void DrawableCharacter::Replay(T& frame)
+     Replayable<1>(frame, mFacingDirection);
+     Replayable<1>(frame, mHeadSpin);
+     Replayable<1>(frame, mHeadTilt);
+-    Replayable<1>(frame, (unsigned long&)mEffectsTexturing);
++    std::uintptr_t effectsTexturing = reinterpret_cast<std::uintptr_t>(mEffectsTexturing);
++    Replayable<1>(frame, effectsTexturing);
++    if (ReplayFrameTraits<T>::IsLoadFrame && frame.mInterval == 1)
++    {
++        mEffectsTexturing = reinterpret_cast<EffectsTexturing*>(effectsTexturing);
++    }
+     ReplayablePolymorphic<1>(frame, mPoseTree);
+ 
+     if (ReplayFrameTraits<T>::IsLoadFrame && frame.mInterval == 1)
+--- a/src/Game/Effects/EmissionManager.cpp
++++ b/src/Game/Effects/EmissionManager.cpp
+@@ -563,8 +563,9 @@ void EmissionManager::Replay(LoadFrame& frame)
+         unsigned short id;
+         Replayable<0>(frame, id);
+ 
+-        EffectsGroup* group = 0;
+-        Replayable<0>(frame, (unsigned long&)group);
++        std::uintptr_t groupAddress = 0;
++        Replayable<0>(frame, groupAddress);
++        EffectsGroup* group = reinterpret_cast<EffectsGroup*>(groupAddress);
+ 
+         EmissionController* iter = (EmissionController*)oldControllers.m_headNode;
+         EmissionController* next;
+@@ -644,7 +645,7 @@ void EmissionManager::Replay(SaveFrame& frame)
+         if (defaultView == current->m_GlView)
+         {
+             unsigned short id = current->m_Id;
+-            unsigned long group = (unsigned long)current->m_pGroup;
++            std::uintptr_t group = reinterpret_cast<std::uintptr_t>(current->m_pGroup);
+             Replayable<0>(frame, id);
+             Replayable<0>(frame, group);
+             Replayable<0>(frame, *current);
+--- a/src/Game/ReplayChoreo.cpp
++++ b/src/Game/ReplayChoreo.cpp
+@@ -310,9 +310,8 @@ void ReplayChoreo::StartAutoReplay(ReplayType rt)
+         mReplay->PlayReel(mHighlightIndex + 1);
+         mCamera.SetSideOfInterest(mHighlights[mHighlightIndex].mReplayPad);
+ 
+-        GoalScoredDataExt* goal = (GoalScoredDataExt*)&mHighlights[mHighlightIndex].mGoalScoredData;
+-        mGoalScoredData = goal->data;
+-        mReplayPad = goal->sideOfInterest;
++        mGoalScoredData = mHighlights[mHighlightIndex].mGoalScoredData;
++        mReplayPad = mHighlights[mHighlightIndex].mSavedReplayPad;
+ 
+         rt = REPLAY_TYPE_GOAL;
+     }
+@@ -528,13 +527,12 @@ void ReplayChoreo::SaveHighlight(ReplayChoreo::HighlightQuality quality)
+     {
+         if (mReplay->LockReel(4.0f, idx + 1, quality))
+         {
+-            char* highlight = (char*)this + idx * sizeof(Highlight);
+-
+-            *(int*)(highlight + 0x230) = quality;
+-            *(float*)(highlight + 0x234) = mReplayManager->mTime;
+-            *(GoalScoredData*)(highlight + 0x23C) = mGoalScoredData;
+-            *(int*)(highlight + 0x260) = mReplayPad;
+-            *(int*)(highlight + 0x238) = mCamera.mSideOfInterest;
++            Highlight& highlight = mHighlights[idx];
++            highlight.mSideOfInterest = quality;
++            highlight.mTime = mReplayManager->mTime;
++            highlight.mReplayPad = mCamera.mSideOfInterest;
++            highlight.mGoalScoredData = mGoalScoredData;
++            highlight.mSavedReplayPad = mReplayPad;
+         }
+     }
+ }

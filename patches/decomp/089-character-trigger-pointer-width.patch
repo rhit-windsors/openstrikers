@@ -1,0 +1,47 @@
+diff --git a/include/Game/CharacterTriggers.h b/include/Game/CharacterTriggers.h
+index 09fa5a5e..d5efd598 100644
+--- a/include/Game/CharacterTriggers.h
++++ b/include/Game/CharacterTriggers.h
+@@ -1,6 +1,8 @@
+ #ifndef _CHARACTERTRIGGERS_H_
+ #define _CHARACTERTRIGGERS_H_
+ 
++#include <cstdint>
++
+ #include "NL/nlMath.h"
+ 
+ enum eBallShotEffectType
+@@ -50,7 +52,7 @@ void EmitBallPass(cPlayer* pPlayer);
+ void EmitBallImpact(cPlayer* pPlayer, bool bSilent);
+ float GetCurrentAnimTriggerTime(cCharacter* pCharacter, unsigned long uTriggerID, unsigned int uInstanceNumber);
+ void GetAnimTriggerInfo(cCharacter* pCharacter, int animIndex, bool (*callback)(float, float, unsigned long, float, void*), void* pData);
+-void CharacterTriggerHandler(unsigned int uParam);
++void CharacterTriggerHandler(std::uintptr_t uParam);
+ EmissionController* EmitGeneric(cCharacter* pCharacter, const char* baseName, const char* characterName);
+ void UpdateEmitterFromBall(EmissionController& emitter);
+ void UpdateEmitterFromCharacterIdxWithCoordSys(EmissionController& ec, int characterIdx);
+diff --git a/src/Game/CharacterTriggers.cpp b/src/Game/CharacterTriggers.cpp
+index 68d6e1e2..a4038994 100644
+--- a/src/Game/CharacterTriggers.cpp
++++ b/src/Game/CharacterTriggers.cpp
+@@ -224,7 +224,7 @@ static nlMatrix4& GetHeadNodeMatrix(cCharacter* pHeadCharacter);
+ /**
+  * Offset/Address/Size: 0x2B1C | 0x801A18CC | size: 0x21FC
+  */
+-void CharacterTriggerHandler(unsigned int uParam)
++void CharacterTriggerHandler(std::uintptr_t uParam)
+ {
+     class AnimTriggerCallbackInfo
+     {
+diff --git a/src/Game/Triggers/SebringAnimScript.cpp b/src/Game/Triggers/SebringAnimScript.cpp
+index 8fbe4efe..646eeef7 100644
+--- a/src/Game/Triggers/SebringAnimScript.cpp
++++ b/src/Game/Triggers/SebringAnimScript.cpp
+@@ -128,6 +128,6 @@ void SebringAnimTagScriptInterpreter::TriggerFired(unsigned long triggerId)
+         AnimTriggerCallbackInfo data;
+         data.m_uEventID = triggerId;
+         data.m_fIntensity = 100.0f;
+-        CharacterTriggerHandler((unsigned int)&data);
++        CharacterTriggerHandler(reinterpret_cast<std::uintptr_t>(&data));
+     }
+ }

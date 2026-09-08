@@ -1,0 +1,48 @@
+--- a/src/Game/Sys/GCStream.cpp
++++ b/src/Game/Sys/GCStream.cpp
+@@ -1,4 +1,5 @@
+ #include "Game/Sys/GCStream.h"
++#include <stdint.h>
+ #include "Game/Sys/GCStreamVirtuals.h"
+ // This TU emits MonoAudioStream's vtable (DoUpdateRead is its key function),
+ // so it needs the inline virtual destructor defined in this header.
+@@ -120,7 +121,7 @@
+         AudioStreamBuffer* pBuffer;
+         unsigned long streamLength;
+         AudioStream* pStream;
+-        sDSPADPCM* pHdr = (sDSPADPCM*)((unsigned long)pData - Length);
++        sDSPADPCM* pHdr = (sDSPADPCM*)((uintptr_t)pData - Length);
+ 
+         pCBInfo->pStream->m_StreamLength = (pHdr->num_samples / 14) * 8;
+ 
+@@ -240,7 +241,7 @@
+     {
+         AudioStreamBuffer* pBuffer = pCBInfo->pBuffer;
+         pBuffer->Update(
+-            (unsigned long)pData - Length - (unsigned long)pBuffer->m_MRAMBuffer,
++            (unsigned long)((uintptr_t)pData - Length - (uintptr_t)pBuffer->m_MRAMBuffer),
+             Length);
+         READ_CB_INFO::s_AllocPool.DeleteEntry(pCBInfo);
+     }
+@@ -248,7 +249,11 @@
+ 
+ inline void* GCAudioStreaming::AudioBufferMgr::GetADPCMHdr()
+ {
+-    return (void*)(((unsigned long)m_ADPCMHdrMem + 0x1F) & ~0x1F);
++    // uintptr_t, not unsigned long. m_ADPCMHdrMem lives inside g_BufferMgr, a
++    // static in the executable image rather than in MEM1, so on Windows (where
++    // unsigned long is 32 bits) this returned the low half of its address and
++    // the DVD worker read the ADPCM header straight into nothing.
++    return (void*)(((uintptr_t)m_ADPCMHdrMem + 0x1F) & ~(uintptr_t)0x1F);
+ }
+ 
+ inline void GCAudioStreaming::MonoAudioStream::ReadHeader()
+@@ -524,7 +529,7 @@
+  */
+ void GCAudioStreaming::StereoAudioStream::InterleavedHdrReadCB(nlFile* pFile, void* pData, unsigned int Length)
+ {
+-    INTERLEAVED_ADPCM_HEADER* pHdr = (INTERLEAVED_ADPCM_HEADER*)((unsigned long)pData - Length);
++    INTERLEAVED_ADPCM_HEADER* pHdr = (INTERLEAVED_ADPCM_HEADER*)((uintptr_t)pData - Length);
+ 
+     bool serious;
+     if (m_Flags & (1 << SF_SeriousStop))

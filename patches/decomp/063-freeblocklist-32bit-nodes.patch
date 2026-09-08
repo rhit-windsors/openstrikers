@@ -1,0 +1,45 @@
+diff --git a/include/NL/MemAlloc.h b/include/NL/MemAlloc.h
+--- a/include/NL/MemAlloc.h
++++ b/include/NL/MemAlloc.h
+@@ -3,12 +3,39 @@
+ 
+ #include "types.h"
+ 
++#include <stdint.h>
++
++// MemoryAllocator stores its free-list nodes *inside* the free memory they
++// describe, and clamps its minimum block size to 0xC (see MemAlloc.cpp) because
++// FreeBlockList is exactly 12 bytes on GameCube. With native 64-bit pointers the
++// node becomes 24 bytes and every minimum-sized block overruns into its
++// neighbour's header, corrupting the ring on the second allocation.
++//
++// MEM1 is mapped at a GameCube-like 0x8xxxxxxx address, so a block address always
++// fits in 32 bits losslessly. Store one instead of a pointer to keep the original
++// layout and all of the allocator's 32-bit address arithmetic valid.
++template <typename T>
++struct nlGCPtr32
++{
++    u32 m_addr;
++
++    operator T*() const { return reinterpret_cast<T*>(static_cast<uintptr_t>(m_addr)); }
++    T* operator->() const { return operator T*(); }
++    nlGCPtr32& operator=(T* p)
++    {
++        m_addr = static_cast<u32>(reinterpret_cast<uintptr_t>(p));
++        return *this;
++    }
++};
++
+ struct FreeBlockList
+ {
+-    /* 0x0 */ FreeBlockList* m_next;
+-    /* 0x4 */ FreeBlockList* m_prev;
++    /* 0x0 */ nlGCPtr32<FreeBlockList> m_next;
++    /* 0x4 */ nlGCPtr32<FreeBlockList> m_prev;
+     /* 0x8 */ u32 m_size;
+ };
++
++static_assert(sizeof(FreeBlockList) == 12, "FreeBlockList must stay 12 bytes");
+ 
+ class MemoryAllocator
+ {

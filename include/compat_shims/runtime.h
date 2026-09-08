@@ -1,7 +1,11 @@
 #pragma once
 #include <stdio.h>
 #include <limits.h>
+#if defined(_WIN32)
+#include <malloc.h> // alloca() lives here on Windows
+#else
 #include <alloca.h>
+#endif
 #ifdef __cpluplus
 #include <new> // needed in nlFile.cpp
 #endif

@@ -1,0 +1,97 @@
+--- a/include/dolphin/charPipeline/texPalette.h
++++ b/include/dolphin/charPipeline/texPalette.h
+@@ -3,46 +3,67 @@
+ 
+ #include <dolphin/gx/GXStruct.h>
+ 
++#include "NL/nlEndian.h"
++#include "NL/nlGCPtr.h"
++
+ #ifdef __cplusplus
+ extern "C" {
+ #endif
+ #ifndef DOLPHIN_TYPES_H
+ typedef void* Ptr;
+ #endif
++
++// These four describe a .tpl exactly as it sits on the disc -- the game reads
++// the file into a buffer and casts the buffer to TEXPalette* -- so every scalar
++// is big-endian, and every field spelled Ptr here is a 32-bit offset from the
++// start of the file, not an address. Both assumptions broke at once on a
++// 64-bit little-endian host: the pointers doubled in width, moving every field
++// after them, and the offsets read back byte-swapped, so
++// `(u8*)tpl + (u32)tpl->descriptorArray` landed tens of megabytes past the
++// buffer. Spell the widths and the byte order out.
++//
++// The SDK's own unpacker (Dolphin/texPalette/texPalette.c, which relocates
++// these offsets into real pointers in place) is not built here -- aurora
++// provides the graphics side -- so nothing needs them to stay pointer-typed.
++
+ typedef struct {
+-    u16 numEntries;
+-    u8 unpacked;
+-    u8 pad8;
+-    GXTlutFmt format;
+-    Ptr data;
+-} CLUTHeader, *CLUTHeaderPtr;
++    /* 0x00 */ beu16 numEntries;
++    /* 0x02 */ u8 unpacked;
++    /* 0x03 */ u8 pad8;
++    /* 0x04 */ nlBEEnum<GXTlutFmt> format;
++    /* 0x08 */ beu32 data; // file-relative offset
++} CLUTHeader, *CLUTHeaderPtr; // total size: 0xC
++NL_GC_LAYOUT(CLUTHeader, 0xC);
+ 
+ typedef struct {
+-    u16 height;
+-    u16 width;
+-    u32 format;
+-    Ptr data;
+-    GXTexWrapMode wrapS; 
+-    GXTexWrapMode wrapT;
+-    GXTexFilter minFilter;
+-    GXTexFilter magFilter;
+-    f32 LODBias;
+-    u8 edgeLODEnable;
+-    u8 minLOD;
+-    u8 maxLOD;
+-    u8 unpacked;
+-} TEXHeader, *TEXHeaderPtr;
++    /* 0x00 */ beu16 height;
++    /* 0x02 */ beu16 width;
++    /* 0x04 */ beu32 format;
++    /* 0x08 */ beu32 data; // file-relative offset
++    /* 0x0C */ nlBEEnum<GXTexWrapMode> wrapS;
++    /* 0x10 */ nlBEEnum<GXTexWrapMode> wrapT;
++    /* 0x14 */ nlBEEnum<GXTexFilter> minFilter;
++    /* 0x18 */ nlBEEnum<GXTexFilter> magFilter;
++    /* 0x1C */ bef32 LODBias;
++    /* 0x20 */ u8 edgeLODEnable;
++    /* 0x21 */ u8 minLOD;
++    /* 0x22 */ u8 maxLOD;
++    /* 0x23 */ u8 unpacked;
++} TEXHeader, *TEXHeaderPtr; // total size: 0x24
++NL_GC_LAYOUT(TEXHeader, 0x24);
+ 
+ typedef struct {
+-    TEXHeaderPtr textureHeader;
+-    CLUTHeaderPtr CLUTHeader;
+-} TEXDescriptor, *TEXDescriptorPtr;
++    /* 0x00 */ beu32 textureHeader; // file-relative offset to a TEXHeader
++    /* 0x04 */ beu32 CLUTHeader;    // file-relative offset to a CLUTHeader
++} TEXDescriptor, *TEXDescriptorPtr; // total size: 0x8
++NL_GC_LAYOUT(TEXDescriptor, 0x8);
+ 
+ typedef struct {
+-    u32 versionNumber;
+-    u32 numDescriptors;
+-    TEXDescriptorPtr descriptorArray;
+-} TEXPalette, *TEXPalettePtr;
++    /* 0x00 */ beu32 versionNumber;
++    /* 0x04 */ beu32 numDescriptors;
++    /* 0x08 */ beu32 descriptorArray; // file-relative offset to TEXDescriptor[]
++} TEXPalette, *TEXPalettePtr; // total size: 0xC
++NL_GC_LAYOUT(TEXPalette, 0xC);
+ 
+ void TEXGetPalette(TEXPalettePtr* pal, char* name);
+ TEXDescriptorPtr TEXGet(TEXPalettePtr pal, u32 id);

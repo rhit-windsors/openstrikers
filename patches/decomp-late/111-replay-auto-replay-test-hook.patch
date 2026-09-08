@@ -1,0 +1,125 @@
+# OPENSTRIKERS_TEST_AUTO_REPLAY: trigger a goal replay without scoring a goal.
+#
+# Verifying the replay path otherwise means playing until the AI scores, which
+# is slow and not reproducible. With this set, once the buffer holds ~6s the
+# hook fills in GoalScoredData, forces a SHOT_AT_GOAL event and calls
+# PlayAutoReplay(REPLAY_TYPE_GOAL), then returns to gameplay when the choreo
+# reports done, printing AUTO_REPLAY_TEST begin/end/completed to stderr.
+#
+# Inert unless the environment variable is set. This is how patch 106 was
+# verified; keep it until replays survive a real match unattended.
+--- a/src/Game/ReplayManager.cpp
++++ b/src/Game/ReplayManager.cpp
+@@ -8,7 +8,12 @@
+ #include "PowerPC_EABI_Support/Runtime/MWCPlusLib.h"
+ #include "Game/main.h"
+ #include "NL/nlAlgorithm.h"
+-#include "Game/TrophyTextures.h"
++#include "Game/TrophyTextures.h"
++#include "Game/Render/Presentation.h"
++#include "Game/ReplayChoreo.h"
++
++#include <cstdio>
++#include <cstdlib>
+ 
+ extern float g_fSimulationTick;
+ extern float g_fFixedUpdateTick;
+@@ -131,13 +136,50 @@
+     ResetSnapshots();
+ }
+ 
+-void ReplayManager::DoPotentialDebugReplay(float& deltaTime)
+-{
+-if (!g_bEnableGamecubePadMonkey)
+-{
+-    static bool debugReplay = GetConfigBool(Config::Global(), "debug_replay_in_release", false);
+-
+-    if (debugReplay && !g_bTweaking && !g_bProfiling)
++void ReplayManager::DoPotentialDebugReplay(float& deltaTime)
++{
++static int forcedAutoReplayState = 0;
++static bool forcedAutoReplayEvent = false;
++if (std::getenv("OPENSTRIKERS_TEST_AUTO_REPLAY") != NULL && mReplay != NULL)
++{
++    if (!forcedAutoReplayEvent
++        && nlTaskManager::m_pInstance->m_CurrState == 2
++        && mReplay->EndTime() - mReplay->BeginTime() >= 5.5f)
++    {
++        mEvents |= REPLAY_EVENT_SHOT_AT_GOAL;
++        forcedAutoReplayEvent = true;
++    }
++    if (forcedAutoReplayState == 0
++        && nlTaskManager::m_pInstance->m_CurrState == 2
++        && mReplay->EndTime() - mReplay->BeginTime() >= 6.0f)
++    {
++        ReplayChoreo& choreo = ReplayChoreo::Instance();
++        choreo.mGoalScoredData.uTeamIndex = 0;
++        choreo.mGoalScoredData.uNumGoalsScored = 1;
++        choreo.mGoalScoredData.uGoalType = 0;
++        choreo.mGoalScoredData.uIsHyper = 0;
++        choreo.mGoalScoredData.v3ShotPosition = nlVector3{0.0f, 0.0f, 0.0f};
++        choreo.mGoalScoredData.pScorer = NULL;
++        choreo.mGoalScoredData.pAssister = NULL;
++        choreo.mGoalScoredData.pLastTouch[0] = NULL;
++        choreo.mGoalScoredData.pLastTouch[1] = NULL;
++        choreo.mCamera.SetSideOfInterest(1);
++        std::fprintf(stderr, "AUTO_REPLAY_TEST begin=%.3f end=%.3f\n", mReplay->BeginTime(), mReplay->EndTime());
++        Presentation::Instance().PlayAutoReplay(REPLAY_TYPE_GOAL);
++        forcedAutoReplayState = 1;
++    }
++    else if (forcedAutoReplayState == 1 && ReplayChoreo::Instance().Done())
++    {
++        std::fprintf(stderr, "AUTO_REPLAY_TEST completed time=%.3f\n", mTime);
++        nlTaskManager::SetNextState(2);
++        forcedAutoReplayState = 2;
++    }
++}
++if (!g_bEnableGamecubePadMonkey)
++{
++    static bool debugReplay = GetConfigBool(Config::Global(), "debug_replay_in_release", false);
++
++    if (debugReplay && !g_bTweaking && !g_bProfiling)
+     {
+         if (cPadManager::GetPad(0)->JustPressed(4, true))
+         {
+@@ -153,16 +195,16 @@
+         }
+     }
+ 
+-    if (nlTaskManager::m_pInstance->m_CurrState == 0x20000)
+-    {
++    if (nlTaskManager::m_pInstance->m_CurrState == 0x20000)
++    {
+         if (!cCameraManager::HasCamera(&mDebugCamera))
+         {
+             cCameraManager::PushCamera(&mDebugCamera);
+         }
+ 
+-        mDeltaTime = 0.0f;
+-        mDeltaTime -= 0.02f * cPadManager::GetPad(0)->GetPressure(5, true);
+-        mDeltaTime += 0.02f * cPadManager::GetPad(0)->GetPressure(6, true);
++        mDeltaTime = 0.0f;
++        mDeltaTime -= 0.02f * cPadManager::GetPad(0)->GetPressure(5, true);
++        mDeltaTime += 0.02f * cPadManager::GetPad(0)->GetPressure(6, true);
+ 
+         f32 time = mTime + mDeltaTime;
+         if (time < mReplay->BeginTime())
+@@ -174,12 +216,12 @@
+             time = mReplay->EndTime();
+         }
+ 
+-        mDeltaTime = time - mTime;
+-        mTime = time;
+-        mReplay->Play<RenderSnapshot>(mTime, *mPrevious, *mCurrent, mBlend);
+-    }
+-}
+-}
++        mDeltaTime = time - mTime;
++        mTime = time;
++        mReplay->Play<RenderSnapshot>(mTime, *mPrevious, *mCurrent, mBlend);
++    }
++}
++}
+ 
+ void ReplayManager::DoPotentialAutoReplay(float deltaTime)
+ {

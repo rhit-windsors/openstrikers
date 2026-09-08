@@ -1,0 +1,123 @@
+# The script VM stack stores pointers, so its slots must be host width.
+#
+# InterpreterCore pushes string-segment addresses, saved base pointers and
+# return addresses onto a `u32*` stack. On a 64-bit host each of those is
+# truncated, so any script that made a call or took a string returned to a
+# half address. The stack element type, m_SP/m_BP/m_SavedSP, m_Return and the
+# allocation size all move to std::uintptr_t together.
+--- a/include/Game/InterpreterCore.h
++++ b/include/Game/InterpreterCore.h
+@@ -59,23 +59,23 @@
+     void Step();
+     bool IsFinished() const;
+ 
+-protected:
+-    u32 Pop()
+-    {
+-        m_SP--;
+-        return *m_SP;
++protected:
++    std::uintptr_t Pop()
++    {
++        m_SP--;
++        return *m_SP;
+     }
+ 
+-public:
+-    /* 0x04 */ u32 m_Return;
++public:
++    /* 0x04 */ std::uintptr_t m_Return;
+     /* 0x08 */ ByteCodeHeader* m_Header;
+     // Backing store for m_Header; see ByteCodeFileHeader.
+     ByteCodeHeader m_HeaderStorage;
+-    /* 0x0C */ u32* m_StackSegment;
+-    /* 0x10 */ u16* m_IP;
+-    /* 0x14 */ u32* m_SP;
+-    /* 0x18 */ u32* m_BP;
+-    /* 0x1C */ u32* m_SavedSP;
++    /* 0x0C */ std::uintptr_t* m_StackSegment;
++    /* 0x10 */ u16* m_IP;
++    /* 0x14 */ std::uintptr_t* m_SP;
++    /* 0x18 */ std::uintptr_t* m_BP;
++    /* 0x1C */ std::uintptr_t* m_SavedSP;
+     /* 0x20 */ u32 m_Stop : 1;
+     /* 0x20 */ u32 m_RunState : 2;
+ }; // total size: 0x24
+--- a/src/Game/InterpreterCore.cpp
++++ b/src/Game/InterpreterCore.cpp
+@@ -6,9 +6,9 @@
+ /**
+  * Offset/Address/Size: 0x68C | 0x802137D4 | size: 0x4C
+  */
+-InterpreterCore::InterpreterCore(unsigned int size)
+-{
+-    m_StackSegment = (u32*)nlMalloc(size * 4);
++InterpreterCore::InterpreterCore(unsigned int size)
++{
++    m_StackSegment = (std::uintptr_t*)nlMalloc(size * sizeof(std::uintptr_t));
+     m_Header = NULL;
+ }
+ 
+@@ -157,14 +157,14 @@
+     u16 instr;
+     u16 op_high;
+     u16 op_low;
+-    u32* volatile saved_bp;
++    std::uintptr_t* volatile saved_bp;
+     u16* volatile saved_ip;
+ 
+-#if NL_HOST_BIG_ENDIAN
+-    instr = *m_IP;
+-#else
+-    instr = nlByteSwap(*m_IP);
+-#endif
++#if NL_HOST_BIG_ENDIAN
++    instr = *m_IP;
++#else
++    instr = nlByteSwap(*m_IP);
++#endif
+     op_high = instr & 0xC000;
+     op_low = instr & 0x3FFF;
+ 
+@@ -176,7 +176,7 @@
+         break;
+ 
+     case 0x4000:
+-        *m_SP = (u32)(m_Header->m_StringSegment + op_low);
++        *m_SP = reinterpret_cast<std::uintptr_t>(m_Header->m_StringSegment + op_low);
+         m_SP++;
+         break;
+ 
+@@ -190,7 +190,7 @@
+         {
+         case 0x0:
+             saved_bp = m_BP;
+-            *m_SP = (u32)m_BP;
++            *m_SP = reinterpret_cast<std::uintptr_t>(m_BP);
+             m_SP++;
+             m_BP = m_SP;
+             m_SP += (op_low & 0xFF);
+@@ -199,12 +199,12 @@
+         case 0x1:
+             m_SP -= (op_low & 0xFF);
+             m_SP--;
+-            m_BP = (u32*)(*m_SP);
++            m_BP = reinterpret_cast<std::uintptr_t*>(*m_SP);
+             break;
+ 
+         case 0x2:
+             m_SP--;
+-            m_IP = (u16*)(*m_SP);
++            m_IP = reinterpret_cast<u16*>(*m_SP);
+             m_SP -= (op_low & 0xFF);
+             if (!m_IP)
+             {
+@@ -263,7 +263,7 @@
+         {
+             u8 index;
+             saved_ip = m_IP;
+-            *m_SP = (u32)m_IP;
++            *m_SP = reinterpret_cast<std::uintptr_t>(m_IP);
+             m_SP++;
+             index = (u8)(op_low & 0xFF);
+             m_IP = (u16*)((u8*)m_Header->m_CodeSegment + (m_Header->m_FunctionTable[index].offset & ~1));

@@ -1,0 +1,50 @@
+--- a/src/Game/GameInfo.cpp
++++ b/src/Game/GameInfo.cpp
+@@ -8,9 +8,7 @@
+ #include "Game/Audio/WorldAudio.h"
+ #include "Game/FE/feHelpFuncs.h"
+ #include "Game/World/WorldLoader.h"
+-#include "Game/main.h"
+-
+-#include <cstdlib>
++#include "Game/main.h"
+ 
+ static bool isKongaUnlocked = false;
+ static bool isYoshiUnlocked = false;
+@@ -143,9 +141,7 @@
+     mSuperStarCupSeries.mRoundNumber = -6;
+     mSuperBowserCupSeries.mRoundNumber = -6;
+ 
+-    const char* hostSkipFE = std::getenv("OPENSTRIKERS_SKIP_FE");
+-    bool skipFE = GetConfigBool(Config::Global(), "skipfe", false)
+-        || (hostSkipFE != nullptr && hostSkipFE[0] != '\0' && hostSkipFE[0] != '0');
++    bool skipFE = GetConfigBool(Config::Global(), "skipfe", false) || osHostSkipFrontEnd();
+     if (skipFE)
+     {
+         SetMode(GM_FRIENDLY);
+--- a/src/Game/main.cpp
++++ b/src/Game/main.cpp
+@@ -70,9 +70,7 @@
+ #include "NL/nlTask.h"
+ #include "dolphin/os/OSThread.h"
+ #include "dolphin/si.h"
+-#include "dolphin/card.h"
+-
+-#include <cstdlib>
++#include "dolphin/card.h"
+ 
+ class AudioUpdateTask : public nlTask
+ {
+@@ -473,10 +471,8 @@
+ 
+     fopen("flushfile.txt", "r");
+ 
+-    const char* hostSkipFE = std::getenv("OPENSTRIKERS_SKIP_FE");
+-    const bool skipFE = GetConfigBool(Config::Global(), "skipfe", false)
+-        || (hostSkipFE != nullptr && hostSkipFE[0] != '\0' && hostSkipFE[0] != '0');
+-    nlTaskManager::SetNextState(skipFE ? 2 : 4);
++    const bool skipFE = GetConfigBool(Config::Global(), "skipfe", false) || osHostSkipFrontEnd();
++    nlTaskManager::SetNextState(skipFE ? 2 : 4);
+ 
+     if (GetConfigBool(Config::Global(), "enableFloatingPointExceptions", false))
+     {

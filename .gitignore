@@ -4,3 +4,19 @@ build/
 build-dbg/
 .cache
 compile_commands.json
+
+# Frame captures and texture dumps are renders of the retail game's assets.
+# Keep them out of the repository -- see capture.ps1 and allowTextureDumps.
+*.ppm
+frame_*.png
+texture_dumps/
+
+# Never commit game data. The game loads everything from a disc image the user
+# supplies at runtime; nothing extracted from one belongs here.
+*.iso
+*.gcm
+*.tpl
+*.bmd
+*.glg
+*.fen
+*.gci

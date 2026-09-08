@@ -1,0 +1,125 @@
+--- a/include/NL/nlGCPtr.h
++++ b/include/NL/nlGCPtr.h
+@@ -5,6 +5,15 @@
+ 
+ #include <stdint.h>
+ 
++// Storing a pointer that does not fit in 32 bits is silent data loss: the read
++// back names an unrelated address, and whether it faults depends on where the
++// host happened to map the stack or the image. Build with
++// -DOPENSTRIKERS_CHECK_GCPTR=ON to turn that into an immediate, located abort.
++#ifdef NL_GCPTR_CHECKED
++#include <stdio.h>
++#include <stdlib.h>
++#endif
++
+ // A pointer the width the GameCube had: four bytes.
+ //
+ // Serialized images (.fen scene packages and friends) bake the pointer size into
+@@ -28,7 +37,18 @@
+     T& operator[](int i) const { return operator T*()[i]; }
+     nlGCPtr32& operator=(T* p)
+     {
+-        m_addr = static_cast<u32>(reinterpret_cast<uintptr_t>(p));
++        const uintptr_t addr = reinterpret_cast<uintptr_t>(p);
++#ifdef NL_GCPTR_CHECKED
++        if (addr >> 32 != 0)
++        {
++            fprintf(stderr,
++                    "nlGCPtr32: cannot store %p -- it is outside MEM1, so this slot would keep only 0x%08x. Break here to see who wrote it.\n",
++                    (const void*)p, static_cast<u32>(addr));
++            fflush(stderr);
++            abort();
++        }
++#endif
++        m_addr = static_cast<u32>(addr);
+         return *this;
+     }
+ };
+--- a/src/Game/FE/feRender.cpp
++++ b/src/Game/FE/feRender.cpp
+@@ -255,12 +255,33 @@
+     m_pRenderScene = nullptr;
+ }
+ 
++// SetMatrix() stores into TLTextInstance::m_DrawInfo.pMatrix, which is an
++// nlGCPtr32 -- four bytes, because StringDrawInfo is embedded in a serialized
++// .fen image and cannot change size. On hardware the stack was in MEM1, so the
++// address of a local fit; here it is a host stack address whose top bits are
++// dropped on the way in, and nlTextBox::DrawString then dereferences whatever
++// the low half happens to name. Whether that faults depends on where ASLR put
++// the stack, which is why it looked like an intermittent crash minutes into a
++// run. Keep the scratch matrix in MEM1 so the pointer survives the round trip.
++//
++// One instance is enough: SetMatrix() is only ever read back by the Render()
++// call immediately below it, which does not re-enter this function.
++static nlMatrix4* GetTextMatrixScratch()
++{
++    static nlMatrix4* pScratch = nullptr;
++    if (pScratch == nullptr)
++    {
++        pScratch = new (nlMalloc(sizeof(nlMatrix4), 32, false)) nlMatrix4;
++    }
++    return pScratch;
++}
++
+ /**
+  * Offset/Address/Size: 0x3BC | 0x8020A644 | size: 0xD0
+  */
+ void FERender::RenderTextInstance(TLTextInstance* textInstance)
+ {
+-    nlMatrix4 combinedMatrix;
++    nlMatrix4& combinedMatrix = *GetTextMatrixScratch();
+ 
+     m_pMatrixStack->GetTop(combinedMatrix);
+ 
+--- a/src/Game/FE/tlTextInstance_runtime.cpp
++++ b/src/Game/FE/tlTextInstance_runtime.cpp
+@@ -3,10 +3,38 @@
+ #include "NL/nlAlgorithm.h"
+ #include "NL/nlFont.h"
+ #include "NL/nlLocalization.h"
++#include "NL/nlMemory.h"
+ #include "NL/nlTextBox.h"
+ 
+ #include "Game/FE/feFontResource.h"
+ 
++// nlTextBox::StringDrawInfo::String is an nlGCPtr32 -- four bytes, because
++// StringDrawInfo is embedded in a serialized .fen image. Whatever FontCharString
++// builds therefore has to live in MEM1. On hardware __alloca gave that for free,
++// since the stack was in MEM1 too; here it returns a host stack address that
++// loses its top 32 bits going into the slot, and ProcessString then walks
++// whatever the low half happens to name.
++//
++// One grown-on-demand buffer is enough, and it is strictly safer than the alloca
++// it replaces: that buffer died when Render() returned even though
++// m_DrawInfo.String went on pointing at it.
++static unsigned short* GetTextScratch(unsigned long chars)
++{
++    static unsigned short* pBuffer = NULL;
++    static unsigned long capacity = 0;
++
++    if (chars > capacity)
++    {
++        if (pBuffer != NULL)
++        {
++            nlFree(pBuffer);
++        }
++        pBuffer = (unsigned short*)nlMalloc(chars * sizeof(unsigned short), 8, false);
++        capacity = chars;
++    }
++    return pBuffer;
++}
++
+ // A text component's pChildren slot holds its FEFontResource, not a slide list.
+ // This used to pun through a local struct with a hand-counted 0x14 pad and a
+ // bare nlFont*; on a 64-bit host that pointer is eight bytes and gets aligned
+@@ -91,7 +119,7 @@
+ 
+     if (pWideTextString != NULL)
+     {
+-        unsigned short* buffer = (unsigned short*)__alloca((nlStrLen<unsigned short>(pWideTextString) + 1) * sizeof(unsigned short));
++        unsigned short* buffer = GetTextScratch(nlStrLen<unsigned short>(pWideTextString) + 1);
+ 
+         pFont = GetFontFromComponent(component);
+         FontCharString charString(pWideTextString, pFont, buffer);

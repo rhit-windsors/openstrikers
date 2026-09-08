@@ -1,0 +1,28 @@
+--- a/src/NL/nlString.cpp
++++ b/src/NL/nlString.cpp
+@@ -1,5 +1,6 @@
+ #include "NL/nlString.h"
+ #include <string.h>
++#include <stdint.h>
+ #include <dolphin/os/OSCache.h>
+ 
+ /**
+@@ -28,10 +29,14 @@
+ {
+     if (numBytes >= 0x80)
+     {
+-        unsigned long addr = (unsigned long)p;
+-        unsigned long endr = addr + numBytes;
+-        unsigned long startAddr = (addr + 0x1F) & ~0x1F;
+-        unsigned long endAddr = endr & ~0x1F;
++        // uintptr_t, not unsigned long: unsigned long is 32 bits on Windows, and
++        // the callers pass host stack addresses (nlZeroMemory(&t, sizeof t)),
++        // which live far above 4GB. Truncating those turned the loops below into
++        // wild writes through a low address.
++        uintptr_t addr = (uintptr_t)p;
++        uintptr_t endr = addr + numBytes;
++        uintptr_t startAddr = (addr + 0x1F) & ~(uintptr_t)0x1F;
++        uintptr_t endAddr = endr & ~(uintptr_t)0x1F;
+ 
+         // Zero leading unaligned bytes
+         while (addr < startAddr)

@@ -1,0 +1,13 @@
+diff --git a/src/Game/Drawable/DrawableModel.cpp b/src/Game/Drawable/DrawableModel.cpp
+index cd6e93d4..3cb89ed6 100644
+--- a/src/Game/Drawable/DrawableModel.cpp
++++ b/src/Game/Drawable/DrawableModel.cpp
+@@ -825,7 +825,7 @@ static void GetShadowBoundingSquare(const glModel* model, const nlMatrix4& matrix
+ 
+ static inline void MakePlanarShadowMatrix(nlMatrix4& shadowMatrix, const nlMatrix4& objectToWorldMatrix)
+ {
+-    const nlVector3& lightVector = *(const nlVector3*)(*(u32*)((u8*)WorldManager::s_World + 0x138) + 4);
++    const nlVector3& lightVector = WorldManager::s_World->m_pShadowLight->m_worldPosition;
+     float xOverZ = -lightVector.x / lightVector.z;
+     float yOverZ = -lightVector.y / lightVector.z;
+ 

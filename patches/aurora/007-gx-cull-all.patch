@@ -1,0 +1,41 @@
+diff --git a/lib/gx/gx.cpp b/lib/gx/gx.cpp
+index b12b327..dcc4a6f 100644
+--- a/lib/gx/gx.cpp
++++ b/lib/gx/gx.cpp
+@@ -198,6 +198,13 @@ wgpu::PrimitiveState to_primitive_state(GXCullMode gx_cullMode) {
+   case GX_CULL_BACK:
+     cullMode = wgpu::CullMode::Back;
+     break;
++  case GX_CULL_ALL:
++    // WebGPU has no "cull everything" mode. Back-face culling keeps the
++    // pipeline descriptor valid; build_pipeline pairs GX_CULL_ALL with an
++    // empty colour write mask and no depth writes, so nothing a draw through
++    // this pipeline does is observable.
++    cullMode = wgpu::CullMode::Back;
++    break;
+   case GX_CULL_NONE:
+     break;
+   }
+@@ -319,9 +326,12 @@ wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, ArrayRef<wgpu:
+   const float depthBias = (UseReversedZ ? -1.0f : 1.0f) * std::bit_cast<float>(config.polygonOffsetBits);
+   const float depthBiasSlopeScale = (UseReversedZ ? -1.0f : 1.0f) * std::bit_cast<float>(config.polygonOffsetScaleBits);
+   const float depthBiasClamp = webgpu::g_hasCoreFeatures ? std::bit_cast<float>(config.polygonOffsetClampBits) : 0.0f;
++  // GX_CULL_ALL discards every primitive. See to_primitive_state: the pipeline
++  // rasterises as if culling back faces, and is made to write nothing instead.
++  const bool cullAll = config.cullMode == GX_CULL_ALL;
+   const wgpu::DepthStencilState depthStencil{
+       .format = g_graphicsConfig.depthFormat,
+-      .depthWriteEnabled = config.depthCompare && config.depthUpdate,
++      .depthWriteEnabled = config.depthCompare && config.depthUpdate && !cullAll,
+       .depthCompare = config.depthCompare ? to_compare_function(config.depthFunc) : wgpu::CompareFunction::Always,
+       .depthBias = round_away_from_zero<int32_t>(depthBias),
+       .depthBiasSlopeScale = depthBiasSlopeScale,
+@@ -332,7 +342,7 @@ wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, ArrayRef<wgpu:
+   const std::array colorTargets{wgpu::ColorTargetState{
+       .format = g_graphicsConfig.surfaceConfiguration.format,
+       .blend = &blendState,
+-      .writeMask = to_write_mask(config.colorUpdate, config.alphaUpdate),
++      .writeMask = cullAll ? wgpu::ColorWriteMask::None : to_write_mask(config.colorUpdate, config.alphaUpdate),
+   }};
+   const wgpu::FragmentState fragmentState{
+       .module = shader,

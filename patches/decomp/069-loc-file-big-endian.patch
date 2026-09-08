@@ -1,0 +1,67 @@
+--- a/include/NL/nlLocalization.h
++++ b/include/NL/nlLocalization.h
+@@ -1,22 +1,30 @@
+ #ifndef _NLLOCALIZATION_H_
+ #define _NLLOCALIZATION_H_
+ 
++#include "NL/nlEndian.h"
++#include "NL/nlGCPtr.h"
++
++// A .loc file is mapped in place, so every scalar here is still in the
++// big-endian layout the disc was authored with.
+ struct LOCHeader
+ {
+     char Thumbprint[4];
+-    unsigned long Version;
+-    unsigned long Language;
+-    unsigned long StringCount;
+-    unsigned long Flags;
++    beu32 Version;
++    beu32 Language;
++    beu32 StringCount;
++    beu32 Flags;
+ };
++NL_GC_LAYOUT(LOCHeader, 0x14);
+ 
+ class nlLocalization
+ {
+ public:
+     struct StringLookup
+     {
+-        unsigned long hash;
+-        unsigned long StringOffset;
++        // Also straight out of the file. StringOffset counts characters from
++        // m_FirstString, not bytes.
++        beu32 hash;
++        beu32 StringOffset;
+ 
+         operator unsigned long() const { return hash; }
+     };
+--- a/src/NL/nlLocalization.cpp
++++ b/src/NL/nlLocalization.cpp
+@@ -75,6 +75,25 @@
+ 
+     m_LookupTable = (StringLookup*)(m_pFile + 1);
+     m_FirstString = (unsigned short*)(&m_LookupTable[m_pFile->StringCount]);
++
++    // The header and the lookup table read through nlBE, but the strings
++    // themselves are handed out as bare unsigned short* to every caller of
++    // LookupLocString and compared against native literals like
++    // LocalizationTableNotFound, so they cannot be wrapped. Swap the whole
++    // block once here instead and everything downstream stays native.
++    //
++    // FileSize is the size the read actually delivered; the allocation is at
++    // least that, rounded up for the DVD, so a trailing odd byte cannot walk
++    // off the end.
++    if (!NL_HOST_BIG_ENDIAN)
++    {
++        unsigned short* pEnd = (unsigned short*)((char*)m_pFile + (FileSize & ~1u));
++        for (unsigned short* p = m_FirstString; p < pEnd; p++)
++        {
++            *p = nlByteSwap((u16)*p);
++        }
++    }
++
+     return 1;
+ }
+ 

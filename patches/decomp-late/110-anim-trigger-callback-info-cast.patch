@@ -1,0 +1,77 @@
+# Animation trigger callbacks matched against the wrong field, so none matched.
+#
+# CharacterTriggers read cb->m_nParam1 as a cSAnim* and compared
+# pTriggerAnim->GetHashID() against the trigger id. m_nParam1 is actually the
+# AnimTagCBInfo that SetupAnimationTriggers hung off the callback. Reading it
+# as a cSAnim worked on the GameCube purely by coincidence of layout:
+# cSAnim::m_uHashID and AnimTagCBInfo::ScriptInfo.Trigger both sit at offset
+# 0x4 there. Here AnimTagCBInfo leads with an AnimTagScriptInterpreter*, which
+# is eight bytes, so ScriptInfo moves to 0x8 and the old cast read the top half
+# of that pointer instead of a trigger id.
+#
+# Nothing crashed -- no trigger ever matched, so every consumer of animation
+# milestones silently got zeroes. The goalie save table is the visible one:
+# its milestone percentages were all zero, so keepers never timed a save.
+--- a/src/Game/CharacterTriggers.cpp
++++ b/src/Game/CharacterTriggers.cpp
+@@ -17,6 +17,9 @@
+ #include "Game/SAnim.h"
+ #include "Game/SAnim/pnSAnimController.h"
+ #include "Game/Sys/debug.h"
++#include "Game/Triggers/AnimTagScript.h"
++
++#include <cstdint>
+ 
+ namespace Audio
+ {
+@@ -30,7 +33,7 @@
+ public:
+     void Stop(eWorldSFX, cGameSFX::StopFlag);
+     unsigned long Play(eWorldSFX, float, float, bool, float);
+-    unsigned long Play(Audio::SoundAttributes&);
++    std::uintptr_t Play(Audio::SoundAttributes&);
+ };
+ 
+ extern cWorldSFX gCrowdSFX;
+@@ -224,7 +227,7 @@
+ /**
+  * Offset/Address/Size: 0x2B1C | 0x801A18CC | size: 0x21FC
+  */
+-void CharacterTriggerHandler(std::uintptr_t uParam)
++void CharacterTriggerHandler(std::uintptr_t uParam)
+ {
+     class AnimTriggerCallbackInfo
+     {
+@@ -848,9 +851,18 @@
+ 
+     while (cb != NULL)
+     {
+-        cSAnim* pTriggerAnim = (cSAnim*)cb->m_nParam1;
++        // m_nParam1 is the AnimTagCBInfo that SetupAnimationTriggers hung off
++        // this callback, not a cSAnim. Reading it as one worked on the
++        // GameCube by coincidence of layout: cSAnim::m_uHashID and
++        // AnimTagCBInfo::ScriptInfo.Trigger are both at offset 0x4 there. Here
++        // AnimTagCBInfo's leading AnimTagScriptInterpreter* is eight bytes, so
++        // ScriptInfo moves to 0x8 and the old cast read the top half of that
++        // pointer instead of the trigger id -- no trigger ever matched, and
++        // everything downstream that reads milestones out of an animation
++        // (the goalie's whole save table, for one) silently got zeroes.
++        const AnimTagCBInfo* pTagInfo = (const AnimTagCBInfo*)(std::uintptr_t)cb->m_nParam1;
+         float numKeys = (float)pAnim->m_nNumKeys;
+-        if (!callback(cb->m_fTime, numKeys / 30.0f, pTriggerAnim->GetHashID(), 0.0f, pData))
++        if (!callback(cb->m_fTime, numKeys / 30.0f, pTagInfo->ScriptInfo.Trigger, 0.0f, pData))
+         {
+             break;
+         }
+@@ -883,8 +895,9 @@
+ 
+     while (cb != NULL)
+     {
+-        cSAnim* pCallbackAnim = (cSAnim*)cb->m_nParam1;
+-        if (uTriggerID == pCallbackAnim->GetHashID())
++        // As in GetAnimTriggerInfo above: this is an AnimTagCBInfo.
++        const AnimTagCBInfo* pTagInfo = (const AnimTagCBInfo*)(std::uintptr_t)cb->m_nParam1;
++        if (uTriggerID == pTagInfo->ScriptInfo.Trigger)
+         {
+             count++;
+             if (count - 1 == uInstanceNumber)

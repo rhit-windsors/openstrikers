@@ -1,0 +1,87 @@
+--- a/lib/card/CardGciFolder.cpp
++++ b/lib/card/CardGciFolder.cpp
+@@ -82,7 +82,12 @@
+     idx++;
+   }
+ 
+-  return ECardResult::NOCARD;
++  // The card is mounted and readable; this save simply is not on it. NOCARD
++  // says the slot is empty, which sends a game down its "please insert a
++  // memory card" path -- and for a game that checks for its save before every
++  // match, that path never ends, because retrying re-opens the same absent
++  // file. NOFILE is what real hardware returns here.
++  return ECardResult::NOFILE;
+ }
+ 
+ ECardResult CardGciFolder::openFile(uint32_t fileno, FileHandle& handleOut) {
+@@ -96,7 +101,7 @@
+     return ECardResult::READY;
+   }
+ 
+-  return ECardResult::NOCARD;
++  return ECardResult::NOFILE;
+ }
+ 
+ ECardResult CardGciFolder::createFile(const char* filename, size_t size, FileHandle& handleOut) {
+@@ -151,9 +156,32 @@
+     fileIO.deleteFile();
+ }
+ 
+-ECardResult CardGciFolder::deleteFile(const char* filename) { return ECardResult::NOCARD; }
++ECardResult CardGciFolder::deleteFile(const char* filename) {
++  uint32_t idx = 0;
++  for (auto& gciFile : m_files) {
++    if (strcmp(filename, gciFile.file.m_filename) == 0) {
++      return deleteFile(idx);
++    }
++    idx++;
++  }
++
++  return ECardResult::NOFILE;
++}
++
++ECardResult CardGciFolder::deleteFile(uint32_t fileno) {
++  auto* file = get_file(fileno);
++  if (file == nullptr) {
++    return ECardResult::NOFILE;
++  }
+ 
+-ECardResult CardGciFolder::deleteFile(uint32_t fileno) { return ECardResult::NOCARD; }
++  FileIO fileIO(m_folderPath / file->filename, true);
++  if (!fileIO) {
++    return ECardResult::NOFILE;
++  }
++  fileIO.deleteFile();
++  m_files.erase(m_files.begin() + fileno);
++  return ECardResult::READY;
++}
+ 
+ ECardResult CardGciFolder::renameFile(const char* oldName, const char* newName) {
+   for (auto& gciFile : m_files) {
+@@ -163,7 +191,7 @@
+     }
+   }
+ 
+-  return ECardResult::NOCARD;
++  return ECardResult::NOFILE;
+ }
+ 
+ ECardResult CardGciFolder::fileWrite(FileHandle& fh, const void* buf, size_t size) {
+@@ -178,7 +206,7 @@
+     return ECardResult::NOFILE;
+   }
+ 
+-  return ECardResult::NOCARD;
++  return ECardResult::NOFILE;
+ }
+ 
+ ECardResult CardGciFolder::fileRead(FileHandle& fh, void* dst, size_t size) {
+@@ -193,7 +221,7 @@
+     return ECardResult::NOFILE;
+   }
+ 
+-  return ECardResult::NOCARD;
++  return ECardResult::NOFILE;
+ }
+ 
+ void CardGciFolder::seek(FileHandle& fh, int32_t pos, SeekOrigin whence) {

@@ -1,0 +1,22 @@
+diff --git a/src/Game/FE/feSceneManager.cpp b/src/Game/FE/feSceneManager.cpp
+--- a/src/Game/FE/feSceneManager.cpp
++++ b/src/Game/FE/feSceneManager.cpp
+@@ -6,6 +6,8 @@
+ #include "NL/nlDebug.h"
+ #include "NL/nlString.h"
+ 
++#include <cstdio>
++
+ extern FEInput* g_pFEInput;
+ 
+ template <>
+@@ -232,6 +234,9 @@ void FESceneManager::QueueScenePop()
+  */
+ void FESceneManager::QueueScenePush(BaseSceneHandler* pSceneHandler, const char* szFilename)
+ {
++    std::fprintf(stderr, "FESCENE push %s\n", szFilename);
++    std::fflush(stderr);
++
+     PackagePushPopMessage* msg = nullptr;
+ 
+     PackagePushPopMessage::m_PushPopMessageSlotPool.Allocate(msg);

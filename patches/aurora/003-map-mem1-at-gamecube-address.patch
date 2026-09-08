@@ -1,0 +1,38 @@
+diff --git a/lib/dolphin/os/OSMemory.cpp b/lib/dolphin/os/OSMemory.cpp
+--- a/lib/dolphin/os/OSMemory.cpp
++++ b/lib/dolphin/os/OSMemory.cpp
+@@ -7,6 +7,9 @@
+ #include "fmt/base.h"
+ 
+ #include <cassert>
++#if defined(__unix__)
++#include <sys/mman.h>
++#endif
+ 
+ #include "internal.hpp"
+ #include <dolphin/os.h>
+@@ -138,6 +141,24 @@
+ }
+ #else
+ static void* AllocMEM1(u32 size) {
++#if defined(__unix__)
++  // Decomps built against this layer routinely do 32-bit arithmetic on MEM1
++  // pointers and tell heaps apart by testing bit 31, so MEM1 has to live at a
++  // GameCube-like 0x8xxxxxxx address instead of wherever malloc lands. Ask for
++  // the real one; MAP_FIXED_NOREPLACE means we fail rather than clobber an
++  // existing mapping.
++  void* const desired = reinterpret_cast<void*>(static_cast<uintptr_t>(0x80000000));
++  void* const ptr = mmap(desired, size, PROT_READ | PROT_WRITE,
++                         MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
++  if (ptr != MAP_FAILED) {
++    if (ptr == desired) {
++      return ptr;
++    }
++    munmap(ptr, size);
++  }
++  Log.warn("Could not map MEM1 at 0x80000000; falling back to calloc. "
++           "Code that truncates MEM1 pointers to 32 bits will misbehave.");
++#endif
+   return calloc(1, size);
+ }
+ #endif

@@ -1,0 +1,497 @@
+--- a/cmake/AuroraNodProvider.cmake
++++ b/cmake/AuroraNodProvider.cmake
+@@ -130,6 +130,21 @@
+   )
+   FetchContent_MakeAvailable(nod_prebuilt)
+ 
++  # The prebuilt package is laid out with MSVC naming (nod.dll / nod.lib), but
++  # under mingw-w64 CMake looks for libnod.dll / libnod.dll.a and the shipped
++  # config then finds nothing. Provide those names. nod exposes a plain C API,
++  # so GNU ld consumes the MSVC import library fine.
++  if (MINGW)
++    if (EXISTS "${nod_prebuilt_SOURCE_DIR}/bin/nod.dll")
++      file(COPY_FILE "${nod_prebuilt_SOURCE_DIR}/bin/nod.dll"
++                     "${nod_prebuilt_SOURCE_DIR}/bin/libnod.dll" ONLY_IF_DIFFERENT)
++    endif ()
++    if (EXISTS "${nod_prebuilt_SOURCE_DIR}/lib/nod.lib")
++      file(COPY_FILE "${nod_prebuilt_SOURCE_DIR}/lib/nod.lib"
++                     "${nod_prebuilt_SOURCE_DIR}/lib/libnod.dll.a" ONLY_IF_DIFFERENT)
++    endif ()
++  endif ()
++
+   # The prebuilt package ships a CMake config that creates nod::nod_shared,
+   # nod::nod_static, and a default nod::nod (based on BUILD_SHARED_LIBS).
+   # Set BUILD_SHARED_LIBS so the config selects the right default target.
+@@ -150,6 +165,15 @@
+     message(FATAL_ERROR "Prebuilt nod package did not provide nod::nod target")
+   endif ()
+ 
++  # The libnod.dll copy above only exists so the shipped config's EXISTS check
++  # passes. The import library still names the DLL "nod.dll", so that is what
++  # the loader will ask for -- point the runtime location back at the original
++  # or $<TARGET_RUNTIME_DLLS> deploys a file nothing looks for.
++  if (MINGW AND TARGET nod::nod_shared AND EXISTS "${nod_prebuilt_SOURCE_DIR}/bin/nod.dll")
++    set_target_properties(nod::nod_shared PROPERTIES
++      IMPORTED_LOCATION "${nod_prebuilt_SOURCE_DIR}/bin/nod.dll")
++  endif ()
++
+ else ()
+   message(FATAL_ERROR "Invalid AURORA_NOD_PROVIDER: ${AURORA_NOD_PROVIDER} "
+     "(must be auto, vendor, system, or package)")
+--- a/cmake/aurora_core.cmake
++++ b/cmake/aurora_core.cmake
+@@ -28,7 +28,13 @@
+ 
+ if (CMAKE_SYSTEM_NAME STREQUAL Windows)
+     # stuff for fetching system info.
+-    target_link_libraries(aurora_core PRIVATE wbemuuid.lib comsuppw.lib ntdll.lib DXGI.lib)
++    if (MINGW)
++        # comsuppw is an MSVC-only COM support library that mingw-w64 does not
++        # ship, and mingw spells its import libraries in lowercase.
++        target_link_libraries(aurora_core PRIVATE wbemuuid ntdll dxgi)
++    else ()
++        target_link_libraries(aurora_core PRIVATE wbemuuid.lib comsuppw.lib ntdll.lib DXGI.lib)
++    endif ()
+ elseif (APPLE)
+     target_sources(aurora_core PRIVATE lib/system_info_mac.mm)
+ endif ()
+--- a/include/dolphin/gx/GXVert.h
++++ b/include/dolphin/gx/GXVert.h
+@@ -30,6 +30,16 @@
+ 
+ #ifdef TARGET_PC
+ 
++// The GameCube's write-gather pipe was a hardware register at 0xCC008000 that
++// vertex data was stored to directly, and decomps store to it by name. Nothing
++// is mapped there on a host, so the stores have to become FIFO writes.
++void __GXWGFifoWriteU8(u8 v);
++void __GXWGFifoWriteU16(u16 v);
++void __GXWGFifoWriteU32(u32 v);
++void __GXWGFifoWriteU64(u64 v);
++void __GXWGFifoWriteF32(f32 v);
++void __GXWGFifoWriteF64(f64 v);
++
+ void GXPosition3f32(f32 x, f32 y, f32 z);
+ void GXPosition3u16(u16 x, u16 y, u16 z);
+ void GXPosition3s16(s16 x, s16 y, s16 z);
+@@ -79,6 +89,46 @@
+ 
+ extern void GXEnd(void);
+ 
++#ifdef __cplusplus
++} // extern "C"
++
++// Stand-in for the write-gather pipe, so `GXWGFifo.u16 = x` keeps working and
++// lands in the FIFO. One empty proxy per union member; each turns an assignment
++// into the matching write.
++struct AuroraWGPipe {
++#define AURORA_WG_SLOT(name, ctype, fn)                                                              struct Slot_##name {                                                                                 void operator=(ctype v) const { fn(v); }                                                         }
++  AURORA_WG_SLOT(u8, unsigned char, __GXWGFifoWriteU8);
++  AURORA_WG_SLOT(u16, unsigned short, __GXWGFifoWriteU16);
++  AURORA_WG_SLOT(u32, unsigned int, __GXWGFifoWriteU32);
++  AURORA_WG_SLOT(u64, unsigned long long, __GXWGFifoWriteU64);
++  AURORA_WG_SLOT(s8, signed char, __GXWGFifoWriteU8);
++  AURORA_WG_SLOT(s16, short, __GXWGFifoWriteU16);
++  AURORA_WG_SLOT(s32, int, __GXWGFifoWriteU32);
++  AURORA_WG_SLOT(s64, long long, __GXWGFifoWriteU64);
++  AURORA_WG_SLOT(f32, float, __GXWGFifoWriteF32);
++  AURORA_WG_SLOT(f64, double, __GXWGFifoWriteF64);
++#undef AURORA_WG_SLOT
++
++  Slot_u8 u8;
++  Slot_u16 u16;
++  Slot_u32 u32;
++  Slot_u64 u64;
++  Slot_s8 s8;
++  Slot_s16 s16;
++  Slot_s32 s32;
++  Slot_s64 s64;
++  Slot_f32 f32;
++  Slot_f64 f64;
++};
++
++extern AuroraWGPipe __GXWGFifo;
++
++#undef GXWGFifo
++#define GXWGFifo __GXWGFifo
++
++extern "C" {
++#endif
++
+ #else
+ 
+ static inline void GXPosition2f32(const f32 x, const f32 y) {
+--- a/lib/aurora.cpp
++++ b/lib/aurora.cpp
+@@ -31,6 +31,12 @@
+ #include "system_info.hpp"
+ #include "tracy/Tracy.hpp"
+ 
++#include <charconv>
++#include <cstdio>
++#include <cstdlib>
++#include <string_view>
++#include <vector>
++
+ namespace aurora {
+ AuroraConfig g_config;
+ uint32_t g_sdlCustomEventsStart;
+@@ -45,6 +51,138 @@
+ using webgpu::g_queue;
+ using webgpu::g_surface;
+ 
++// --- frame dump --------------------------------------------------------------
++// There is no reliable way to screenshot this window from outside the process:
++// the swapchain is a DXGI flip-model surface, so GDI's CopyFromScreen captures
++// whatever the compositor has at those desktop coordinates and PrintWindow hands
++// back a stale DWM bitmap. Reading the present source straight off the GPU is
++// the only capture that is actually of this frame. Set AURORA_DUMP_FRAME=<n> to
++// write frame n as a binary PPM in the working directory, or "every:<n>" for one
++// every n frames.
++struct FrameDumpConfig {
++  bool enabled = false;
++  bool periodic = false;
++  uint64_t target = 0;
++};
++
++FrameDumpConfig parse_frame_dump_config() {
++  FrameDumpConfig config;
++  const char* spec = std::getenv("AURORA_DUMP_FRAME");
++  if (spec == nullptr || *spec == '\0') {
++    return config;
++  }
++  std::string_view view{spec};
++  if (view.starts_with("every:")) {
++    config.periodic = true;
++    view.remove_prefix(6);
++  }
++  uint64_t value = 0;
++  const auto result = std::from_chars(view.data(), view.data() + view.size(), value);
++  if (result.ec != std::errc{} || value == 0) {
++    return config;
++  }
++  config.enabled = true;
++  config.target = value;
++  return config;
++}
++
++bool should_dump_frame(uint64_t frameNo) {
++  static const FrameDumpConfig config = parse_frame_dump_config();
++  if (!config.enabled) {
++    return false;
++  }
++  return config.periodic ? (frameNo % config.target) == 0 : frameNo == config.target;
++}
++
++void write_frame_ppm(uint64_t frameNo, const uint8_t* pixels, uint32_t width, uint32_t height, uint32_t bytesPerRow,
++                     bool bgra) {
++  char path[64];
++  std::snprintf(path, sizeof(path), "frame_%llu.ppm", static_cast<unsigned long long>(frameNo));
++  FILE* out = std::fopen(path, "wb");
++  if (out == nullptr) {
++    Log.warn("Frame dump: cannot open {}", path);
++    return;
++  }
++  std::fprintf(out, "P6\n%u %u\n255\n", width, height);
++  std::vector<uint8_t> row(static_cast<size_t>(width) * 3);
++  for (uint32_t y = 0; y < height; ++y) {
++    const uint8_t* src = pixels + static_cast<size_t>(y) * bytesPerRow;
++    for (uint32_t x = 0; x < width; ++x) {
++      row[x * 3 + 0] = src[x * 4 + (bgra ? 2 : 0)];
++      row[x * 3 + 1] = src[x * 4 + 1];
++      row[x * 3 + 2] = src[x * 4 + (bgra ? 0 : 2)];
++    }
++    std::fwrite(row.data(), 1, row.size(), out);
++  }
++  std::fclose(out);
++  Log.info("Frame dump: wrote {} ({}x{})", path, width, height);
++}
++
++struct PendingFrameDump {
++  wgpu::Buffer buffer;
++  uint32_t width = 0;
++  uint32_t height = 0;
++  uint32_t bytesPerRow = 0;
++  bool bgra = true;
++};
++
++// Records the copy on this frame's encoder. The readback itself has to wait for
++// the submit that carries it, so the caller resolves this after Submit.
++PendingFrameDump record_frame_dump(const wgpu::CommandEncoder& encoder) {
++  PendingFrameDump pending;
++  const auto& source = webgpu::present_source();
++  if (!source.texture) {
++    return pending;
++  }
++  pending.width = source.size.width;
++  pending.height = source.size.height;
++  pending.bgra = source.format == wgpu::TextureFormat::BGRA8Unorm ||
++                 source.format == wgpu::TextureFormat::BGRA8UnormSrgb;
++  // CopyTextureToBuffer requires a 256-byte-aligned row stride.
++  pending.bytesPerRow = (pending.width * 4 + 255) & ~255u;
++  const wgpu::BufferDescriptor descriptor{
++      .label = "Frame dump staging buffer",
++      .usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead,
++      .size = static_cast<uint64_t>(pending.bytesPerRow) * pending.height,
++  };
++  pending.buffer = g_device.CreateBuffer(&descriptor);
++  const wgpu::TexelCopyTextureInfo src{.texture = source.texture};
++  const wgpu::TexelCopyBufferInfo dst{
++      .layout = {.bytesPerRow = pending.bytesPerRow, .rowsPerImage = pending.height},
++      .buffer = pending.buffer,
++  };
++  const wgpu::Extent3D extent{.width = pending.width, .height = pending.height, .depthOrArrayLayers = 1};
++  encoder.CopyTextureToBuffer(&src, &dst, &extent);
++  return pending;
++}
++
++void resolve_frame_dump(PendingFrameDump& pending, uint64_t frameNo) {
++  if (!pending.buffer) {
++    return;
++  }
++  bool done = false;
++  bool ok = false;
++  pending.buffer.MapAsync(wgpu::MapMode::Read, 0, wgpu::kWholeMapSize, wgpu::CallbackMode::AllowProcessEvents,
++                          [&done, &ok](wgpu::MapAsyncStatus status, wgpu::StringView message) {
++                            ok = status == wgpu::MapAsyncStatus::Success;
++                            if (!ok) {
++                              Log.warn("Frame dump: map failed: {}", std::string_view{message});
++                            }
++                            done = true;
++                          });
++  while (!done) {
++    webgpu::g_instance.ProcessEvents();
++  }
++  if (ok) {
++    const auto* data = static_cast<const uint8_t*>(pending.buffer.GetConstMappedRange());
++    if (data != nullptr) {
++      write_frame_ppm(frameNo, data, pending.width, pending.height, pending.bytesPerRow, pending.bgra);
++    }
++    pending.buffer.Unmap();
++  }
++  pending.buffer = {};
++}
++
+ uint32_t clamp_scissor_coord(double value, uint32_t maximum) noexcept {
+   if (!std::isfinite(value)) {
+     return 0;
+@@ -366,6 +504,12 @@
+     } else {
+       Log.info("Skipping present; window not presentable");
+     }
++    static uint64_t sDumpFrameNo = 0;
++    ++sDumpFrameNo;
++    PendingFrameDump frameDump;
++    if (should_dump_frame(sDumpFrameNo)) {
++      frameDump = record_frame_dump(encoder);
++    }
+     webgpu::gpu_prof::frame_end(encoder);
+     const wgpu::CommandBufferDescriptor cmdBufDescriptor{.label = "Redraw command buffer"};
+     const auto buffer = encoder.Finish(&cmdBufDescriptor);
+@@ -373,6 +517,7 @@
+       ZoneScopedN("Queue Submit");
+       g_queue.Submit(1, &buffer);
+     }
++    resolve_frame_dump(frameDump, sDumpFrameNo);
+     webgpu::gpu_prof::after_submit();
+     if (canPresent && g_surface) {
+       ZoneScopedN("Present");
+--- a/lib/card/DolphinCardPath.cpp
++++ b/lib/card/DolphinCardPath.cpp
+@@ -5,7 +5,8 @@
+ #if WIN32
+ #include "windows.h"
+ #include "winreg.h"
+-#include "shlobj_core.h"
++// mingw-w64 has no shlobj_core.h; the MSVC shlobj.h includes it anyway
++#include "shlobj.h"
+ #endif
+ 
+ #include <SDL3/SDL_filesystem.h>
+--- a/lib/dolphin/gx/GXVert.cpp
++++ b/lib/dolphin/gx/GXVert.cpp
+@@ -2,6 +2,8 @@
+ #include "__gx.h"
+ #include "../../gx/fifo.hpp"
+ 
++#include <cstring>
++
+ namespace {
+ // Track vertex count between GXBegin/GXEnd for mismatch detection
+ u16 sBeginNVerts = 0;
+@@ -91,6 +93,19 @@
+   }
+ }
+ 
++AuroraWGPipe __GXWGFifo;
++
++void __GXWGFifoWriteU8(u8 v) { GX_WRITE_U8(v); }
++void __GXWGFifoWriteU16(u16 v) { GX_WRITE_U16(v); }
++void __GXWGFifoWriteU32(u32 v) { GX_WRITE_U32(v); }
++void __GXWGFifoWriteU64(u64 v) { GX_WRITE_U64(v); }
++void __GXWGFifoWriteF32(f32 v) { GX_WRITE_F32(v); }
++void __GXWGFifoWriteF64(f64 v) {
++  u64 bits;
++  std::memcpy(&bits, &v, sizeof(bits));
++  GX_WRITE_U64(bits);
++}
++
+ void GXPosition3f32(f32 x, f32 y, f32 z) {
+   GX_WRITE_F32(x);
+   GX_WRITE_F32(y);
+--- a/lib/dolphin/os/OSMemory.cpp
++++ b/lib/dolphin/os/OSMemory.cpp
+@@ -141,7 +141,22 @@
+ }
+ #else
+ static void* AllocMEM1(u32 size) {
+-#if defined(__unix__)
++#if defined(_WIN32)
++  // Same reasoning as the POSIX branch below. The debug build above hides MEM1
++  // inside an 8 GiB guard reservation to catch pointer truncation; with NDEBUG
++  // there are no guard pages, so claim the real GameCube address instead and let
++  // truncation actually work.
++  void* const desired = reinterpret_cast<void*>(static_cast<uintptr_t>(0x80000000));
++  void* const ptr = VirtualAlloc(desired, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
++  if (ptr == desired) {
++    return ptr;
++  }
++  if (ptr != nullptr) {
++    VirtualFree(ptr, 0, MEM_RELEASE);
++  }
++  Log.warn("Could not reserve MEM1 at 0x80000000; falling back to calloc. "
++           "Code that truncates MEM1 pointers to 32 bits will misbehave.");
++#elif defined(__unix__)
+   // Decomps built against this layer routinely do 32-bit arithmetic on MEM1
+   // pointers and tell heaps apart by testing bit 31, so MEM1 has to live at a
+   // GameCube-like 0x8xxxxxxx address instead of wherever malloc lands. Ask for
+--- a/lib/gfx/recording.cpp
++++ b/lib/gfx/recording.cpp
+@@ -558,6 +558,39 @@
+   AURORA_ASSERT(g_recorder.currentRenderPass == UINT32_MAX,
+                 "end_frame called before finish finalized the current render pass");
+   auto& frame = g_recorder.frame();
++#ifdef OPENSTRIKERS_FRAME_STATS
++  {
++    static uint32_t sFrameNo = 0;
++    if ((sFrameNo++ % 60) == 0) {
++      size_t cmds = 0;
++      for (const auto& p : g_recorder.passes()) {
++        cmds += p.commands.size();
++      }
++      Log.info("frame {}: draws={} merged={} passes={} commands={} verts={} uniforms={}", sFrameNo,
++               g_recorder.drawCallCount, g_recorder.mergedDrawCallCount, g_recorder.passes().size(), cmds,
++               frame.verts.size(), frame.uniforms.size());
++      Log.info("  logicalVp=({:.0f},{:.0f} {:.0f}x{:.0f}) renderVp=({:.0f},{:.0f} {:.0f}x{:.0f}) "
++               "logicalSc=({},{} {}x{}) renderSc=({},{} {}x{}) logicalFb={}x{} target={}x{}",
++               gx::g_gxState.logicalViewport.left, gx::g_gxState.logicalViewport.top,
++               gx::g_gxState.logicalViewport.width, gx::g_gxState.logicalViewport.height,
++               gx::g_gxState.renderViewport.left, gx::g_gxState.renderViewport.top,
++               gx::g_gxState.renderViewport.width, gx::g_gxState.renderViewport.height,
++               gx::g_gxState.logicalScissor.x, gx::g_gxState.logicalScissor.y, gx::g_gxState.logicalScissor.width,
++               gx::g_gxState.logicalScissor.height, gx::g_gxState.renderScissor.x, gx::g_gxState.renderScissor.y,
++               gx::g_gxState.renderScissor.width, gx::g_gxState.renderScissor.height, gx::logical_fb_size().x,
++               gx::logical_fb_size().y, get_render_target_size().x, get_render_target_size().y);
++      uint32_t passIdx = 0;
++      for (const auto& p : g_recorder.passes()) {
++        const auto& c = p.colorAttachments[SceneColorAttachmentIndex];
++        Log.info("  pass {} '{}' {}x{} loadOp={} clear=({:.2f},{:.2f},{:.2f},{:.2f}) hasDraws={} sealed={} "
++                 "commands={} resolve={}",
++                 passIdx++, p.label, c.size.width, c.size.height, magic_enum::enum_name(c.loadOp), c.clearValue.x(),
++                 c.clearValue.y(), c.clearValue.z(), c.clearValue.w(), p.hasDraws, p.sealed, p.commands.size(),
++                 static_cast<bool>(p.resolveTarget));
++      }
++    }
++  }
++#endif
+   frame.stats.drawCallCount = g_recorder.drawCallCount;
+   frame.stats.mergedDrawCallCount = g_recorder.mergedDrawCallCount;
+   frame.stats.lastVertSize = frame.verts.size();
+@@ -744,7 +777,7 @@
+ 
+ template <>
+ gx::DrawData* get_last_draw_command() {
+-  if (g_recorder.currentRenderPass >= current_render_passes().size()) {
++  if (!g_recorder.active() || g_recorder.currentRenderPass >= current_render_passes().size()) {
+     return nullptr;
+   }
+   auto& last = current_render_passes()[g_recorder.currentRenderPass].commands.back();
+@@ -755,7 +788,11 @@
+ }
+ 
+ Vec2<uint32_t> get_render_target_size() noexcept {
+-  if (g_recorder.currentRenderPass < current_render_passes().size()) {
++  // The FIFO can be drained outside an active recording session (GXDrawDone is
++  // legal at any time), in which case there is no frame packet to ask and
++  // current_render_passes() would dereference a null one. Fall back to the
++  // window size, which is what an inactive recorder would have targeted anyway.
++  if (g_recorder.active() && g_recorder.currentRenderPass < current_render_passes().size()) {
+     const auto& size =
+         current_render_passes()[g_recorder.currentRenderPass].colorAttachments[SceneColorAttachmentIndex].size;
+     return {size.width, size.height};
+--- a/lib/gx/fifo.cpp
++++ b/lib/gx/fifo.cpp
+@@ -232,7 +232,11 @@
+ bool in_display_list() { return detail::sInDisplayList; }
+ 
+ void drain() {
+-  if (detail::sBufferSize == 0) {
++  // publish() refuses to hand commands to the processor outside an active
++  // frame; drain must honour the same rule or a GXDrawDone issued between
++  // frames runs the whole buffer with no frame packet behind the recorder.
++  // The bytes stay queued and are processed by the next in-frame drain.
++  if (detail::sBufferSize == 0 || !sFrameActive) {
+     return;
+   }
+ 
+--- a/lib/main.cpp
++++ b/lib/main.cpp
+@@ -1,6 +1,18 @@
+ #include <aurora/main.h>
+ #undef main
+ 
++// The prebuilt SDL3 package ships no SDL3_main library. On Windows SDL_main.h
++// would rename the main() below to SDL_main() and nothing would supply a real
++// entry point, so mingw's ld falls back to the GUI subsystem and asks for
++// WinMain. Own main() ourselves and tell SDL it is ready.
++#if defined(_WIN32)
++#define SDL_MAIN_HANDLED
++#endif
+ #include <SDL3/SDL_main.h>
+ 
+-int main(int argc, char** argv) { return aurora_main(argc, argv); }
++int main(int argc, char** argv) {
++#if defined(_WIN32)
++  SDL_SetMainReady();
++#endif
++  return aurora_main(argc, argv);
++}
+--- a/lib/webgpu/gpu.cpp
++++ b/lib/webgpu/gpu.cpp
+@@ -27,8 +27,10 @@
+ 
+ #ifdef WEBGPU_DAWN
+ #include "../dawn/TracyPlatform.hpp"
++#if !defined(__MINGW32__)
+ #include <dawn/native/DawnNative.h>
+ #endif
++#endif
+ 
+ namespace aurora::gx {
+ void clear_copy_texture_cache() noexcept;
+@@ -758,7 +760,14 @@
+         .requiredFeatureCount = requiredInstanceFeatures.size(),
+         .requiredFeatures = requiredInstanceFeatures.data(),
+     };
+-#ifdef WEBGPU_DAWN
++// dawn::native::DawnInstanceDescriptor's constructor is an out-of-line export
++// from the prebuilt Dawn DLL, which is built with MSVC and therefore uses MSVC
++// name mangling. A mingw-w64 build emits Itanium mangling and cannot resolve it.
++// Everything else we need from Dawn crosses the DLL boundary through the plain C
++// wgpu* API, which is ABI-neutral, so skip this descriptor there. The only thing
++// lost is routing Dawn's internal log messages through our logger;
++// backendValidationLevel already defaults to Disabled.
++#if defined(WEBGPU_DAWN) && !defined(__MINGW32__)
+     dawn::native::DawnInstanceDescriptor dawnInstanceDescriptor;
+     dawnInstanceDescriptor.backendValidationLevel = dawn::native::BackendValidationLevel::Disabled;
+     dawnInstanceDescriptor.SetLoggingCallback(wgpu_log);

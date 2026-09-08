@@ -1,0 +1,77 @@
+--- a/src/Game/Audio/AudioLoader.cpp
++++ b/src/Game/Audio/AudioLoader.cpp
+@@ -1048,7 +1048,7 @@
+     Audio::gPowerupSFX.ShutdownPlaySet();
+     Audio::gStadGenSFX.ShutdownPlaySet();
+     Audio::gCrowdSFX.ShutdownPlaySet();
+-    SlotPoolBase::BaseFreeBlocks(&SFXPlaySet::m_TrackedSFXSlotPool, 0x24);
++    SlotPoolBase::BaseFreeBlocks(&SFXPlaySet::m_TrackedSFXSlotPool, sizeof(SFXPlaySet));
+     PlatAudio::UnloadAllSoundGroupsOnStack(sebringAudioFileData, 1);
+     Audio::gWorldSFX.StopPlayingAllTrackedSFX();
+ }
+--- a/src/Game/TransitionTask.cpp
++++ b/src/Game/TransitionTask.cpp
+@@ -847,7 +847,7 @@
+     SidelineExplodableManager::DestroyAllActiveFragments(true);
+     WorldManager::DestroyWorld();
+ 
+-    SlotPoolBase::BaseFreeBlocks(&SFXPlaySet::m_TrackedSFXSlotPool, 0x24);
++    SlotPoolBase::BaseFreeBlocks(&SFXPlaySet::m_TrackedSFXSlotPool, sizeof(SFXPlaySet));
+     SidelineExplodableManager::CleanUp();
+     ThePhysicsLoader.DestroyPhysics();
+     FrontEnd::Destroy();
+--- a/src/Game/CharacterTemplate.cpp
++++ b/src/Game/CharacterTemplate.cpp
+@@ -709,8 +709,8 @@
+     g_GoalieTextureInfo[7].bLoaded = 0;
+     g_GoalieTextureInfo[8].bLoaded = 0;
+ 
+-    SlotPoolBase::BaseFreeBlocks(&AnimTriggerCallbackInfo::m_AnimTriggerCallbackInfoSlotPool, 8);
+-    SlotPoolBase::BaseFreeBlocks(&ScriptAction::m_ScriptActionSlotPool, 0x80);
++    SlotPoolBase::BaseFreeBlocks(&AnimTriggerCallbackInfo::m_AnimTriggerCallbackInfoSlotPool, sizeof(AnimTriggerCallbackInfo));
++    SlotPoolBase::BaseFreeBlocks(&ScriptAction::m_ScriptActionSlotPool, sizeof(ScriptAction));
+ }
+ 
+ /**
+--- a/src/Game/objectblur.cpp
++++ b/src/Game/objectblur.cpp
+@@ -27,7 +27,7 @@
+ {
+     nlDeleteDLRing<BlurHandler>(&m_activeBlurHandler);
+     m_activeBlurHandler = NULL;
+-    SlotPoolBase::BaseFreeBlocks(&BlurHandler::m_BlurHandlerSlotPool, 0x4C);
++    SlotPoolBase::BaseFreeBlocks(&BlurHandler::m_BlurHandlerSlotPool, sizeof(BlurHandler));
+ }
+ 
+ /**
+--- a/src/Game/Render/SidelineExplodable.cpp
++++ b/src/Game/Render/SidelineExplodable.cpp
+@@ -737,7 +737,7 @@
+ 
+     if (SidelineExplodableNode::sSidelineExplodableNodeSlotPool.m_FreeList == NULL)
+     {
+-        SlotPoolBase::BaseAddNewBlock(&SidelineExplodableNode::sSidelineExplodableNodeSlotPool, 8);
++        SlotPoolBase::BaseAddNewBlock(&SidelineExplodableNode::sSidelineExplodableNodeSlotPool, sizeof(SidelineExplodableNode));
+     }
+ 
+     SlotPoolEntry* entry = SidelineExplodableNode::sSidelineExplodableNodeSlotPool.m_FreeList;
+--- a/src/Game/Render/StaticModelExplodable.cpp
++++ b/src/Game/Render/StaticModelExplodable.cpp
+@@ -69,7 +69,7 @@
+             pNode = NULL;
+             if (pPool->m_FreeList == NULL)
+             {
+-                SlotPoolBase::BaseAddNewBlock(&SidelineExplodableNode::sSidelineExplodableNodeSlotPool, 8);
++                SlotPoolBase::BaseAddNewBlock(&SidelineExplodableNode::sSidelineExplodableNodeSlotPool, sizeof(SidelineExplodableNode));
+             }
+ 
+             SlotPoolEntry* pEntry = pPool->m_FreeList;
+@@ -97,7 +97,7 @@
+             pNode = NULL;
+             if (pPool->m_FreeList == NULL)
+             {
+-                SlotPoolBase::BaseAddNewBlock(&SidelineExplodableNode::sSidelineExplodableNodeSlotPool, 8);
++                SlotPoolBase::BaseAddNewBlock(&SidelineExplodableNode::sSidelineExplodableNodeSlotPool, sizeof(SidelineExplodableNode));
+             }
+ 
+             SlotPoolEntry* pEntry = pPool->m_FreeList;

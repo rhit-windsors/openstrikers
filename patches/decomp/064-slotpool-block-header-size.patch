@@ -1,0 +1,17 @@
+diff --git a/src/NL/nlSlotPool.cpp b/src/NL/nlSlotPool.cpp
+--- a/src/NL/nlSlotPool.cpp
++++ b/src/NL/nlSlotPool.cpp
+@@ -22,7 +22,12 @@
+         }
+ 
+         totalSlotMemory = slotSize * numSlots;
+-        memoryBlock = slotPool->m_AllocFn(totalSlotMemory + 4);
++        // The trailing 4 bytes were sizeof(SlotPoolBlock) on GameCube, where its
++        // single "next" pointer was 4 bytes wide. With 64-bit pointers the block
++        // header is 8 bytes and writing it overruns the allocation, clobbering the
++        // adjacent free-list node's m_next. BaseFreeBlocks() recovers the base
++        // pointer from totalSlotMemory, so widening the header here is safe.
++        memoryBlock = slotPool->m_AllocFn(totalSlotMemory + sizeof(SlotPoolBlock));
+         nlListAddStart<SlotPoolBlock>(&slotPool->m_BlockList, (SlotPoolBlock*)((u8*)memoryBlock + totalSlotMemory), 0);
+ 
+         for (u32 i = 0; i < numSlots; i++)

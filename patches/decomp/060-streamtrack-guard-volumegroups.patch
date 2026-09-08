@@ -1,0 +1,19 @@
+diff --git a/include/Game/Audio/StreamTrack.h b/include/Game/Audio/StreamTrack.h
+--- a/include/Game/Audio/StreamTrack.h
++++ b/include/Game/Audio/StreamTrack.h
+@@ -422,6 +422,7 @@
+     }
+     virtual void OnMasterVolumeChange(Audio::MasterVolume::VOLUME_GROUP VolumeGroup)
+     {
++#ifndef GOLDEN_DISABLE_AUDIO
+         int trackOffset;
+         unsigned long track;
+         float vol = ::gfVolumeGroups[VolumeGroup];
+@@ -441,6 +442,7 @@
+                 }
+             }
+         }
++#endif // GOLDEN_DISABLE_AUDIO
+     }
+ 
+     /* 0x6C */ nlStaticSortedSlot<StreamTrack, N> m_Tracks;

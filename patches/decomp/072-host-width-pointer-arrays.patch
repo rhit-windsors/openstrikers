@@ -1,0 +1,94 @@
+--- a/src/Game/SH/SHCrossFader.cpp
++++ b/src/Game/SH/SHCrossFader.cpp
+@@ -128,7 +128,9 @@
+             mNumImages++;
+         } while (true);
+ 
+-        mImageInstances = (TLImageInstance**)nlMalloc(mNumImages * 4, 8, false);
++        // sizeof, not 4: this is an array of host pointers, not of GameCube
++        // ones, so the original size was half of what the loop below writes.
++        mImageInstances = (TLImageInstance**)nlMalloc(mNumImages * sizeof(TLImageInstance*), 8, false);
+ 
+         for (int i = 0; i < mNumImages; i++)
+         {
+--- a/src/Game/FE/feCaptainGridComponent.cpp
++++ b/src/Game/FE/feCaptainGridComponent.cpp
+@@ -73,7 +73,8 @@
+     int i;
+ 
+     activeslide = mParentComponent->GetActiveSlide();
+-    mInstanceTable = (TLInstance**)nlMalloc(NUM_CAPTAIN_CELL_ITEMS * 4, 8, false);
++    // sizeof, not 4: an array of host pointers is twice the GameCube width.
++    mInstanceTable = (TLInstance**)nlMalloc(NUM_CAPTAIN_CELL_ITEMS * sizeof(TLInstance*), 8, false);
+ 
+     for (i = 0; i < (int)NUM_CAPTAIN_CELL_ITEMS; i++)
+     {
+--- a/src/Game/Effects/EmissionManager.cpp
++++ b/src/Game/Effects/EmissionManager.cpp
+@@ -192,7 +192,7 @@
+         {
+             unsigned int numEntries = tree->m_NumElements;
+             LMEntry* node = tree->m_Root;
+-            iter->m_Stack = (LMEntry**)nlMalloc((numEntries + 1) * 4, 8, false);
++            iter->m_Stack = (LMEntry**)nlMalloc((numEntries + 1) * sizeof(LMEntry*), 8, false);
+             iter->m_NumStackEntries = 0;
+ 
+             if (node != NULL)
+--- a/src/Game/NetMeshModelLoader.cpp
++++ b/src/Game/NetMeshModelLoader.cpp
+@@ -322,7 +322,7 @@
+         unsigned int numEntries = edgeTree->m_NumElements;
+         EdgeEntry* node = edgeTree->m_Root;
+ 
+-        iter->m_Stack = (EdgeEntry**)nlMalloc((numEntries + 1) * 4, 8, false);
++        iter->m_Stack = (EdgeEntry**)nlMalloc((numEntries + 1) * sizeof(EdgeEntry*), 8, false);
+         iter->m_NumStackEntries = 0;
+ 
+         if (node != NULL)
+@@ -426,7 +426,7 @@
+         unsigned int numEntries = vertexTree->m_NumElements;
+         node = vertexTree->m_Root;
+ 
+-        vertexIter->m_Stack = (VertexEntry**)nlMalloc((numEntries + 1) * 4, 8, false);
++        vertexIter->m_Stack = (VertexEntry**)nlMalloc((numEntries + 1) * sizeof(VertexEntry*), 8, false);
+         vertexIter->m_NumStackEntries = 0;
+ 
+         if (node != NULL)
+@@ -484,7 +484,7 @@
+         unsigned int numEntries = edgeTree->m_NumElements;
+         edgeNode = edgeTree->m_Root;
+ 
+-        edgeIter->m_Stack = (EdgeEntry**)nlMalloc((numEntries + 1) * 4, 8, false);
++        edgeIter->m_Stack = (EdgeEntry**)nlMalloc((numEntries + 1) * sizeof(EdgeEntry*), 8, false);
+         edgeIter->m_NumStackEntries = 0;
+ 
+         if (edgeNode != NULL)
+@@ -540,7 +540,7 @@
+         unsigned int numEntries = vertexTree->m_NumElements;
+         node = vertexTree->m_Root;
+ 
+-        vertexIter->m_Stack = (VertexEntry**)nlMalloc((numEntries + 1) * 4, 8, false);
++        vertexIter->m_Stack = (VertexEntry**)nlMalloc((numEntries + 1) * sizeof(VertexEntry*), 8, false);
+         vertexIter->m_NumStackEntries = 0;
+ 
+         if (node != NULL)
+@@ -632,7 +632,7 @@
+         unsigned int numEntries = edgeTree->m_NumElements;
+         edgeNode = edgeTree->m_Root;
+ 
+-        edgeIter->m_Stack = (EdgeEntry**)nlMalloc((numEntries + 1) * 4, 8, false);
++        edgeIter->m_Stack = (EdgeEntry**)nlMalloc((numEntries + 1) * sizeof(EdgeEntry*), 8, false);
+         edgeIter->m_NumStackEntries = 0;
+ 
+         if (edgeNode != NULL)
+--- a/src/Game/Render/StaticModelExplodable.cpp
++++ b/src/Game/Render/StaticModelExplodable.cpp
+@@ -40,7 +40,7 @@
+     if (pWalkData != NULL)
+     {
+         pNode = pWorld->m_helperMap.m_Root;
+-        pWalkData->mStack = (AVLTreeEntry<unsigned long, HelperObject*>**)nlMalloc((pWorld->m_helperMap.m_NumElements + 1) * 4, 8, false);
++        pWalkData->mStack = (AVLTreeEntry<unsigned long, HelperObject*>**)nlMalloc((pWorld->m_helperMap.m_NumElements + 1) * sizeof(AVLTreeEntry<unsigned long, HelperObject*>*), 8, false);
+         pWalkData->mCount = 0;
+ 
+         if (pNode != NULL)

@@ -1,0 +1,79 @@
+--- a/src/Game/ReplayChoreo.cpp
++++ b/src/Game/ReplayChoreo.cpp
+@@ -16,7 +16,9 @@
+ 
+ unsigned int nlRandom(unsigned int range, unsigned int* seed);
+ extern unsigned int nlDefaultSeed;
+-double fabs(double);
++// glibc declares this with an exception specifier, so the decomp's local
++// re-declaration conflicts with it. Use the libc header instead.
++// double fabs(double);
+ 
+ namespace
+ {
+--- a/src/Game/Sys/gcmemcard.cpp
++++ b/src/Game/Sys/gcmemcard.cpp
+@@ -3,8 +3,11 @@
+ #include "NL/nlAlgorithm.h"
+ #include "NL/nlMemory.h"
+ #include <dolphin/dvd.h>
++#include <string.h>
+ 
+-extern "C" void* memset(void*, int, unsigned long);
++// glibc declares this with an exception specifier, so the decomp's local
++// re-declaration conflicts with it. Use the libc header instead.
++// extern "C" void* memset(void*, int, unsigned long);
+ 
+ inline MemCard::MemCard(unsigned long slot)
+     : m_State(IS_IDLE)
+@@ -22,7 +25,7 @@
+ MemCard** g_MemCards = MemCards;
+ bool MemCard::s_InitDone;
+ 
+-extern "C" void* memset(void*, int, unsigned long);
++// extern "C" void* memset(void*, int, unsigned long);
+ 
+ /**
+  * Offset/Address/Size: 0x12DC | 0x801CAA4C | size: 0xF4
+--- a/src/Game/Sys/THPSimple.cpp
++++ b/src/Game/Sys/THPSimple.cpp
+@@ -10,11 +10,15 @@
+ #include "dolphin/thp/THPPlayer.h"
+ #include "dolphin/thp/THPVideoDecode.h"
+ 
++#include <string.h>
++
+ static void THPAudioMixCallback();
+ 
+-extern "C" void* memcpy(void*, const void*, unsigned long);
+-extern "C" void* memset(void*, int, unsigned long);
+-extern "C" int strcmp(const char*, const char*);
++// glibc declares this with an exception specifier, so the decomp's local
++// re-declaration conflicts with it. Use the libc header instead.
++// extern "C" void* memcpy(void*, const void*, unsigned long);
++// extern "C" void* memset(void*, int, unsigned long);
++// extern "C" int strcmp(const char*, const char*);
+ 
+ static THPSimpleControl SimpleControl;
+ static s32 NumReadBuffers;
+--- a/src/NL/glx/glxMatrix.cpp
++++ b/src/NL/glx/glxMatrix.cpp
+@@ -2,11 +2,14 @@
+ #include "math.h"
+ 
+ #include <stddef.h>
++#include <string.h>
+ 
+-extern "C"
+-{
+-    void* memcpy(void* dest, const void* src, size_t num);
+-}
++// glibc declares this with an exception specifier, so the decomp's local
++// re-declaration conflicts with it. Use the libc header instead.
++// extern "C"
++// {
++//     void* memcpy(void* dest, const void* src, size_t num);
++// }
+ 
+ /**
+  * Offset/Address/Size: 0x0 | 0x801B6568 | size: 0x64

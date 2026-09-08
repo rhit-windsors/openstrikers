@@ -1,0 +1,113 @@
+diff --git a/include/NL/nlMath.h b/include/NL/nlMath.h
+--- a/include/NL/nlMath.h
++++ b/include/NL/nlMath.h
+@@ -28,7 +28,7 @@
+ 
+ inline float nlAbs(const float& value)
+ {
+-    return std::fabsf(value);
++    return std::fabs(value);
+ }
+ 
+ inline float AngUnitsToRad_fromUnsignedShort(unsigned short sUnits)
+diff --git a/src/Game/AI/GoalieActions.cpp b/src/Game/AI/GoalieActions.cpp
+--- a/src/Game/AI/GoalieActions.cpp
++++ b/src/Game/AI/GoalieActions.cpp
+@@ -166,7 +166,7 @@
+                 const nlVector3& v3HeadPos = GetJointPosition(m_nHeadJointIndex);
+                 v3HeadCopy = v3HeadPos;
+                 float fDX2 = 0.0f;
+-                fAbsX = std::fabsf(v3HeadCopy.x);
++                fAbsX = std::fabs(v3HeadCopy.x);
+                 float fLimitH = cField::GetGoalLineX(1U) - 0.5f;
+                 float fNetY = 0.5f * cNet::m_fNetWidth;
+                 if (fAbsX > fLimitH)
+@@ -178,7 +178,7 @@
+                 nlVector3 v3RHandCopy;
+                 const nlVector3& v3RHandPos = GetJointPosition(m_nRightHandJointIndex);
+                 v3RHandCopy = v3RHandPos;
+-                fAbsX = std::fabsf(v3RHandCopy.x);
++                fAbsX = std::fabs(v3RHandCopy.x);
+                 float fLimitR = cField::GetGoalLineX(1U) - 0.4f;
+                 if (fAbsX > fLimitR)
+                 {
+@@ -191,7 +191,7 @@
+                 }
+                 const nlVector3& v3LHandPos = GetJointPosition(m_nLeftHandJointIndex);
+                 v3LHandCopy = v3LHandPos;
+-                fAbsX = std::fabsf(v3LHandCopy.x);
++                fAbsX = std::fabs(v3LHandCopy.x);
+                 if (fAbsX > fLimitR)
+                 {
+                     if ((float)fabs(v3LHandCopy.y) > fNetY)
+@@ -239,7 +239,7 @@
+         float fNetY;
+         float fDX;
+         fDX = 0.0f;
+-        fAbsX = std::fabsf(v3HeadCopyElse.x);
++        fAbsX = std::fabs(v3HeadCopyElse.x);
+         float fLimitH = cField::GetGoalLineX(1U) - 0.5f;
+         fNetY = 0.5f * cNet::m_fNetWidth;
+         if (fAbsX > fLimitH)
+@@ -251,7 +251,7 @@
+         nlVector3 v3RHandCopy;
+         const nlVector3& v3RHandPos = GetJointPosition(m_nRightHandJointIndex);
+         v3RHandCopy = v3RHandPos;
+-        fAbsX = std::fabsf(v3RHandCopy.x);
++        fAbsX = std::fabs(v3RHandCopy.x);
+         float fLimitR = cField::GetGoalLineX(1U) - 0.4f;
+         if (fAbsX > fLimitR)
+         {
+@@ -264,7 +264,7 @@
+         }
+         const nlVector3& v3LHandPos = GetJointPosition(m_nLeftHandJointIndex);
+         v3LHandCopy = v3LHandPos;
+-        fAbsX = std::fabsf(v3LHandCopy.x);
++        fAbsX = std::fabs(v3LHandCopy.x);
+         if (fAbsX > fLimitR)
+         {
+             if ((float)fabs(v3LHandCopy.y) > fNetY)
+diff --git a/src/Game/PhysicsAIBall.cpp b/src/Game/PhysicsAIBall.cpp
+--- a/src/Game/PhysicsAIBall.cpp
++++ b/src/Game/PhysicsAIBall.cpp
+@@ -614,8 +614,8 @@
+  */
+ bool PhysicsAIBall::DidBallJustEnterNet(const nlVector3& oldPosition, const nlVector3 newPosition)
+ {
+-    float absOldX = std::fabsf(oldPosition.x);
+-    float absNewX = std::fabsf(newPosition.x);
++    float absOldX = std::fabs(oldPosition.x);
++    float absNewX = std::fabs(newPosition.x);
+     float goalLineX = cField::GetGoalLineX(1U) + g_pBall->GetPhysicsBall()->GetRadius() - 0.08f;
+ 
+     if ((absOldX < goalLineX) && (absNewX >= goalLineX))
+@@ -625,7 +625,7 @@
+ 
+         deltaX = newPosition.x - oldPosition.x;
+ 
+-        if (std::fabsf(deltaX) > 0.0001f)
++        if (std::fabs(deltaX) > 0.0001f)
+         {
+             float alpha = (newPosition.x > 0.0f) ? goalLineX : -goalLineX;
+             alpha = (alpha - oldPosition.x) / deltaX;
+@@ -653,5 +653,5 @@
+ bool PhysicsAIBall::IsBallOutsideNet(const nlVector3& ballPosition)
+ {
+     float radius = g_pBall->GetPhysicsBall()->GetRadius();
+-    return std::fabsf(ballPosition.x) < cField::GetGoalLineX(1U) + radius - 0.08f;
++    return std::fabs(ballPosition.x) < cField::GetGoalLineX(1U) + radius - 0.08f;
+ }
+diff --git a/src/Game/Render/ElectricFence.cpp b/src/Game/Render/ElectricFence.cpp
+--- a/src/Game/Render/ElectricFence.cpp
++++ b/src/Game/Render/ElectricFence.cpp
+@@ -61,8 +61,8 @@
+     bool yIsPositive = impactPosition.y > 0.0f;
+ 
+     nlVector3 impactPositionPositive = { {
+-        std::fabsf(impactPosition.x),
+-        std::fabsf(impactPosition.y),
++        std::fabs(impactPosition.x),
++        std::fabs(impactPosition.y),
+         impactPosition.z,
+     } };
+ 

@@ -1,0 +1,86 @@
+--- a/src/Game/AI/GoalieSave.cpp
++++ b/src/Game/AI/GoalieSave.cpp
+@@ -276,7 +276,19 @@
+     }
+ 
+     muNumSaveEntries = 0x45;
+-    mpSaveTable = (SaveData*)__construct_new_array(nlMalloc(sizeof(SaveData) * 0x45, 8, false), NULL, NULL,
++    // ClearData frees mpSaveTable - 0x10, so the array has to start 0x10 past
++    // the allocation. MWCC gets there through __construct_new_array, which
++    // writes its own array header into that space and returns the pointer past
++    // it; the shim this port builds against returns the block unchanged, so the
++    // offset has to be applied by hand -- and the allocation has to make room
++    // for it, which it did not. Without both, ClearData hands nlFree a pointer
++    // 0x10 bytes before the block, and the free-ring links land in the middle
++    // of the preceding allocation. Same bug, and same fix, as Config::Config.
++    u8* pSaveTableMem = (u8*)nlMalloc(sizeof(SaveData) * 0x45 + 0x10, 8, false);
++#ifndef __MWERKS__
++    pSaveTableMem += 0x10;
++#endif
++    mpSaveTable = (SaveData*)__construct_new_array(pSaveTableMem, NULL, NULL,
+         sizeof(SaveData), 0x45);
+ 
+     muSTSGoalIndexStart = 0;
+@@ -338,7 +350,12 @@
+     }
+ 
+     muNumPositionEntries = 6;
+-    mpPositionTable = (SavePositionData*)__construct_new_array(nlMalloc(sizeof(SavePositionData) * 6, 8, false),
++    // As above: ClearData frees mpPositionTable - 0x10.
++    u8* pPositionTableMem = (u8*)nlMalloc(sizeof(SavePositionData) * 6 + 0x10, 8, false);
++#ifndef __MWERKS__
++    pPositionTableMem += 0x10;
++#endif
++    mpPositionTable = (SavePositionData*)__construct_new_array(pPositionTableMem,
+         NULL, NULL, sizeof(SavePositionData), 6);
+ 
+     for (unsigned int count = 0; count < muNumPositionEntries; count++)
+--- a/src/Game/Effects/EffectsGroup.cpp
++++ b/src/Game/Effects/EffectsGroup.cpp
+@@ -613,7 +613,21 @@
+     }
+     else
+     {
+-        pSpecs = new (nlMalloc(specCount * sizeof(EffectsSpec) + 0x10, 8, false)) EffectsSpec[specCount];
++        // ~EffectsGroup frees m_specs - 0x10, so the array has to start
++        // 0x10 past the allocation. MWCC writes its own array cookie into that
++        // space; the Itanium ABI emits no cookie at all for an element type
++        // with a trivial destructor, so under GCC the offset has to be applied
++        // by hand or the destructor hands nlFree a pointer that was never
++        // allocated. Same fix as Config::Config.
++#ifdef __MWERKS__
++        void* pSpecsMem = nlMalloc(specCount * sizeof(EffectsSpec) + 0x10, 8, false);
++#else
++        static_assert(__is_trivially_destructible(EffectsSpec),
++            "EffectsSpec gained a destructor: GCC now emits an array cookie and the "
++            "manual 0x10 offset below would double-count it");
++        void* pSpecsMem = (char*)nlMalloc(specCount * sizeof(EffectsSpec) + 0x10, 8, false) + 0x10;
++#endif
++        pSpecs = new (pSpecsMem) EffectsSpec[specCount];
+         memcpy(pSpecs, specs, specCount * sizeof(EffectsSpec));
+     }
+ 
+--- a/src/Game/Effects/ParticleSystem.cpp
++++ b/src/Game/Effects/ParticleSystem.cpp
+@@ -39,7 +39,20 @@
+     int i;
+     const int count = MaxNumParticles;
+ 
+-    particleMemory = new (nlMalloc(count * (int)sizeof(Particle) + 0x10, 8, false)) Particle[count];
++    // Destroy() frees particleMemory - 0x10, so the array has to start 0x10
++    // past the allocation. MWCC writes its own array cookie into that space;
++    // the Itanium ABI emits no cookie at all for an element type with a
++    // trivial destructor, so under GCC the offset has to be applied by hand or
++    // the free runs 0x10 bytes before the block. Same fix as Config::Config.
++#ifdef __MWERKS__
++    void* pParticleMem = nlMalloc(count * (int)sizeof(Particle) + 0x10, 8, false);
++#else
++    static_assert(__is_trivially_destructible(Particle),
++        "Particle gained a destructor: GCC now emits an array cookie and the "
++        "manual 0x10 offset below would double-count it");
++    void* pParticleMem = (char*)nlMalloc(count * (int)sizeof(Particle) + 0x10, 8, false) + 0x10;
++#endif
++    particleMemory = new (pParticleMem) Particle[count];
+ 
+     tDebugPrintManager::Print(DC_RENDER, "%dKB used by Particle pool\n", (unsigned)(MaxNumParticles * sizeof(Particle)) >> 10);
+ 

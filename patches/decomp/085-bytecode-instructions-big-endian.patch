@@ -1,0 +1,15 @@
+--- a/src/Game/InterpreterCore.cpp
++++ b/src/Game/InterpreterCore.cpp
+@@ -160,7 +160,11 @@ void InterpreterCore::Step()
+     u32* volatile saved_bp;
+     u16* volatile saved_ip;
+ 
+-    instr = *m_IP;
++#if NL_HOST_BIG_ENDIAN
++    instr = *m_IP;
++#else
++    instr = nlByteSwap(*m_IP);
++#endif
+     op_high = instr & 0xC000;
+     op_low = instr & 0x3FFF;
+ 

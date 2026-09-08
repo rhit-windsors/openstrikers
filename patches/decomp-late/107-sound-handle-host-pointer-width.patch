@@ -1,0 +1,412 @@
+# Sound handles are pointers, so they must be host width.
+#
+# The audio API returns a "voice id" that is really a SFXEmitter* cast to an
+# integer, and the decomp types it as `unsigned long`. That is 32 bits in this
+# build (Windows LLP64), so every handle returned by cGameSFX::Play and its
+# overrides lost the top half of the address. Widened to std::uintptr_t across
+# the virtual chain -- the base declaration and every override have to move
+# together or the overrides stop overriding.
+#
+# Also here: plataudio GetSndIDError() returned 0, which is a plausible handle;
+# it now returns (u32)-1, the value the Nis code already compares against.
+# Nis index comparisons accept both the host-width and the old 32-bit -1.
+--- a/include/Game/Audio/WorldAudio.h
++++ b/include/Game/Audio/WorldAudio.h
+@@ -238,10 +238,10 @@
+     virtual ~cWorldSFX();
+     virtual void Init();
+     virtual void SetSFX(SoundPropAccessor* pSoundPropAccessor);
+-    virtual unsigned long Play(Audio::SoundAttributes& attributes);
+-
+-    unsigned long Play(Audio::eWorldSFX sfx, float volume, float delayTime, bool keepTrack, float panning);
+-    unsigned long PlayRandomReaction(Audio::cWorldSFX::CrowdReactionType dType, float volume, float delayTime, int groupPriority, float fDefaultVolAdjustment);
++    virtual std::uintptr_t Play(Audio::SoundAttributes& attributes);
++
++    std::uintptr_t Play(Audio::eWorldSFX sfx, float volume, float delayTime, bool keepTrack, float panning);
++    std::uintptr_t PlayRandomReaction(Audio::cWorldSFX::CrowdReactionType dType, float volume, float delayTime, int groupPriority, float fDefaultVolAdjustment);
+ 
+     void Stop(Audio::eWorldSFX sfx, cGameSFX::StopFlag flag);
+ };
+--- a/include/Game/CharacterAudio.h
++++ b/include/Game/CharacterAudio.h
+@@ -220,19 +220,19 @@
+     cCharacterSFX();
+     virtual ~cCharacterSFX();
+     virtual void Init();
+-    virtual unsigned long Play(Audio::SoundAttributes& attrs);
+-
+-    unsigned long Play(Audio::eCharSFX sfxType, float fVolume, float fPan, float fAttenuate);
+-    unsigned long Play3D(Audio::eCharSFX sfxType, PosUpdateMethod posUpdateMethod, float fMaxVolume, float fAttenuate);
++    virtual std::uintptr_t Play(Audio::SoundAttributes& attrs);
++
++    std::uintptr_t Play(Audio::eCharSFX sfxType, float fVolume, float fPan, float fAttenuate);
++    std::uintptr_t Play3D(Audio::eCharSFX sfxType, PosUpdateMethod posUpdateMethod, float fMaxVolume, float fAttenuate);
+     void Stop(Audio::eCharSFX sfxType, cGameSFX::StopFlag flag);
+-    unsigned long PlayRandomCharDialogue(CharDialogueType dType, PosUpdateMethod posUpdateMethod, float fVol, float fDelay, bool bAvoidCurrent);
+-    unsigned long PlayRandomCharDialogue(CharDialogueType dType, Audio::SoundAttributes& sndAttributes, bool bAvoidCurrent, unsigned long* pOutSfx);
++    std::uintptr_t PlayRandomCharDialogue(CharDialogueType dType, PosUpdateMethod posUpdateMethod, float fVol, float fDelay, bool bAvoidCurrent);
++    std::uintptr_t PlayRandomCharDialogue(CharDialogueType dType, Audio::SoundAttributes& sndAttributes, bool bAvoidCurrent, unsigned long* pOutSfx);
+     bool IsPlayingRandomCharDialogue(CharDialogueType dType);
+     void StopPlayingRandomCharDialogue(CharDialogueType dType);
+     void StopPlayingAllRandomCharDialogue();
+     void StopPlayingAllCharDialogue();
+     int PlayRandomWalkFootstep(float fVol, bool bNoRepeat);
+-    static unsigned long PlayNISRandomCharDialogue(CharDialogueType dialogueType, NisCharacterClass charIdentifier, float fVol, float fDelay, bool bIs3D, const nlVector3* pInitialPosVector, const nlVector3* pInitialDirVector, unsigned long* unkPtr);
++    static std::uintptr_t PlayNISRandomCharDialogue(CharDialogueType dialogueType, NisCharacterClass charIdentifier, float fVol, float fDelay, bool bIs3D, const nlVector3* pInitialPosVector, const nlVector3* pInitialDirVector, unsigned long* unkPtr);
+     static cCharacter* GetCharacterFromNisCharClass(NisCharacterClass charIdentifier);
+     void StartMovementLoop();
+     void StopMovementLoop();
+--- a/include/Game/GameAudio.h
++++ b/include/Game/GameAudio.h
+@@ -93,9 +93,9 @@
+     bool SetPitchBendOnAllDialogueSFX(unsigned short pitch);
+     bool CheckForHigherPrioritySFX(int priority);
+     bool KillLowerPrioritySFX(int priority);
+-    virtual unsigned long Play(Audio::SoundAttributes& sfxData);
++    virtual std::uintptr_t Play(Audio::SoundAttributes& sfxData);
+     virtual eClassType GetClassType() const { return meClassType; }
+-    SFXPlaySet* KeepTrack(SFXEmitter* pSFXEmitter, const Audio::SoundAttributes& sfxData, unsigned long uVoiceID);
++    SFXPlaySet* KeepTrack(SFXEmitter* pSFXEmitter, const Audio::SoundAttributes& sfxData, std::uintptr_t uVoiceID);
+     void Stop(unsigned long type, cGameSFX::StopFlag stopFlag);
+     void StopEmitter(SFXEmitter* pSFXEmitter, unsigned long type);
+     bool StopTrackedSFX(SFXPlaySet* pSFXPlaySet);
+--- a/include/Game/Render/Nis.h
++++ b/include/Game/Render/Nis.h
+@@ -158,7 +158,7 @@
+     NisAudioData* RemoveNisAudioData(NisAudioData* pNisAudioData);
+     NisAudioData* StopNisAudio(NisAudioData* pNisAudioData, bool bNisEndedNormally);
+     void StopNisAudio(NisAudioType type, const char* str);
+-    void AddNisAudioData(NisAudioType type, unsigned long index, const char* str, bool isEmitter, bool stopAtNisEnd, unsigned long soundType);
++    void AddNisAudioData(NisAudioType type, std::uintptr_t index, const char* str, bool isEmitter, bool stopAtNisEnd, unsigned long soundType);
+ 
+     /* 0x000 */ NisHeader* mHeader;                                             // offset 0x0, size 0x4
+     /* 0x004 */ NisTarget mTarget;                                              // offset 0x4, size 0x4
+--- a/include/Game/Sys/audio.h
++++ b/include/Game/Sys/audio.h
+@@ -182,8 +182,8 @@
+ unsigned long PlaySFXEventFromScript(const SoundEventData&sfxEventData, const char*szSFXType, float fVol, float fDelay);
+ void StopCharSFXbyStr(const char* szSFXType, NisCharacterClass charIdentifier);
+ void StopWorldSFXbyStr(const char* szSFXType);
+-int PlayCharSFXbyStr(const char* szSFXType, NisCharacterClass charIdentifier, float fVol, float fDelay, bool bIs3D, bool bKeepTrack, const nlVector3* pInitialPosVector, const nlVector3* pInitialDirVector, unsigned long* pType);
+-unsigned long PlayWorldSFXbyStr(const char* szSFXType, float fVol, float fDelay, bool bIs3D, bool bKeepTrack, const nlVector3* pInitialPosVector, const nlVector3* pInitialDirVector, unsigned long* pType);
++std::uintptr_t PlayCharSFXbyStr(const char* szSFXType, NisCharacterClass charIdentifier, float fVol, float fDelay, bool bIs3D, bool bKeepTrack, const nlVector3* pInitialPosVector, const nlVector3* pInitialDirVector, unsigned long* pType);
++std::uintptr_t PlayWorldSFXbyStr(const char* szSFXType, float fVol, float fDelay, bool bIs3D, bool bKeepTrack, const nlVector3* pInitialPosVector, const nlVector3* pInitialDirVector, unsigned long* pType);
+ void RemoveDelayedSFX(unsigned long index);
+ int IsDelayedCharSFX(unsigned long sfxType, cGameSFX* pOwner);
+ int AddDelayedSFX(const Audio::SoundAttributes&sfxData, unsigned long uSFXID, float volume, float delay, cGameSFX*pOwnerSFX);
+--- a/src/Game/AI/Fielder.cpp
++++ b/src/Game/AI/Fielder.cpp
+@@ -73,7 +73,7 @@
+ class cWorldSFX : public cGameSFX
+ {
+ public:
+-    unsigned long Play(Audio::SoundAttributes&);
++    std::uintptr_t Play(Audio::SoundAttributes&);
+     void Stop(eWorldSFX, cGameSFX::StopFlag);
+ };
+ 
+--- a/src/Game/Audio/AudioStream.cpp
++++ b/src/Game/Audio/AudioStream.cpp
+@@ -61,10 +61,10 @@
+         nlStrNCpy(out, value, size);
+         break;
+ 
+-    case (s32)0xB59118F1:
+-    {
+-        u32 outValue = (u32)GetTeamName(nlSingleton<GameInfoManager>::Instance()->GetTeam(1));
+-        nlStrNCpy(out, (const char*)outValue, size);
++    case (s32)0xB59118F1:
++    {
++        const char* outValue = GetTeamName(nlSingleton<GameInfoManager>::Instance()->GetTeam(1));
++        nlStrNCpy(out, outValue, size);
+         break;
+     }
+ 
+@@ -149,8 +149,8 @@
+     {
+         int sideInt = g_pTeams[0]->m_nScore < g_pTeams[1]->m_nScore;
+         s16 side = (s16)sideInt;
+-        u32 outValue = (u32)GetTeamName(nlSingleton<GameInfoManager>::Instance()->GetTeam(side));
+-        nlStrNCpy(out, (const char*)outValue, size);
++        const char* outValue = GetTeamName(nlSingleton<GameInfoManager>::Instance()->GetTeam(side));
++        nlStrNCpy(out, outValue, size);
+         break;
+     }
+ 
+--- a/src/Game/Audio/CharacterAudio.cpp
++++ b/src/Game/Audio/CharacterAudio.cpp
+@@ -361,7 +361,7 @@
+     cGameSFX::Init();
+ }
+ 
+-unsigned long cCharacterSFX::Play(eCharSFX sfxType, float fVolume, float fPan, float fAttenuate)
++std::uintptr_t cCharacterSFX::Play(eCharSFX sfxType, float fVolume, float fPan, float fAttenuate)
+ {
+     SoundAttributes attrs;
+     attrs.Init();
+@@ -372,7 +372,7 @@
+     return Play(attrs);
+ }
+ 
+-unsigned long cCharacterSFX::Play3D(eCharSFX sfxType, PosUpdateMethod posUpdateMethod, float fMaxVolume, float fAttenuate)
++std::uintptr_t cCharacterSFX::Play3D(eCharSFX sfxType, PosUpdateMethod posUpdateMethod, float fMaxVolume, float fAttenuate)
+ {
+     SoundAttributes attrs;
+     attrs.Init();
+@@ -388,7 +388,7 @@
+ /**
+  * Offset/Address/Size: 0x114C | 0x8014D4F0 | size: 0x7C
+  */
+-unsigned long cCharacterSFX::Play(SoundAttributes& attrs)
++std::uintptr_t cCharacterSFX::Play(SoundAttributes& attrs)
+ {
+     attrs.me_ClassType = 1;
+     attrs.mi_EmitterGroup = mGroup;
+@@ -417,7 +417,7 @@
+ /**
+  * Offset/Address/Size: 0xC5C | 0x8014D000 | size: 0x4D0
+  */
+-unsigned long cCharacterSFX::PlayRandomCharDialogue(CharDialogueType dType, PosUpdateMethod posUpdateMethod, float fVol, float fDelay, bool bAvoidCurrent)
++std::uintptr_t cCharacterSFX::PlayRandomCharDialogue(CharDialogueType dType, PosUpdateMethod posUpdateMethod, float fVol, float fDelay, bool bAvoidCurrent)
+ {
+     Audio::SoundAttributes sfxAtr;
+ 
+@@ -552,7 +552,7 @@
+ /**
+  * Offset/Address/Size: 0x7C4 | 0x8014CB68 | size: 0x498
+  */
+-unsigned long cCharacterSFX::PlayRandomCharDialogue(CharDialogueType dType, Audio::SoundAttributes& sndAttributes, bool bAvoidCurrent, unsigned long* pOutSfx)
++std::uintptr_t cCharacterSFX::PlayRandomCharDialogue(CharDialogueType dType, Audio::SoundAttributes& sndAttributes, bool bAvoidCurrent, unsigned long* pOutSfx)
+ {
+     if (mbInited == 0)
+     {
+@@ -760,7 +760,7 @@
+ /**
+  * Offset/Address/Size: 0x2F0 | 0x8014C694 | size: 0x1C8
+  */
+-unsigned long cCharacterSFX::PlayNISRandomCharDialogue(CharDialogueType dialogueType, NisCharacterClass charIdentifier, float fVol, float fDelay, bool bIs3D, const nlVector3* pInitialPosVector, const nlVector3* pInitialDirVector, unsigned long* unkPtr)
++std::uintptr_t cCharacterSFX::PlayNISRandomCharDialogue(CharDialogueType dialogueType, NisCharacterClass charIdentifier, float fVol, float fDelay, bool bIs3D, const nlVector3* pInitialPosVector, const nlVector3* pInitialDirVector, unsigned long* unkPtr)
+ {
+     cCharacter* pChar;
+     CharDialogueType dType = dialogueType;
+--- a/src/Game/Audio/GameAudio.cpp
++++ b/src/Game/Audio/GameAudio.cpp
+@@ -564,9 +564,9 @@
+ /**
+  * Offset/Address/Size: 0x1104 | 0x80152648 | size: 0xACC
+  */
+-unsigned long cGameSFX::Play(Audio::SoundAttributes& sfxData)
+-{
+-    unsigned long voiceID;
++std::uintptr_t cGameSFX::Play(Audio::SoundAttributes& sfxData)
++{
++    std::uintptr_t voiceID;
+     SFXEmitter* pSFXEmitter;
+     unsigned long emitterIndex;
+     SFXPlaySet* pTrackedSFX;
+@@ -805,7 +805,7 @@
+ 
+     if (sfxData.mf_ReturnEmitterOnPlay)
+     {
+-        voiceID = (unsigned long)pSFXEmitter;
++        voiceID = reinterpret_cast<std::uintptr_t>(pSFXEmitter);
+     }
+ 
+     if (sfxData.mb_KeepTrack)
+@@ -819,7 +819,7 @@
+ /**
+  * Offset/Address/Size: 0xF00 | 0x80152444 | size: 0x204
+  */
+-SFXPlaySet* cGameSFX::KeepTrack(SFXEmitter* pSFXEmitter, const Audio::SoundAttributes& sfxData, unsigned long uVoiceID)
++SFXPlaySet* cGameSFX::KeepTrack(SFXEmitter* pSFXEmitter, const Audio::SoundAttributes& sfxData, std::uintptr_t uVoiceID)
+ {
+     if (!bCurPlaySetIsValid)
+     {
+@@ -848,7 +848,7 @@
+     slot->type = sfxData.mu_Type;
+     if (!sfxData.mf_ReturnEmitterOnPlay)
+     {
+-        slot->voiceID = uVoiceID;
++        slot->voiceID = static_cast<unsigned long>(uVoiceID);
+     }
+ 
+     slot->delay = sfxData.mf_DelayTime;
+--- a/src/Game/Audio/WorldAudio.cpp
++++ b/src/Game/Audio/WorldAudio.cpp
+@@ -255,7 +255,7 @@
+ /**
+  * Offset/Address/Size: 0x1D8 | 0x80154B1C | size: 0x98
+  */
+-unsigned long cWorldSFX::Play(Audio::eWorldSFX sfx, float volume, float delayTime, bool keepTrack, float panning)
++std::uintptr_t cWorldSFX::Play(Audio::eWorldSFX sfx, float volume, float delayTime, bool keepTrack, float panning)
+ {
+     Audio::SoundAttributes attributes;
+     attributes.Init();
+@@ -270,7 +270,7 @@
+ /**
+  * Offset/Address/Size: 0x19C | 0x80154AE0 | size: 0x3C
+  */
+-unsigned long cWorldSFX::Play(Audio::SoundAttributes& attributes)
++std::uintptr_t cWorldSFX::Play(Audio::SoundAttributes& attributes)
+ {
+     attributes.me_ClassType = WORLD;
+     if (attributes.mu_Type == 0)
+@@ -314,7 +314,7 @@
+ /**
+  * Offset/Address/Size: 0x20 | 0x80154964 | size: 0x15C
+  */
+-unsigned long cWorldSFX::PlayRandomReaction(Audio::cWorldSFX::CrowdReactionType dType, float volume, float delayTime, int groupPriority, float fDefaultVolAdjustment)
++std::uintptr_t cWorldSFX::PlayRandomReaction(Audio::cWorldSFX::CrowdReactionType dType, float volume, float delayTime, int groupPriority, float fDefaultVolAdjustment)
+ {
+     const eWorldSFX* pSFXArray;
+     unsigned int tableSize;
+--- a/src/Game/Audio/audio.cpp
++++ b/src/Game/Audio/audio.cpp
+@@ -1906,7 +1906,7 @@
+  * Offset/Address/Size: 0x27E0 | 0x8013ECF4 | size: 0x144
+  */
+ 
+-unsigned long PlayWorldSFXbyStr(const char* szSFXType, float fVol, float fDelay, bool bIs3D, bool bKeepTrack, const nlVector3* pInitialPosVector, const nlVector3* pInitialDirVector, unsigned long* pType)
++std::uintptr_t PlayWorldSFXbyStr(const char* szSFXType, float fVol, float fDelay, bool bIs3D, bool bKeepTrack, const nlVector3* pInitialPosVector, const nlVector3* pInitialDirVector, unsigned long* pType)
+ {
+     if (!::g_bAudioInitialized)
+     {
+@@ -1966,7 +1966,7 @@
+ /**
+  * Offset/Address/Size: 0x26DC | 0x8013EBF0 | size: 0x104
+  */
+-int PlayCharSFXbyStr(const char* szSFXType, NisCharacterClass charIdentifier, float fVol, float fDelay, bool bIs3D, bool bKeepTrack, const nlVector3* pInitialPosVector, const nlVector3* pInitialDirVector, unsigned long* pType)
++std::uintptr_t PlayCharSFXbyStr(const char* szSFXType, NisCharacterClass charIdentifier, float fVol, float fDelay, bool bIs3D, bool bKeepTrack, const nlVector3* pInitialPosVector, const nlVector3* pInitialDirVector, unsigned long* pType)
+ {
+     if (!::g_bAudioInitialized)
+     {
+--- a/src/Game/Goalie.cpp
++++ b/src/Game/Goalie.cpp
+@@ -37,7 +37,7 @@
+ {
+ public:
+     void Stop(eWorldSFX, cGameSFX::StopFlag);
+-    unsigned long Play(Audio::SoundAttributes&);
++    std::uintptr_t Play(Audio::SoundAttributes&);
+ };
+ 
+ extern cWorldSFX gCrowdSFX;
+--- a/src/Game/Render/ChainChomp.cpp
++++ b/src/Game/Render/ChainChomp.cpp
+@@ -29,7 +29,7 @@
+ {
+ public:
+     void Stop(eWorldSFX, cGameSFX::StopFlag);
+-    unsigned long Play(Audio::SoundAttributes&);
++    std::uintptr_t Play(Audio::SoundAttributes&);
+     unsigned long Play(Audio::eWorldSFX, float, float, bool, float);
+ };
+ 
+--- a/src/Game/Render/Nis.cpp
++++ b/src/Game/Render/Nis.cpp
+@@ -20,7 +20,8 @@
+ 
+ #include "types.h"
+ 
+-#include "NL/nlBind.h"
++#include "NL/nlBind.h"
++
+ 
+ class nlTaskManager
+ {
+@@ -420,7 +421,7 @@
+     {
+     case NIS_TRIGGER_TYPE_PLAY_SOUND:
+     {
+-        unsigned long index;
++        std::uintptr_t index;
+         bool isEmitter;
+         bool stopAtNisEnd;
+         float volume = params.float1;
+@@ -455,8 +456,9 @@
+ 
+         if (params.param2 != (unsigned long)-1)
+             stopAtNisEnd = false;
+-        if (index == (unsigned long)-1)
+-            break;
++        if (index == static_cast<std::uintptr_t>(-1)
++            || index == static_cast<std::uintptr_t>(static_cast<unsigned long>(-1)))
++            break;
+ 
+         nis.AddNisAudioData(NIS_AUDIO_TYPE_SFX, index, name, isEmitter, stopAtNisEnd, soundType);
+         break;
+@@ -464,15 +466,16 @@
+ 
+     case NIS_TRIGGER_TYPE_PLAY_RANDOM_DIALOGUE:
+     {
+-        unsigned long index;
++        std::uintptr_t index;
+         bool stopAtNisEnd;
+         unsigned long soundType = (unsigned long)-1;
+         index = Audio::cCharacterSFX::PlayNISRandomCharDialogue((CharDialogueType)params.param2, (NisCharacterClass)params.param1, 100.0f, -1.0f, true, &ReplayManager::Instance()->GetMutableRenderSnapshot().GetCharacter(nis.mAudioCharacterIndex).mBip01Position, &ReplayManager::Instance()->GetMutableRenderSnapshot().GetCharacter(nis.mAudioCharacterIndex).mVelocity, &soundType);
+         stopAtNisEnd = true;
+         if (params.param3 != (unsigned long)-1)
+             stopAtNisEnd = false;
+-        if (index == (unsigned long)-1)
+-            break;
++        if (index == static_cast<std::uintptr_t>(-1)
++            || index == static_cast<std::uintptr_t>(static_cast<unsigned long>(-1)))
++            break;
+ 
+         nis.AddNisAudioData(NIS_AUDIO_TYPE_SFX, index, name, true, stopAtNisEnd, soundType);
+         break;
+@@ -521,7 +524,7 @@
+ 
+ inline void Nis::AddNisAudioData(
+     NisAudioType type,
+-    unsigned long index,
++    std::uintptr_t index,
+     const char* str,
+     bool isEmitter,
+     bool stopAtNisEnd,
+@@ -535,15 +538,15 @@
+     pNisAudioData->stopAtNisEnd = true;
+     pNisAudioData->isEmitter = false;
+     pNisAudioData->audioType = type;
+-    if (isEmitter)
+-        pNisAudioData->identifier.pEmitter = (SFXEmitter*)index;
+-    else
+-        pNisAudioData->identifier.index = index;
++    if (isEmitter)
++        pNisAudioData->identifier.pEmitter = reinterpret_cast<SFXEmitter*>(index);
++    else
++        pNisAudioData->identifier.index = static_cast<unsigned long>(index);
+     nlStrNCpy(pNisAudioData->str, str, NisAudioData::MAX_NIS_AUDIO_STR_CHARS);
+     pNisAudioData->soundType = soundType;
+     pNisAudioData->isEmitter = isEmitter;
+-    pNisAudioData->stopAtNisEnd = stopAtNisEnd;
+-    pNisAudioData->next = NULL;
++    pNisAudioData->stopAtNisEnd = stopAtNisEnd;
++    pNisAudioData->next = NULL;
+     nlListAddStart(&mNisAudioDataList, pNisAudioData, (NisAudioData**)NULL);
+ }
+ 
+@@ -563,9 +566,9 @@
+ {
+     SFXEmitter* pSFXEmitter;
+     bool bResult;
+-    if (pNisAudioData->isEmitter)
+-    {
+-        pSFXEmitter = pNisAudioData->identifier.pEmitter;
++    if (pNisAudioData->isEmitter)
++    {
++        pSFXEmitter = pNisAudioData->identifier.pEmitter;
+         if (pNisAudioData->soundType == pSFXEmitter->soundType)
+         {
+             if ((!bNisEndedNormally) || (bNisEndedNormally && pNisAudioData->stopAtNisEnd))
+--- a/src/NL/plat/plataudio.cpp
++++ b/src/NL/plat/plataudio.cpp
+@@ -23,7 +23,7 @@
+ // a class, so a namespace reproduces the symbols exactly. Note that means `static` here would give
+ // internal linkage rather than the static-member linkage the original had - InitEmitter is called
+ // from audio.cpp and AudioEventHandler.cpp and must stay externally visible.
+-u32 GetSndIDError() {return 0;}
++u32 GetSndIDError() {return static_cast<u32>(-1);}
+ bool IsSFXPlaying(unsigned long uVoiceID) {return 0;}
+ void InitEmitter(unsigned long index) {}
+ bool RemoveEmitter(SFXEmitter* pSFXEmitter) {return 1;}

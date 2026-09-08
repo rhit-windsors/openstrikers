@@ -1,0 +1,69 @@
+diff --git a/src/NL/MemAlloc.cpp b/src/NL/MemAlloc.cpp
+--- a/src/NL/MemAlloc.cpp
++++ b/src/NL/MemAlloc.cpp
+@@ -17,6 +17,25 @@
+ #include "NL/nlDLRing.h"
+ #include "NL/MemAlloc.h"
+ 
++#include <pthread.h>
++
++// The GameCube was single-threaded, but this port installs the game's allocator
++// as the *global* operator new (see nlMemory.cpp), so Dawn's worker threads now
++// allocate through it concurrently with the main thread. Nothing here is
++// reentrant -- a free-list walk racing an insert corrupts the ring -- so
++// serialise every entry point. Statically initialised so it is usable from the
++// static constructors that allocate before main().
++static pthread_mutex_t s_nlAllocLock = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
++
++namespace
++{
++struct nlAllocLock
++{
++    nlAllocLock() { pthread_mutex_lock(&s_nlAllocLock); }
++    ~nlAllocLock() { pthread_mutex_unlock(&s_nlAllocLock); }
++};
++} // namespace
++
+ // Built with `-inline deferred`: MWCC emits .text in REVERSE source order, so the
+ // functions below are declared last-to-first relative to their addresses. Parse-time
+ // .data (the ptmf constants) still follows source order, which is what pins
+@@ -27,6 +46,7 @@
+  */
+ void MemoryAllocator::Free(void* p)
+ {
++    nlAllocLock nlLock_;
+     FreeBlockList* block;
+     MemoryAllocator* self;
+     FreeBlockList* start;
+@@ -109,6 +129,7 @@
+  */
+ void* MemoryAllocator::Allocate(unsigned long size, unsigned int alignment, bool fromEnd)
+ {
++    nlAllocLock nlLock_;
+     void* result;
+     u32 offset;
+     unsigned int requestSize = size;
+@@ -267,6 +288,7 @@
+  */
+ void MemoryAllocator::Initialize(void* memory, unsigned int size)
+ {
++    nlAllocLock nlLock_;
+     FreeBlockList* start;
+     FreeBlockList* iter;
+     FreeBlockList* next;
+@@ -338,6 +360,7 @@
+  */
+ unsigned int MemoryAllocator::TotalFreeMemory()
+ {
++    nlAllocLock nlLock_;
+     TotalFreeMemCallback callback;
+     callback.size = 0;
+     nlWalkDLRing<FreeBlockList, TotalFreeMemCallback>(m_free_block_list, &callback, &TotalFreeMemCallback::Callback);
+@@ -372,6 +395,7 @@
+  */
+ unsigned int MemoryAllocator::LargestFreeBlock()
+ {
++    nlAllocLock nlLock_;
+     LargestFreeBlockCallback callback;
+     callback.largest = 0;
+     nlWalkDLRing<FreeBlockList, LargestFreeBlockCallback>(m_free_block_list, &callback, &LargestFreeBlockCallback::Callback);

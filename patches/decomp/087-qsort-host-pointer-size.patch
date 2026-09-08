@@ -1,0 +1,28 @@
+--- a/src/Game/Team.cpp
++++ b/src/Game/Team.cpp
+@@ -750,6 +750,6 @@ void cTeam::UpdateBallInterceptTime(float fDeltaT)
+ {
+     CalculateNewBallInterceptTimes();
+-    qsort(m_pBallInterceptOrderedFielders, 4, 4, BestAbleToInterceptBall);
++    qsort(m_pBallInterceptOrderedFielders, 4, sizeof(m_pBallInterceptOrderedFielders[0]), BestAbleToInterceptBall);
+     mtBallInterceptTimer.SetSeconds(1.0f / 30.0f);
+ }
+ /**
+@@ -858,7 +858,7 @@ void cTeam::Update(float fDeltaT)
+         case SITUATION_OFFENSE:
+             m_pAIOrderedFielders[0] = (cFielder*)m_pPlayers[0];
+             m_pAIOrderedFielders[1] = (cFielder*)m_pPlayers[1];
+             m_pAIOrderedFielders[2] = (cFielder*)m_pPlayers[2];
+             m_pAIOrderedFielders[3] = (cFielder*)m_pPlayers[3];
+-            qsort(m_pAIOrderedFielders, 4, 4, MostOffensiveThreat);
++            qsort(m_pAIOrderedFielders, 4, sizeof(m_pAIOrderedFielders[0]), MostOffensiveThreat);
+             m_pAIOrderedFielders[0]->m_eRole = ROLE_STRIKER;
+@@ -870,7 +870,7 @@ void cTeam::Update(float fDeltaT)
+         case SITUATION_DEFENSE:
+             m_pAIOrderedFielders[0] = (cFielder*)m_pPlayers[0];
+             m_pAIOrderedFielders[1] = (cFielder*)m_pPlayers[1];
+             m_pAIOrderedFielders[2] = (cFielder*)m_pPlayers[2];
+             m_pAIOrderedFielders[3] = (cFielder*)m_pPlayers[3];
+-            qsort(m_pAIOrderedFielders, 4, 4, MostDefensivePlayer);
++            qsort(m_pAIOrderedFielders, 4, sizeof(m_pAIOrderedFielders[0]), MostDefensivePlayer);
+             m_pAIOrderedFielders[0]->m_eRole = ROLE_STRIKER;

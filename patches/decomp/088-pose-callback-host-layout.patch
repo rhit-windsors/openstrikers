@@ -1,0 +1,15 @@
+--- a/src/Game/PoseAccumulator.cpp
++++ b/src/Game/PoseAccumulator.cpp
+@@ -505,8 +505,8 @@ void cPoseAccumulator::MultNodeMatrices(const nlMatrix4* pMatrix)
+  */
+ void cPoseAccumulator::SetBuildNodeMatrixCallback(int nNode, BuildNodeMatrixFn funcCallback, unsigned int nParam1, unsigned int nParam2)
+ {
+-    int offset = nNode * (int)sizeof(cBuildNodeMatrixCallbackInfo);
+-    *(BuildNodeMatrixFn*)((char*)m_cb.mData + offset) = funcCallback;
+-    *(unsigned int*)((char*)m_cb.mData + offset + 4) = nParam1;
+-    *(unsigned int*)((char*)m_cb.mData + offset + 8) = nParam2;
++    cBuildNodeMatrixCallbackInfo& callback = m_cb.mData[nNode];
++    callback.funcCallback = funcCallback;
++    callback.nParam1 = nParam1;
++    callback.nParam2 = nParam2;
+ }

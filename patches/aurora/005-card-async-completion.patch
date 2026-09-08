@@ -1,0 +1,218 @@
+--- a/include/dolphin/card.h
++++ b/include/dolphin/card.h
+@@ -294,6 +294,13 @@
+ int CARDProbe(s32 chan);
+ s32 CARDProbeEx(s32 chan, s32* memSize, s32* sectorSize);
+ s32 CARDMountAsync(s32 chan, void* workArea, CARDCallback detachCallback, CARDCallback attachCallback);
++
++// On hardware a mount completes off the EXI interrupt, long after CARDMountAsync
++// has returned. Nothing here generates that interrupt, so the completion is
++// queued and delivered from this, which the host is expected to call once per
++// frame. Calling the callback inline instead would re-enter the caller before it
++// had finished starting the operation.
++void CARDServicePendingCallbacks(void);
+ s32 CARDMount(s32 chan, void* workArea, CARDCallback detachCallback);
+ s32 CARDUnmount(s32 chan);
+ 
+--- a/lib/dolphin/card.cpp
++++ b/lib/dolphin/card.cpp
+@@ -1,6 +1,8 @@
+ #include "dolphin/card.h"
+ 
+ #include <filesystem>
++#include <mutex>
++#include <vector>
+ 
+ #include "../internal.hpp"
+ #include "dolphin/types.h"
+@@ -39,6 +41,30 @@
+ CARDFileType SelectedFileType = CARD_GCIFOLDER;
+ bool UseFastMode = false;
+ 
++// Every CARD*Async entry point completes off the EXI interrupt on hardware,
++// i.e. strictly after the Async call has returned. Callers are written for
++// that: the memory-card state machine kicks off an operation and only then
++// records the pointers its completion handler will read, so a callback invoked
++// inline runs against half-built state (and, in the save path, against
++// uninitialised member pointers). Nothing here actually blocks, so queue the
++// completion and let CARDServicePendingCallbacks run it at the top of the next
++// host frame.
++struct PendingCallback {
++  CARDCallback callback;
++  s32 chan;
++  s32 result;
++};
++std::mutex s_pendingLock;
++std::vector<PendingCallback> s_pending;
++
++s32 QueueCardCallback(const CARDCallback callback, const s32 chan, const s32 result) {
++  if (callback != nullptr) {
++    std::lock_guard lock(s_pendingLock);
++    s_pending.push_back({callback, chan, result});
++  }
++  return result;
++}
++
+ void CopyKabuFileHandleToDolphin(const s32 chan, const aurora::card::FileHandle& handle, CARDFileInfo* fileInfo) {
+   fileInfo->chan = chan;
+   fileInfo->fileNo = handle.getFileNo();
+@@ -246,9 +272,7 @@
+     return CARD_RESULT_NOCARD;
+ 
+   const auto& card = GET_CARD(chan);
+-  const auto res = static_cast<s32>(card->getError());
+-  callback(chan, res);
+-  return static_cast<s32>(card->getError());
++  return QueueCardCallback(callback, chan, static_cast<s32>(card->getError()));
+ }
+ 
+ s32 CARDCheckEx(const s32 chan, s32* xferBytes [[maybe_unused]]) {
+@@ -268,9 +292,7 @@
+     return CARD_RESULT_FATAL_ERROR;
+   }
+   const auto& card = GET_CARD(chan);
+-  const auto res = static_cast<s32>(card->getError());
+-  callback(chan, res);
+-  return static_cast<s32>(card->getError());
++  return QueueCardCallback(callback, chan, static_cast<s32>(card->getError()));
+ }
+ 
+ s32 CARDCreate(const s32 chan, const char* fileName, const u32 size, CARDFileInfo* fileInfo) {
+@@ -298,8 +320,7 @@
+     return CARD_RESULT_FATAL_ERROR;
+   }
+   const auto res = CARDCreate(chan, fileName, size, fileInfo);
+-  callback(chan, res);
+-  return res;
++  return QueueCardCallback(callback, chan, res);
+ }
+ 
+ s32 CARDDelete(const s32 chan, const char* fileName) {
+@@ -326,8 +347,7 @@
+     return CARD_RESULT_FATAL_ERROR;
+   }
+   const auto res = CARDDelete(chan, fileName);
+-  callback(chan, res);
+-  return res;
++  return QueueCardCallback(callback, chan, res);
+ }
+ 
+ s32 CARDFastDelete(const s32 chan, const s32 fileNo) {
+@@ -353,8 +373,7 @@
+     return CARD_RESULT_FATAL_ERROR;
+   }
+   const auto res = CARDFastDelete(chan, fileNo);
+-  callback(chan, res);
+-  return res;
++  return QueueCardCallback(callback, chan, res);
+ }
+ 
+ s32 CARDFastOpen(const s32 chan, const s32 fileNo, CARDFileInfo* fileInfo) {
+@@ -394,8 +413,7 @@
+     return CARD_RESULT_FATAL_ERROR;
+   }
+   const auto res = CARDFormat(chan);
+-  callback(chan, res);
+-  return res;
++  return QueueCardCallback(callback, chan, res);
+ }
+ 
+ s32 CARDFreeBlocks(const s32 chan, s32* byteNotUsed, s32* filesNotUsed) {
+@@ -512,6 +530,20 @@
+   return CARD_RESULT_READY;
+ }
+ // these two funcs are out of scope for aurora::card. stubbed for now
++void CARDServicePendingCallbacks(void) {
++  // Swap the queue out before running anything: a callback is free to start
++  // another card operation, and that one belongs to the next frame, not this
++  // loop. Run them outside the lock for the same reason.
++  std::vector<PendingCallback> due;
++  {
++    std::lock_guard lock(s_pendingLock);
++    due.swap(s_pending);
++  }
++  for (const auto& entry : due) {
++    entry.callback(entry.chan, entry.result);
++  }
++}
++
+ s32 CARDMount(const s32 chan, void* workArea [[maybe_unused]], CARDCallback detachCallback [[maybe_unused]]) {
+   if (chan < 0 || chan >= 2) {
+     return CARD_RESULT_FATAL_ERROR;
+@@ -520,11 +552,21 @@
+   return CARD_RESULT_READY;
+ }
+ s32 CARDMountAsync(const s32 chan, void* workArea [[maybe_unused]], const CARDCallback detachCallback [[maybe_unused]],
+-                   const CARDCallback attachCallback [[maybe_unused]]) {
++                   const CARDCallback attachCallback) {
+   if (chan < 0 || chan >= 2) {
+     return CARD_RESULT_FATAL_ERROR;
+   }
+-  return CARD_RESULT_READY;
++  // The card image is already open by the time anyone mounts it, so there is
++  // nothing to wait for -- but the caller learns the mount finished only from
++  // attachCallback, and dropping it leaves a game parked on its "checking the
++  // memory card" screen forever.
++  //
++  // It cannot be called inline either: on hardware it arrives off the EXI
++  // interrupt after CARDMountAsync has returned, and callers rely on that. The
++  // save/load path starts a mount from inside a scene update and only then
++  // finishes wiring itself up, so an inline completion re-enters it half built.
++  // Queue it for CARDServicePendingCallbacks instead.
++  return QueueCardCallback(attachCallback, chan, CARD_RESULT_READY);
+ }
+ 
+ s32 CARDOpen(const s32 chan, const char* fileName, CARDFileInfo* fileInfo) {
+@@ -585,18 +627,18 @@
+     return CARD_RESULT_FATAL_ERROR;
+   }
+   const auto res = CARDRename(chan, oldName, newName);
+-  callback(chan, res);
+-  return res;
++  return QueueCardCallback(callback, chan, res);
+ }
+ 
+ s32 CARDSetAttributesAsync(const s32 chan, s32 fileNo [[maybe_unused]], u8 attr [[maybe_unused]],
+-                           CARDCallback callback [[maybe_unused]]) {
++                           CARDCallback callback) {
+   if (chan < 0 || chan >= 2) {
+     return CARD_RESULT_FATAL_ERROR;
+   }
+-  // TODO:
++  // TODO: actually store the attributes.
+   CARD_STUB
+-  return CARD_RESULT_READY;
++  // Still has to complete, or the caller waits on it forever.
++  return QueueCardCallback(callback, chan, CARD_RESULT_READY);
+ }
+ 
+ s32 CARDSetAttributes(const s32 chan, s32 fileNo [[maybe_unused]], u8 attr [[maybe_unused]]) {
+@@ -642,8 +684,7 @@
+     return CARD_RESULT_FATAL_ERROR;
+   }
+   const auto res = CARDSetStatus(chan, fileNo, stat);
+-  callback(chan, res);
+-  return res;
++  return QueueCardCallback(callback, chan, res);
+ }
+ 
+ s32 CARDUnmount(const s32 chan) {
+@@ -706,8 +747,7 @@
+ s32 CARDReadAsync(const CARDFileInfo* fileInfo, void* addr, const s32 length, const s32 offset,
+                   const CARDCallback callback) {
+   const auto res = CARDRead(fileInfo, addr, length, offset);
+-  callback(fileInfo->chan, res);
+-  return res;
++  return QueueCardCallback(callback, fileInfo->chan, res);
+ }
+ 
+ s32 CARDWrite(const CARDFileInfo* fileInfo, const void* addr, const s32 length, const s32 offset) {
+@@ -735,7 +775,6 @@
+ s32 CARDWriteAsync(const CARDFileInfo* fileInfo, const void* addr, const s32 length, const s32 offset,
+                    const CARDCallback callback) {
+   const auto res = CARDWrite(fileInfo, addr, length, offset);
+-  callback(fileInfo->chan, res);
+-  return res;
++  return QueueCardCallback(callback, fileInfo->chan, res);
+ }
+ }

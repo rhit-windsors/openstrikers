@@ -1,0 +1,128 @@
+diff --git a/include/Game/Drawable/DrawableCharacter.h b/include/Game/Drawable/DrawableCharacter.h
+--- a/include/Game/Drawable/DrawableCharacter.h
++++ b/include/Game/Drawable/DrawableCharacter.h
+@@ -30,3 +30,3 @@ public:
+     void Grab(cCharacter& character);
+-    static void DrawableBowserHeadTrackCallback(unsigned int ctx, unsigned int nParam2, cPoseAccumulator* poseAccumulator, unsigned int currentNodeIndex, int nParentIndex);
++    static void DrawableBowserHeadTrackCallback(std::uintptr_t ctx, unsigned int nParam2, cPoseAccumulator* poseAccumulator, unsigned int currentNodeIndex, int nParentIndex);
+     void BuildNodeMatrices();
+diff --git a/include/Game/Player.h b/include/Game/Player.h
+--- a/include/Game/Player.h
++++ b/include/Game/Player.h
+@@ -98,3 +98,3 @@ public:
+     virtual void PrePhysicsUpdate(float dt);
+-    static void PlayerHeadTrackCallback(unsigned int nSelf, unsigned int nParam2, cPoseAccumulator* pPoseAccumulator,
++    static void PlayerHeadTrackCallback(std::uintptr_t nSelf, unsigned int nParam2, cPoseAccumulator* pPoseAccumulator,
+         unsigned int nJointIndex, int nParentIndex);
+diff --git a/include/Game/PoseAccumulator.h b/include/Game/PoseAccumulator.h
+--- a/include/Game/PoseAccumulator.h
++++ b/include/Game/PoseAccumulator.h
+@@ -3,2 +3,4 @@
+ 
++#include <cstdint>
++
+ #include "NL/nlMath.h"
+@@ -9,3 +11,3 @@
+ 
+-typedef void (*BuildNodeMatrixFn)(unsigned int, unsigned int, cPoseAccumulator*, unsigned int, int);
++typedef void (*BuildNodeMatrixFn)(std::uintptr_t, unsigned int, cPoseAccumulator*, unsigned int, int);
+ 
+@@ -20,3 +22,3 @@ public:
+     /* 0x00 */ BuildNodeMatrixFn funcCallback;
+-    /* 0x04 */ unsigned int nParam1;
++    /* 0x04 */ std::uintptr_t nParam1;
+     /* 0x08 */ unsigned int nParam2;
+@@ -65,3 +67,3 @@ public:
+     void MultNodeMatrices(const nlMatrix4* pMatrix);
+-    void SetBuildNodeMatrixCallback(int nNode, BuildNodeMatrixFn funcCallback, unsigned int nParam1, unsigned int nParam2);
++    void SetBuildNodeMatrixCallback(int nNode, BuildNodeMatrixFn funcCallback, std::uintptr_t nParam1, unsigned int nParam2);
+ 
+diff --git a/include/Game/Render/CameraGuy.h b/include/Game/Render/CameraGuy.h
+--- a/include/Game/Render/CameraGuy.h
++++ b/include/Game/Render/CameraGuy.h
+@@ -10,3 +10,3 @@ extern int g_nCameraSpinMax;
+ 
+-static void CameraGuyHeadTrackUpdateCallback(unsigned int ctx, unsigned int arg1, cPoseAccumulator* poseAccumulator, unsigned int arg3, int arg4);
++static void CameraGuyHeadTrackUpdateCallback(std::uintptr_t ctx, unsigned int arg1, cPoseAccumulator* poseAccumulator, unsigned int arg3, int arg4);
+ 
+diff --git a/src/Game/Drawable/DrawableCharacter.cpp b/src/Game/Drawable/DrawableCharacter.cpp
+--- a/src/Game/Drawable/DrawableCharacter.cpp
++++ b/src/Game/Drawable/DrawableCharacter.cpp
+@@ -268,3 +268,3 @@ void DrawableCharacter::Grab(cCharacter& character)
+  */
+-static void DrawableCharacterHeadTrackCallback(unsigned int ctx, unsigned int, cPoseAccumulator* poseAccumulator, unsigned int currentNodeIndex, int)
++static void DrawableCharacterHeadTrackCallback(std::uintptr_t ctx, unsigned int, cPoseAccumulator* poseAccumulator, unsigned int currentNodeIndex, int)
+ {
+@@ -277,3 +277,3 @@ static void DrawableCharacterHeadTrackCallback(unsigned int ctx, unsigned int, c
+  */
+-void DrawableCharacter::DrawableBowserHeadTrackCallback(unsigned int ctx, unsigned int nParam2, cPoseAccumulator* poseAccumulator, unsigned int currentNodeIndex, int nParentIndex)
++void DrawableCharacter::DrawableBowserHeadTrackCallback(std::uintptr_t ctx, unsigned int nParam2, cPoseAccumulator* poseAccumulator, unsigned int currentNodeIndex, int nParentIndex)
+ {
+@@ -298,3 +298,3 @@ void DrawableCharacter::BuildNodeMatrices()
+     {
+-        mPoseAccumulator->SetBuildNodeMatrixCallback(mCharacter->m_nHeadJointIndex, DrawableCharacterHeadTrackCallback, (unsigned int)this, 0);
++        mPoseAccumulator->SetBuildNodeMatrixCallback(mCharacter->m_nHeadJointIndex, DrawableCharacterHeadTrackCallback, reinterpret_cast<std::uintptr_t>(this), 0);
+     }
+@@ -304,3 +304,3 @@ void DrawableCharacter::BuildNodeMatrices()
+         {
+-            mPoseAccumulator->SetBuildNodeMatrixCallback(mBowser->mnHeadJointIndex, DrawableBowserHeadTrackCallback, (unsigned int)this, 0);
++            mPoseAccumulator->SetBuildNodeMatrixCallback(mBowser->mnHeadJointIndex, DrawableBowserHeadTrackCallback, reinterpret_cast<std::uintptr_t>(this), 0);
+         }
+@@ -1002,3 +1002,3 @@ void DrawableCharacter::Blend(const float* blendFactors, const DrawableCharacter
+     {
+-        mPoseAccumulator->SetBuildNodeMatrixCallback(mCharacter->m_nHeadJointIndex, DrawableCharacterHeadTrackCallback, (unsigned int)this, 0);
++        mPoseAccumulator->SetBuildNodeMatrixCallback(mCharacter->m_nHeadJointIndex, DrawableCharacterHeadTrackCallback, reinterpret_cast<std::uintptr_t>(this), 0);
+     }
+@@ -1006,3 +1006,3 @@ void DrawableCharacter::Blend(const float* blendFactors, const DrawableCharacter
+     {
+-        mPoseAccumulator->SetBuildNodeMatrixCallback(mBowser->mnHeadJointIndex, DrawableBowserHeadTrackCallback, (unsigned int)this, 0);
++        mPoseAccumulator->SetBuildNodeMatrixCallback(mBowser->mnHeadJointIndex, DrawableBowserHeadTrackCallback, reinterpret_cast<std::uintptr_t>(this), 0);
+     }
+@@ -1049,3 +1049,3 @@ void DrawableCharacter::EvaluateFrom(const cPoseNode& poseNode, const nlVector3&
+     {
+-        mPoseAccumulator->SetBuildNodeMatrixCallback(mCharacter->m_nHeadJointIndex, DrawableCharacterHeadTrackCallback, (unsigned int)this, 0);
++        mPoseAccumulator->SetBuildNodeMatrixCallback(mCharacter->m_nHeadJointIndex, DrawableCharacterHeadTrackCallback, reinterpret_cast<std::uintptr_t>(this), 0);
+     }
+@@ -1055,3 +1055,3 @@ void DrawableCharacter::EvaluateFrom(const cPoseNode& poseNode, const nlVector3&
+         {
+-            mPoseAccumulator->SetBuildNodeMatrixCallback(mBowser->mnHeadJointIndex, DrawableBowserHeadTrackCallback, (unsigned int)this, 0);
++            mPoseAccumulator->SetBuildNodeMatrixCallback(mBowser->mnHeadJointIndex, DrawableBowserHeadTrackCallback, reinterpret_cast<std::uintptr_t>(this), 0);
+         }
+diff --git a/src/Game/Player.cpp b/src/Game/Player.cpp
+--- a/src/Game/Player.cpp
++++ b/src/Game/Player.cpp
+@@ -1479,3 +1479,3 @@ cPN_SingleAxisBlender* cPlayer::CreateSingleAxisBlender(
+  */
+-void cPlayer::PlayerHeadTrackCallback(unsigned int nSelf, unsigned int nParam2, cPoseAccumulator* pPoseAccumulator,
++void cPlayer::PlayerHeadTrackCallback(std::uintptr_t nSelf, unsigned int nParam2, cPoseAccumulator* pPoseAccumulator,
+     unsigned int nJointIndex, int nParentIndex)
+@@ -1535,3 +1535,3 @@ void cPlayer::PrePhysicsUpdate(float dt)
+ {
+-    m_pPoseAccumulator->SetBuildNodeMatrixCallback(m_nHeadJointIndex, PlayerHeadTrackCallback, (unsigned int)this, 0);
++    m_pPoseAccumulator->SetBuildNodeMatrixCallback(m_nHeadJointIndex, PlayerHeadTrackCallback, reinterpret_cast<std::uintptr_t>(this), 0);
+ 
+diff --git a/src/Game/PoseAccumulator.cpp b/src/Game/PoseAccumulator.cpp
+--- a/src/Game/PoseAccumulator.cpp
++++ b/src/Game/PoseAccumulator.cpp
+@@ -503,7 +503,7 @@ void cPoseAccumulator::MultNodeMatrices(const nlMatrix4* pMatrix)
+ /**
+  * Offset/Address/Size: 0x0 | 0x801EB5A0 | size: 0x28
+  */
+-void cPoseAccumulator::SetBuildNodeMatrixCallback(int nNode, BuildNodeMatrixFn funcCallback, unsigned int nParam1, unsigned int nParam2)
++void cPoseAccumulator::SetBuildNodeMatrixCallback(int nNode, BuildNodeMatrixFn funcCallback, std::uintptr_t nParam1, unsigned int nParam2)
+ {
+     cBuildNodeMatrixCallbackInfo& callback = m_cb.mData[nNode];
+     callback.funcCallback = funcCallback;
+diff --git a/src/Game/Render/CameraGuy.cpp b/src/Game/Render/CameraGuy.cpp
+--- a/src/Game/Render/CameraGuy.cpp
++++ b/src/Game/Render/CameraGuy.cpp
+@@ -38,3 +38,3 @@ inline float AngUnitsToRad_fromFloat(float fUnits)
+  */
+-static void CameraGuyHeadTrackUpdateCallback(unsigned int ctx, unsigned int arg1, cPoseAccumulator* poseAccumulator, unsigned int arg3, int arg4)
++static void CameraGuyHeadTrackUpdateCallback(std::uintptr_t ctx, unsigned int arg1, cPoseAccumulator* poseAccumulator, unsigned int arg3, int arg4)
+ {
+@@ -79,3 +79,3 @@ void CameraGuy::Init()
+ {
+-    mpPoseAccumulator->SetBuildNodeMatrixCallback(2, CameraGuyHeadTrackUpdateCallback, (unsigned int)this, 0);
++    mpPoseAccumulator->SetBuildNodeMatrixCallback(2, CameraGuyHeadTrackUpdateCallback, reinterpret_cast<std::uintptr_t>(this), 0);
+ }

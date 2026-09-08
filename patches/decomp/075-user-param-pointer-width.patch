@@ -1,0 +1,666 @@
+--- a/include/NL/nlFile.h
++++ b/include/NL/nlFile.h
+@@ -1,12 +1,21 @@
+ #ifndef _NLFILE_H_
+ #define _NLFILE_H_
+ 
++#include <stdint.h>
+ #include "types.h"
+ #include "file_io.h"
+ 
+ class nlFile;
+ 
+-typedef void (*ReadAsyncCallback)(nlFile*, void*, unsigned int, unsigned long);
++// Callback user data travels through this channel, and almost every caller
++// stuffs a host pointer into it. unsigned long was pointer-width on the
++// GameCube; it is still 32 bits on Windows, so the type has to be spelled out
++// as something pointer-sized instead. Naming it keeps the whole chain --
++// nlReadAsync, AsyncEntry::m_uParam, GameCubeReadAsync and every callback --
++// consistent, and a mismatch anywhere is a function-pointer type error.
++typedef uintptr_t nlUserParam;
++
++typedef void (*ReadAsyncCallback)(nlFile*, void*, unsigned int, nlUserParam);
+ typedef void (*LoadAsyncCallback)(void*, unsigned long, void*);
+ 
+ enum eAllocType
+@@ -32,7 +41,7 @@
+ }; // total size: 0xC
+ 
+ bool nlLoadEntireFileAsync(const char* filename, LoadAsyncCallback callback, void* user_data, unsigned int alignment, eAllocType type);
+-void nlLoadEntireFileAsyncCallback(nlFile* file, void* pBuffer, unsigned int uSize, unsigned long uParam);
++void nlLoadEntireFileAsyncCallback(nlFile* file, void* pBuffer, unsigned int uSize, nlUserParam uParam);
+ void* nlLoadEntireFile(const char* filename, u32* outSize, unsigned int alignment, eAllocType type);
+ void nlClose(nlFile* file);
+ void nlRead(nlFile* file, void* buffer, unsigned int size);
+--- a/include/NL/nlFileGC.h
++++ b/include/NL/nlFileGC.h
+@@ -16,19 +16,19 @@
+ 
+ class GCFile;
+ 
+-void nlReadAsyncToVirtualMemory(nlFile* file, void* buffer, int size, ReadAsyncCallback callback, unsigned long param, unsigned long chunkSize, void* userData);
++void nlReadAsyncToVirtualMemory(nlFile* file, void* buffer, int size, ReadAsyncCallback callback, nlUserParam param, unsigned long chunkSize, void* userData);
+ void nlAsyncLoadFileToVirtualMemory(nlFile* file, int size, void* buffer, ReadAsyncCallback callback, unsigned long alignment);
+-void nlCancelPendingAsyncReads(nlFile* pFile, void (*callback)(nlFile*, void*, unsigned int, unsigned long, void (*)(nlFile*, void*, unsigned int, unsigned long)));
++void nlCancelPendingAsyncReads(nlFile* pFile, void (*callback)(nlFile*, void*, unsigned int, nlUserParam, void (*)(nlFile*, void*, unsigned int, nlUserParam)));
+ bool nlAsyncReadsPending(nlFile* file);
+ void* nlLoadEntireFileToVirtualMemory(const char* fileName, int* size, unsigned int transferSize, void* target, eAllocType allocType);
+ void* nlReadToVirtualMemory(nlFile* file, void* buffer, unsigned int size, unsigned int chunkSize);
+ u32 nlGetFilePosition(nlFile* file);
+ void nlSeek(nlFile* file, unsigned int offset, unsigned long origin);
+-void nlReadAsync(nlFile* file, void* buffer, unsigned int size, ReadAsyncCallback callback, unsigned long uParam);
++void nlReadAsync(nlFile* file, void* buffer, unsigned int size, ReadAsyncCallback callback, nlUserParam uParam);
+ void nlServiceFileSystem();
+ void nlInitFileSystem();
+ unsigned char GameCubeReadBlocking(GCFile* pFile, void* pBuffer, unsigned long uSize);
+-static unsigned char GameCubeReadAsync(GCFile* pFile, ReadAsyncCallback pFunc, void* pBuffer, unsigned long uSize, unsigned long uParam);
++static unsigned char GameCubeReadAsync(GCFile* pFile, ReadAsyncCallback pFunc, void* pBuffer, unsigned long uSize, nlUserParam uParam);
+ void nlFlushFileCash();
+ nlFile* nlOpen(const char* fileName);
+ void nlRegHandleDVDMessageCB(const Function<void(int)>& cb);
+--- a/src/NL/nlFile.cpp
++++ b/src/NL/nlFile.cpp
+@@ -64,7 +64,7 @@
+         }
+ 
+         _asyncData = new (nlMalloc(sizeof(AsyncFileLoadData), 8, 1)) AsyncFileLoadData(file, alloc_data, datasize, callback, user_data);
+-        nlReadAsync(file, alloc_data, datasize, nlLoadEntireFileAsyncCallback, (unsigned long)_asyncData);
++        nlReadAsync(file, alloc_data, datasize, nlLoadEntireFileAsyncCallback, (nlUserParam)_asyncData);
+     }
+     return 1;
+ }
+@@ -72,7 +72,7 @@
+ /**
+  * Offset/Address/Size: 0xF8 | 0x801CEB28 | size: 0x68
+  */
+-void nlLoadEntireFileAsyncCallback(nlFile* file, void* pBuffer, unsigned int uSize, unsigned long uParam)
++void nlLoadEntireFileAsyncCallback(nlFile* file, void* pBuffer, unsigned int uSize, nlUserParam uParam)
+ {
+     AsyncFileLoadData* p = (AsyncFileLoadData*)uParam;
+     p->callback(p->alloc_data, (unsigned long)p->datasize, p->user_data);
+--- a/src/NL/nlFileGC.cpp
++++ b/src/NL/nlFileGC.cpp
+@@ -102,7 +102,7 @@
+     /* 0x10 */ void* m_pBuffer;
+     /* 0x14 */ unsigned long m_uSize;
+     /* 0x18 */ unsigned long m_uPosition;
+-    /* 0x1C */ unsigned long m_uParam;
++    /* 0x1C */ nlUserParam m_uParam;
+     /* 0x20 */ eReadState Phase;
+     /* 0x24 */ int ReadNumBytes;
+ }; // total size: 0x28
+@@ -110,7 +110,7 @@
+ class AsyncManager
+ {
+ public:
+-    unsigned char AddEntry(GCFile*, ReadAsyncCallback, void*, unsigned long, unsigned long);
++    unsigned char AddEntry(GCFile*, ReadAsyncCallback, void*, unsigned long, nlUserParam);
+     int Service();
+ 
+     /* 0x000 */ AsyncEntry m_asyncEntries[64];
+@@ -122,7 +122,7 @@
+ 
+ namespace
+ {
+-void AsyncToVirMemBufferCallback(nlFile*, void*, unsigned int, unsigned long);
++void AsyncToVirMemBufferCallback(nlFile*, void*, unsigned int, nlUserParam);
+ }
+ static unsigned char UpdateReadState(AsyncEntry*);
+ static inline unsigned char CheckDVDStatus();
+@@ -132,8 +132,8 @@
+ struct AsyncToVirMemBufferLoad
+ {
+     /* 0x00 */ int numChunksLeft;
+-    /* 0x04 */ unsigned long param;
+-    /* 0x08 */ void (*callback)(class nlFile*, void*, unsigned int, unsigned long);
++    /* 0x04 */ nlUserParam param;
++    /* 0x08 */ void (*callback)(class nlFile*, void*, unsigned int, nlUserParam);
+     /* 0x0C */ char* target;
+     /* 0x10 */ int size;
+ 
+@@ -396,7 +396,7 @@
+ AsyncToVirMemBufferLoad asyncToVirMemBufferLoad[4];
+ } // namespace
+ 
+-inline unsigned char AsyncManager::AddEntry(GCFile* pFile, ReadAsyncCallback pFunc, void* pBuffer, unsigned long uSize, unsigned long uParam)
++inline unsigned char AsyncManager::AddEntry(GCFile* pFile, ReadAsyncCallback pFunc, void* pBuffer, unsigned long uSize, nlUserParam uParam)
+ {
+     unsigned char bServiceImmediately = 0;
+ 
+@@ -434,7 +434,7 @@
+ /**
+  * Offset/Address/Size: 0xFE4 | 0x801CFD38 | size: 0x324
+  */
+-static unsigned char GameCubeReadAsync(GCFile* pFile, ReadAsyncCallback pFunc, void* pBuffer, unsigned long uSize, unsigned long uParam)
++static unsigned char GameCubeReadAsync(GCFile* pFile, ReadAsyncCallback pFunc, void* pBuffer, unsigned long uSize, nlUserParam uParam)
+ {
+     s_pAsyncManager->AddEntry(pFile, pFunc, pBuffer, uSize, uParam);
+ 
+@@ -666,7 +666,7 @@
+ /**
+  * Offset/Address/Size: 0x6F8 | 0x801CF44C | size: 0x34
+  */
+-void nlReadAsync(nlFile* file, void* buffer, unsigned int size, ReadAsyncCallback callback, unsigned long uParam)
++void nlReadAsync(nlFile* file, void* buffer, unsigned int size, ReadAsyncCallback callback, nlUserParam uParam)
+ {
+     GameCubeReadAsync((GCFile*)file, callback, buffer, (u32)size, uParam);
+ }
+@@ -830,7 +830,7 @@
+ /**
+  * Offset/Address/Size: 0x1D0 | 0x801CEF24 | size: 0xF4
+  */
+-void nlCancelPendingAsyncReads(nlFile* pFile, void (*callback)(nlFile*, void*, unsigned int, unsigned long, void (*)(nlFile*, void*, unsigned int, unsigned long)))
++void nlCancelPendingAsyncReads(nlFile* pFile, void (*callback)(nlFile*, void*, unsigned int, nlUserParam, void (*)(nlFile*, void*, unsigned int, nlUserParam)))
+ {
+     AsyncEntry* pEntry;
+     AsyncEntry* pNextEntry;
+@@ -898,7 +898,7 @@
+  */
+ namespace
+ {
+-void AsyncToVirMemBufferCallback(nlFile* pFile, void* buffer, unsigned int size, unsigned long param)
++void AsyncToVirMemBufferCallback(nlFile* pFile, void* buffer, unsigned int size, nlUserParam param)
+ {
+     memcpy(asyncToVirMemBufferLoad[param].target, (char*)buffer - size, size);
+     asyncToVirMemBufferLoad[param].target += size;
+@@ -921,7 +921,7 @@
+ /**
+  * Offset/Address/Size: 0x0 | 0x801CED54 | size: 0xEC
+  */
+-void nlReadAsyncToVirtualMemory(nlFile* file, void* buffer, int size, ReadAsyncCallback callback, unsigned long param,
++void nlReadAsyncToVirtualMemory(nlFile* file, void* buffer, int size, ReadAsyncCallback callback, nlUserParam param,
+     unsigned long chunkSize, void* userData)
+ {
+     int i;
+--- a/include/NL/nlBundleFile.h
++++ b/include/NL/nlBundleFile.h
+@@ -6,7 +6,7 @@
+ #include "NL/nlFileGC.h"
+ #include "NL/nlString.h"
+ 
+-typedef void (*FileReadAsyncCallback)(void*, unsigned long, unsigned long);
++typedef void (*FileReadAsyncCallback)(void*, unsigned long, nlUserParam);
+ 
+ // Both of these are read verbatim out of a .Res bundle, so big-endian.
+ typedef struct
+@@ -24,13 +24,13 @@
+     /* 0x08 */ beu32 m_length;
+ } BundleFileDirectoryEntry, *BundleFileDirectoryEntryPtr;
+ 
+-static void cbFileReadAsyncCallback(nlFile* file, void* buffer, unsigned int arg, unsigned long bundlePtr);
++static void cbFileReadAsyncCallback(nlFile* file, void* buffer, unsigned int arg, nlUserParam bundlePtr);
+ 
+ class BundleFile
+ {
+ public:
+-    void ReadFileAsync(unsigned long hash, void* buffer, unsigned long size, FileReadAsyncCallback callback, unsigned long userParam);
+-    void ReadFileAsync(const char* filename, void* buffer, unsigned long size, FileReadAsyncCallback callback, unsigned long userParam);
++    void ReadFileAsync(unsigned long hash, void* buffer, unsigned long size, FileReadAsyncCallback callback, nlUserParam userParam);
++    void ReadFileAsync(const char* filename, void* buffer, unsigned long size, FileReadAsyncCallback callback, nlUserParam userParam);
+     void LoadFile(const char* filename, void* pBuffer);
+     void ReadFileByIndex(unsigned long index, void* buffer, unsigned long size);
+     void ReadFile(unsigned long hash, void* buffer, unsigned long size);
+@@ -73,28 +73,28 @@
+         LoadFileByIndex(index, pBuffer);
+     }
+ 
+-    inline void ReadFileAsyncByIndex(unsigned long nFileIndex, void* pBuffer, unsigned long bytesToRead, FileReadAsyncCallback pCallback, unsigned long userParam)
++    inline void ReadFileAsyncByIndex(unsigned long nFileIndex, void* pBuffer, unsigned long bytesToRead, FileReadAsyncCallback pCallback, nlUserParam userParam)
+     {
+         m_pReadCallback = pCallback;
+         m_readUserParam = userParam;
+         BundleFileDirectoryEntry* pEntry = &m_pDirectory[nFileIndex];
+         nlSeek(m_pFile, pEntry->m_blockNumber * m_pHeader->nSectorSize, 0);
+-        nlReadAsync(m_pFile, pBuffer, bytesToRead, &cbFileReadAsyncCallback, (unsigned long)this);
++        nlReadAsync(m_pFile, pBuffer, bytesToRead, &cbFileReadAsyncCallback, (nlUserParam)this);
+     }
+ 
+-    inline void LoadFileAsyncByIndex(unsigned long nFileIndex, void* pBuffer, FileReadAsyncCallback pCallback, unsigned long userParam)
++    inline void LoadFileAsyncByIndex(unsigned long nFileIndex, void* pBuffer, FileReadAsyncCallback pCallback, nlUserParam userParam)
+     {
+         BundleFileDirectoryEntry* pEntry = &m_pDirectory[nFileIndex];
+         ReadFileAsyncByIndex(nFileIndex, pBuffer, pEntry->m_length, pCallback, userParam);
+     }
+ 
+-    inline void LoadFileAsync(unsigned long nHashID, void* pBuffer, FileReadAsyncCallback pCallback, unsigned long userParam)
++    inline void LoadFileAsync(unsigned long nHashID, void* pBuffer, FileReadAsyncCallback pCallback, nlUserParam userParam)
+     {
+         u32 index = FindHashIndex(nHashID);
+         LoadFileAsyncByIndex(index, pBuffer, pCallback, userParam);
+     }
+ 
+-    inline void LoadFileAsync(const char* filename, void* pBuffer, FileReadAsyncCallback pCallback, unsigned long userParam)
++    inline void LoadFileAsync(const char* filename, void* pBuffer, FileReadAsyncCallback pCallback, nlUserParam userParam)
+     {
+         u32 hash = HashFilename(filename);
+         LoadFileAsync(hash, pBuffer, pCallback, userParam);
+@@ -118,10 +118,10 @@
+ 
+ public:
+     /* 0x00 */ nlFile* m_pFile;
+-    /* 0x04 */ void (*m_pOpenCallback)(void*, unsigned long, unsigned long);
+-    /* 0x08 */ unsigned long m_openUserParam;
++    /* 0x04 */ void (*m_pOpenCallback)(void*, unsigned long, nlUserParam);
++    /* 0x08 */ nlUserParam m_openUserParam;
+     /* 0x0C */ FileReadAsyncCallback m_pReadCallback;
+-    /* 0x10 */ unsigned long m_readUserParam;
++    /* 0x10 */ nlUserParam m_readUserParam;
+     /* 0x14 */ BundleFileHeader* m_pHeader;
+     /* 0x18 */ BundleFileDirectoryEntry* m_pDirectory;
+ 
+--- a/src/NL/nlBundleFile.cpp
++++ b/src/NL/nlBundleFile.cpp
+@@ -6,27 +6,27 @@
+ /**
+  * Offset/Address/Size: 0x0 | 0x801E85CC | size: 0xD4
+  */
+-void BundleFile::ReadFileAsync(unsigned long hash, void* buffer, unsigned long size, FileReadAsyncCallback callback, unsigned long userParam)
++void BundleFile::ReadFileAsync(unsigned long hash, void* buffer, unsigned long size, FileReadAsyncCallback callback, nlUserParam userParam)
+ {
+     u32 index = FindHashIndex(hash);
+     m_pReadCallback = callback;
+     m_readUserParam = userParam;
+     BundleFileDirectoryEntry* entry = &m_pDirectory[index];
+     nlSeek(m_pFile, entry->m_blockNumber * m_pHeader->nSectorSize, 0);
+-    nlReadAsync(m_pFile, buffer, size, &cbFileReadAsyncCallback, (unsigned long)this);
++    nlReadAsync(m_pFile, buffer, size, &cbFileReadAsyncCallback, (nlUserParam)this);
+ }
+ 
+ /**
+  * Offset/Address/Size: 0xD4 | 0x801E86A0 | size: 0x138
+  */
+-void BundleFile::ReadFileAsync(const char* filename, void* buffer, unsigned long size, FileReadAsyncCallback callback, unsigned long userParam)
++void BundleFile::ReadFileAsync(const char* filename, void* buffer, unsigned long size, FileReadAsyncCallback callback, nlUserParam userParam)
+ {
+     const u32 index = FindHashIndex(HashFilename(filename));
+     m_pReadCallback = callback;
+     m_readUserParam = userParam;
+     BundleFileDirectoryEntry* entry = &m_pDirectory[index];
+     nlSeek(m_pFile, entry->m_blockNumber * m_pHeader->nSectorSize, 0);
+-    nlReadAsync(m_pFile, buffer, size, &cbFileReadAsyncCallback, (unsigned long)this);
++    nlReadAsync(m_pFile, buffer, size, &cbFileReadAsyncCallback, (nlUserParam)this);
+ }
+ 
+ /**
+@@ -196,7 +196,7 @@
+ /**
+  * Offset/Address/Size: 0x9E4 | 0x801E8FB0 | size: 0x50
+  */
+-static void cbFileReadAsyncCallback(nlFile* file, void* buffer, unsigned int arg, unsigned long bundlePtr)
++static void cbFileReadAsyncCallback(nlFile* file, void* buffer, unsigned int arg, nlUserParam bundlePtr)
+ {
+     BundleFile* bundleFile = (BundleFile*)bundlePtr;
+     bundleFile->m_pReadCallback(buffer, arg, bundleFile->m_readUserParam);
+--- a/include/NL/plat/plataudio.h
++++ b/include/NL/plat/plataudio.h
+@@ -3,6 +3,7 @@
+ 
+ #include "types.h"
+ #include "NL/nlMath.h"
++#include "NL/nlFile.h"
+ #ifndef GOLDEN_DISABLE_AUDIO
+ #include "musyx/musyx.h"
+ #endif
+@@ -214,7 +215,7 @@
+ class ARAMTransferHelperLoadEntireFile
+ {
+ public:
+-    static void LoadEntireFileCallback(nlFile* pFile, void* buffer, unsigned int size, unsigned long uParam);
++    static void LoadEntireFileCallback(nlFile* pFile, void* buffer, unsigned int size, nlUserParam uParam);
+     static void* sndPushGroupCallback(unsigned long uOffset, unsigned long uSize);
+ 
+     unsigned char* m_pARAMXferBlockBaseAddress; // offset 0x0
+--- a/src/NL/plat/plataudio.cpp
++++ b/src/NL/plat/plataudio.cpp
+@@ -1393,7 +1393,7 @@
+ /**
+  * Offset/Address/Size: 0x1C44 | 0x801C6440 | size: 0x54
+  */
+-void ARAMTransferHelperLoadEntireFile::LoadEntireFileCallback(nlFile* pFile, void* buffer, unsigned int size, unsigned long uParam)
++void ARAMTransferHelperLoadEntireFile::LoadEntireFileCallback(nlFile* pFile, void* buffer, unsigned int size, nlUserParam uParam)
+ {
+     unsigned int AllocSize;
+     if (uParam == 0)
+--- a/include/Game/Sys/GCStream.h
++++ b/include/Game/Sys/GCStream.h
+@@ -532,9 +532,9 @@
+         Purge();
+     }
+ 
+-    static void _HdrReadCB(nlFile* pFile, void* pData, unsigned int Length, unsigned long User);
+-    static void _WarmReadCB(nlFile* pFile, void* pData, unsigned int Length, unsigned long User);
+-    static void _UpdateReadCB(nlFile* pFile, void* pData, unsigned int Length, unsigned long User);
++    static void _HdrReadCB(nlFile* pFile, void* pData, unsigned int Length, nlUserParam User);
++    static void _WarmReadCB(nlFile* pFile, void* pData, unsigned int Length, nlUserParam User);
++    static void _UpdateReadCB(nlFile* pFile, void* pData, unsigned int Length, nlUserParam User);
+ 
+     class READ_CB_INFO
+     {
+@@ -596,7 +596,7 @@
+         bool enabled = OSDisableInterrupts();
+         READ_CB_INFO* pCBInfo = READ_CB_INFO::s_AllocPool.Allocate();
+         OSRestoreInterrupts(enabled);
+-        unsigned long user = (unsigned long)pCBInfo;
++        nlUserParam user = (nlUserParam)pCBInfo;
+         if (pCBInfo)
+         {
+             AudioStreamBuffer* pBuffer = m_Buffers[0];
+@@ -607,8 +607,8 @@
+     inline virtual unsigned long GetUpdateReadLength();
+     inline virtual void CancelPendingReads();
+     static inline void _AsyncCancelCB(
+-        nlFile*, void*, unsigned int, unsigned long uParam,
+-        void (*)(nlFile*, void*, unsigned int, unsigned long));
++        nlFile*, void*, unsigned int, nlUserParam uParam,
++        void (*)(nlFile*, void*, unsigned int, nlUserParam));
+     inline virtual bool SafeToPurge();
+     inline virtual void Purge();
+ 
+@@ -661,7 +661,7 @@
+         AudioStreamBuffer* buffer)
+     {
+         _UpdateReadCB(
+-            m_pFile, data + length, length, (unsigned long)AllocReadCBInfo(buffer));
++            m_pFile, data + length, length, (nlUserParam)AllocReadCBInfo(buffer));
+     }
+     void ReadFirst(
+         unsigned char* data, unsigned int length,
+@@ -690,10 +690,10 @@
+     virtual void Warm(bool CoolOnStop);
+     inline virtual void CancelPendingReads();
+     static inline void _AsyncCancelCB(
+-        nlFile*, void* buffer, unsigned int, unsigned long uParam,
+-        void (*Callback)(nlFile*, void*, unsigned int, unsigned long));
++        nlFile*, void* buffer, unsigned int, nlUserParam uParam,
++        void (*Callback)(nlFile*, void*, unsigned int, nlUserParam));
+     static inline void _InterleavedHdrReadCB(
+-        nlFile* pFile, void* pData, unsigned int Length, unsigned long User);
++        nlFile* pFile, void* pData, unsigned int Length, nlUserParam User);
+     inline virtual unsigned long GetUpdateReadLength();
+     inline virtual bool SafeToPurge();
+     inline virtual void Purge();
+--- a/include/Game/Sys/GCStreamVirtuals.h
++++ b/include/Game/Sys/GCStreamVirtuals.h
+@@ -4,14 +4,14 @@
+ #include "Game/Sys/GCStream.h"
+ 
+ inline void GCAudioStreaming::StereoAudioStream::_InterleavedHdrReadCB(
+-    nlFile* pFile, void* pData, unsigned int Length, unsigned long User)
++    nlFile* pFile, void* pData, unsigned int Length, nlUserParam User)
+ {
+     ((StereoAudioStream*)User)->InterleavedHdrReadCB(pFile, pData, Length);
+ }
+ 
+ inline void GCAudioStreaming::StereoAudioStream::_AsyncCancelCB(
+-    nlFile*, void* buffer, unsigned int, unsigned long uParam,
+-    void (*Callback)(nlFile*, void*, unsigned int, unsigned long))
++    nlFile*, void* buffer, unsigned int, nlUserParam uParam,
++    void (*Callback)(nlFile*, void*, unsigned int, nlUserParam))
+ {
+     if (Callback == &_InterleavedHdrReadCB)
+     {
+@@ -48,8 +48,8 @@
+ }
+ 
+ inline void GCAudioStreaming::MonoAudioStream::_AsyncCancelCB(
+-    nlFile*, void*, unsigned int, unsigned long uParam,
+-    void (*)(nlFile*, void*, unsigned int, unsigned long))
++    nlFile*, void*, unsigned int, nlUserParam uParam,
++    void (*)(nlFile*, void*, unsigned int, nlUserParam))
+ {
+     READ_CB_INFO* pCBInfo = (READ_CB_INFO*)uParam;
+     READ_CB_INFO::s_AllocPool.DeleteEntry(pCBInfo);
+--- a/src/Game/Sys/GCStream.cpp
++++ b/src/Game/Sys/GCStream.cpp
+@@ -26,7 +26,7 @@
+     bool enabled = OSDisableInterrupts();
+     READ_CB_INFO* info = READ_CB_INFO::s_AllocPool.Allocate();
+     OSRestoreInterrupts(enabled);
+-    unsigned long user = (unsigned long)info;
++    nlUserParam user = (nlUserParam)info;
+     if (info)
+     {
+         info->Set(this, buffer);
+@@ -86,7 +86,7 @@
+ /**
+  * Offset/Address/Size: 0x187C | 0x801C902C | size: 0x108
+  */
+-void GCAudioStreaming::AudioStream::_HdrReadCB(nlFile* pFile, void* pData, unsigned int Length, unsigned long User)
++void GCAudioStreaming::AudioStream::_HdrReadCB(nlFile* pFile, void* pData, unsigned int Length, nlUserParam User)
+ {
+     READ_CB_INFO* pCBInfo = (READ_CB_INFO*)User;
+ 
+@@ -148,7 +148,7 @@
+ /**
+  * Offset/Address/Size: 0x17BC | 0x801C8F6C | size: 0xC0
+  */
+-void GCAudioStreaming::AudioStream::_WarmReadCB(nlFile* pFile, void* pData, unsigned int Length, unsigned long User)
++void GCAudioStreaming::AudioStream::_WarmReadCB(nlFile* pFile, void* pData, unsigned int Length, nlUserParam User)
+ {
+     READ_CB_INFO* pCBInfo = (READ_CB_INFO*)User;
+     AudioStream* pStream = pCBInfo->pStream;
+@@ -206,7 +206,7 @@
+ /**
+  * Offset/Address/Size: 0x1704 | 0x801C8EB4 | size: 0xB8
+  */
+-void GCAudioStreaming::AudioStream::_UpdateReadCB(nlFile* pFile, void* pData, unsigned int Length, unsigned long User)
++void GCAudioStreaming::AudioStream::_UpdateReadCB(nlFile* pFile, void* pData, unsigned int Length, nlUserParam User)
+ {
+     READ_CB_INFO* pCBInfo = (READ_CB_INFO*)User;
+     AudioStream* pStream = pCBInfo->pStream;
+@@ -262,7 +262,7 @@
+     bool enabled = OSDisableInterrupts();
+     READ_CB_INFO* pCBInfo = READ_CB_INFO::s_AllocPool.Allocate();
+     OSRestoreInterrupts(enabled);
+-    unsigned long user = (unsigned long)pCBInfo;
++    nlUserParam user = (nlUserParam)pCBInfo;
+ 
+     if (pCBInfo)
+     {
+@@ -357,7 +357,7 @@
+             pCBInfo->pStream = this;
+             pCBInfo->pBuffer = pB;
+         }
+-        _UpdateReadCB(m_pFile, pMRAMBuffer + MRAMOffsetA + LengthA, LengthA, (unsigned long)pCBInfo);
++        _UpdateReadCB(m_pFile, pMRAMBuffer + MRAMOffsetA + LengthA, LengthA, (nlUserParam)pCBInfo);
+         if (LengthB != 0)
+         {
+             memset(pMRAMBuffer + MRAMOffsetB, 0, LengthB);
+@@ -370,7 +370,7 @@
+                 pCBInfo2->pStream = this;
+                 pCBInfo2->pBuffer = pB;
+             }
+-            _UpdateReadCB(m_pFile, pMRAMBuffer + MRAMOffsetB + LengthB, LengthB, (unsigned long)pCBInfo2);
++            _UpdateReadCB(m_pFile, pMRAMBuffer + MRAMOffsetB + LengthB, LengthB, (nlUserParam)pCBInfo2);
+         }
+         return LengthA + LengthB;
+     }
+@@ -411,7 +411,7 @@
+                     pCBInfo3->pStream = this;
+                     pCBInfo3->pBuffer = pB;
+                 }
+-                _UpdateReadCB(m_pFile, pMRAMBuffer + MRAMOffset + ReadASize + ReadBSize, ReadBSize, (unsigned long)pCBInfo3);
++                _UpdateReadCB(m_pFile, pMRAMBuffer + MRAMOffset + ReadASize + ReadBSize, ReadBSize, (nlUserParam)pCBInfo3);
+                 m_LastPlayable = eosOff;
+                 ReadBSize = 0;
+                 m_Flags = (m_Flags & ~(1 << SF_EndAtUpdate)) | (1 << SF_EndAtUpdate);
+@@ -427,7 +427,7 @@
+             pCBInfo4->pStream = this;
+             pCBInfo4->pBuffer = pB;
+         }
+-        nlReadAsync(m_pFile, pMRAMBuffer + MRAMOffset, ReadASize, _UpdateReadCB, (unsigned long)pCBInfo4);
++        nlReadAsync(m_pFile, pMRAMBuffer + MRAMOffset, ReadASize, _UpdateReadCB, (nlUserParam)pCBInfo4);
+         if (ReadBSize != 0)
+         {
+             nlSeek(m_pFile, 0x60, 0);
+@@ -443,7 +443,7 @@
+                 pCBInfo5->pStream = this;
+                 pCBInfo5->pBuffer = pB;
+             }
+-            nlReadAsync(m_pFile, pMRAMBuffer + MRAMOffset + ReadASize, ReadBSize, _UpdateReadCB, (unsigned long)pCBInfo5);
++            nlReadAsync(m_pFile, pMRAMBuffer + MRAMOffset + ReadASize, ReadBSize, _UpdateReadCB, (nlUserParam)pCBInfo5);
+         }
+     }
+     return 0;
+@@ -467,7 +467,7 @@
+         pADPCMHdr,
+         sizeof(sDSPADPCM),
+         _HdrReadCB,
+-        (unsigned long)pCBInfo);
++        (nlUserParam)pCBInfo);
+ }
+ 
+ /**
+@@ -516,7 +516,7 @@
+     nlSeek(m_pFile, 0, 0);
+ 
+     void* pInterlvHdr = nlMalloc(sizeof(INTERLEAVED_ADPCM_HEADER), 0x20, true);
+-    nlReadAsync(m_pFile, pInterlvHdr, sizeof(INTERLEAVED_ADPCM_HEADER), _InterleavedHdrReadCB, (unsigned long)this);
++    nlReadAsync(m_pFile, pInterlvHdr, sizeof(INTERLEAVED_ADPCM_HEADER), _InterleavedHdrReadCB, (nlUserParam)this);
+ 
+     for (unsigned long buffer = 0; buffer < 2; buffer++)
+     {
+@@ -586,7 +586,7 @@
+             pCBInfo->pBuffer = pBuffer;
+         }
+ 
+-        nlReadAsync(m_pFile, pMRAMBuffer, m_Interleave, _WarmReadCB, (unsigned long)pCBInfo);
++        nlReadAsync(m_pFile, pMRAMBuffer, m_Interleave, _WarmReadCB, (nlUserParam)pCBInfo);
+ 
+         ((unsigned long&)BufferIndex)++;
+         pBuffer = GetBuffer((unsigned long)BufferIndex);
+@@ -724,7 +724,7 @@
+                 info->Set(this, pBuffer);
+             }
+             nlReadAsync(
+-                m_pFile, pMRAMBuffer + MRAMOffsetB, LengthB, _UpdateReadCB, (unsigned long)info);
++                m_pFile, pMRAMBuffer + MRAMOffsetB, LengthB, _UpdateReadCB, (nlUserParam)info);
+         }
+     }
+     AdvanceStreamPosition(TotalReadLen);
+--- a/src/Game/Sys/THPSimple.cpp
++++ b/src/Game/Sys/THPSimple.cpp
+@@ -208,7 +208,7 @@
+ /**
+  * Offset/Address/Size: 0x17E4 | 0x801CD748 | size: 0x4
+  */
+-static void __THPAsyncCancelCB(nlFile*, void*, unsigned int, unsigned long, void (*)(nlFile*, void*, unsigned int, unsigned long))
++static void __THPAsyncCancelCB(nlFile*, void*, unsigned int, nlUserParam, void (*)(nlFile*, void*, unsigned int, nlUserParam))
+ {
+ }
+ 
+@@ -501,7 +501,7 @@
+ /**
+  * Offset/Address/Size: 0xD0C | 0x801CCC70 | size: 0x160
+  */
+-static void __THPSimpleDVDCallback(nlFile* file, void* buffer, unsigned int bytesRead, unsigned long offset)
++static void __THPSimpleDVDCallback(nlFile* file, void* buffer, unsigned int bytesRead, nlUserParam offset)
+ {
+     SimpleControl.readProgress = 0;
+ 
+--- a/include/Game/FE/feAsyncImage.h
++++ b/include/Game/FE/feAsyncImage.h
+@@ -33,7 +33,7 @@
+     void CopyFrom(void* buffer, int size);
+     void FreeLoadBuffer();
+ 
+-    static inline void TextureLoadComplete(void* buffer, unsigned long size, unsigned long userData)
++    static inline void TextureLoadComplete(void* buffer, unsigned long size, nlUserParam userData)
+     {
+         AsyncImage* self = (AsyncImage*)userData;
+         self->mLoadState = LS_LOAD_COMPLETE;
+--- a/src/Game/FE/feAsyncImage.cpp
++++ b/src/Game/FE/feAsyncImage.cpp
+@@ -81,7 +81,7 @@
+             mLoadState = LS_LOAD_COMPLETE;
+             return;
+         }
+-        mBundleFile->ReadFileAsync(path, m_loadBuffer, mTextureSize, &AsyncImage::TextureLoadComplete, (unsigned long)this);
++        mBundleFile->ReadFileAsync(path, m_loadBuffer, mTextureSize, &AsyncImage::TextureLoadComplete, (nlUserParam)this);
+     }
+ }
+ 
+--- a/include/Game/FE/feResourceManager.h
++++ b/include/Game/FE/feResourceManager.h
+@@ -88,7 +88,7 @@
+     void QueueResourceLoad(FEResourceHandle* pHandle);
+     void UnloadResource(FEResourceHandle* pFeResourceHandle);
+     void UnloadPermanentResourceBundle();
+-    static void TextureResourceLoadComplete(void* buffer, unsigned long uReadSize, unsigned long uParam);
++    static void TextureResourceLoadComplete(void* buffer, unsigned long uReadSize, nlUserParam uParam);
+ 
+ private:
+     static void PlaceHolderForceTextureValid(FETextureResource* pFETextureResource);
+--- a/src/Game/FE/feResourceManager.cpp
++++ b/src/Game/FE/feResourceManager.cpp
+@@ -153,7 +153,7 @@
+ 
+             s_pResourceLoadBuffer = new (0x20, true) unsigned char[uFileLength];
+             s_pPermanentBundle->ReadFileByIndex(i, s_pResourceLoadBuffer, uFileLength);
+-            TextureResourceLoadComplete(NULL, uFileLength, (unsigned long)pTextureResource);
++            TextureResourceLoadComplete(NULL, uFileLength, (nlUserParam)pTextureResource);
+ 
+             delete[] s_pResourceLoadBuffer;
+             s_pResourceLoadBuffer = NULL;
+@@ -269,7 +269,7 @@
+ /**
+  * Offset/Address/Size: 0x29C | 0x8020BDDC | size: 0xA8
+  */
+-void FEResourceManager::TextureResourceLoadComplete(void* buffer, unsigned long uReadSize, unsigned long uParam)
++void FEResourceManager::TextureResourceLoadComplete(void* buffer, unsigned long uReadSize, nlUserParam uParam)
+ {
+     FEResourceHandle* pHandle = (FEResourceHandle*)uParam;
+ 
+@@ -306,7 +306,7 @@
+             pResourceLoadBuffer,
+             fileDirectoryEntry.m_length,
+             FEResourceManager::TextureResourceLoadComplete,
+-            (unsigned long)pFeTextureResource);
++            (nlUserParam)pFeTextureResource);
+     }
+ 
+     return FERR_WaitingForResource;
+--- a/include/Game/NisPlayer.h
++++ b/include/Game/NisPlayer.h
+@@ -53,7 +53,7 @@
+     void PlayCharacterDirection();
+     void Load(const char* nisType, NisTarget target, NisUseStadiumOffset useStadiumOffset, NisUseFilter useFilter, NisWinnerType winnerType);
+     BasicString<char, Detail::TempStringAllocator> GetTargetFilter(NisTarget target, NisWinnerType winnerType) const;
+-    static void AsyncLoad(nlFile* file, void* buffer, unsigned int size, unsigned long param);
++    static void AsyncLoad(nlFile* file, void* buffer, unsigned int size, nlUserParam param);
+     void LoadTriggers(Nis& nis);
+     void Load(char* buffer, unsigned int size, NisHeader& nisHeader);
+     void Render() const;
+--- a/src/Game/NisPlayer.cpp
++++ b/src/Game/NisPlayer.cpp
+@@ -235,18 +235,18 @@
+                     nlFile* file = nlOpen(fileName.c_str());
+                     if ((OSGetConsoleType() & 0x20000000) != 0)
+                     {
+-                        nlReadAsync(file, loadAt, mLoadQueue[i]->size, AsyncLoad, (unsigned long)mLoadQueue[i]);
++                        nlReadAsync(file, loadAt, mLoadQueue[i]->size, AsyncLoad, (nlUserParam)mLoadQueue[i]);
+                     }
+                     else
+                     {
+-                        nlAsyncLoadFileToVirtualMemory(file, mLoadQueue[i]->size, loadAt, AsyncLoad, (unsigned long)mLoadQueue[i]);
++                        nlAsyncLoadFileToVirtualMemory(file, mLoadQueue[i]->size, loadAt, AsyncLoad, (nlUserParam)mLoadQueue[i]);
+                     }
+                 }
+                 else
+                 {
+                     int size = 0;
+                     nlLoadEntireFileToVirtualMemory(fileName.c_str(), &size, 0x2000, loadAt, AllocateStart);
+-                    AsyncLoad(0, loadAt + mLoadQueue[i]->size, mLoadQueue[i]->size, (unsigned long)mLoadQueue[i]);
++                    AsyncLoad(0, loadAt + mLoadQueue[i]->size, mLoadQueue[i]->size, (nlUserParam)mLoadQueue[i]);
+                 }
+             }
+         }
+@@ -536,7 +536,7 @@
+ /**
+  * Offset/Address/Size: 0x1A48 | 0x80116724 | size: 0x98
+  */
+-void NisPlayer::AsyncLoad(nlFile* file, void* buffer, unsigned int size, unsigned long param)
++void NisPlayer::AsyncLoad(nlFile* file, void* buffer, unsigned int size, nlUserParam param)
+ {
+     if (file != NULL)
+     {

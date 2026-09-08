@@ -1,0 +1,321 @@
+--- a/src/Game/SH/SHCrossFader.cpp
++++ b/src/Game/SH/SHCrossFader.cpp
+@@ -49,8 +49,15 @@
+  */
+ void CrossFaderScene::SceneCreated()
+ {
++    // These are called through a plain function pointer, not through the
++    // ByValue/ByRef union the decomp used. That union punned a function taking
++    // InlineHasher by value into one taking InlineHasher&, which matched
++    // Metrowerks PPC (a class with a user-declared constructor was passed by
++    // hidden reference there). GCC on x86-64 passes a 4-byte trivially-copyable
++    // struct by value in a register, so the pun handed the callee the *address*
++    // of each volatile temporary and it read the low half of a stack pointer as
++    // the hash. Every lookup then missed and returned NULL.
+     typedef TLImageInstance* (*FindImageByValue)(FEPresentation*, InlineHasher, InlineHasher, InlineHasher, InlineHasher, InlineHasher, InlineHasher);
+-    typedef TLImageInstance* (*FindImageByRef)(FEPresentation*, InlineHasher&, InlineHasher&, InlineHasher&, InlineHasher&, InlineHasher&, InlineHasher&);
+ 
+     FEPresentation* pPresentation;
+     bool doCrossFade = true;
+@@ -103,13 +110,9 @@
+             hA = hash;
+             hB = hash;
+ 
+-            union
+-            {
+-                FindImageByValue byValue;
+-                FindImageByRef byRef;
+-            } f1;
+-            f1.byValue = FEFinder<TLImageInstance, 2>::Find<FEPresentation>;
+-            TLImageInstance* found = f1.byRef(
++            FindImageByValue f1;
++            f1 = FEFinder<TLImageInstance, 2>::Find<FEPresentation>;
++            TLImageInstance* found = f1(
+                 pPresentation,
+                 (InlineHasher&)hB,
+                 (InlineHasher&)h9,
+@@ -148,13 +151,9 @@
+             s7 = hash;
+             s8 = hash;
+ 
+-            union
+-            {
+-                FindImageByValue byValue;
+-                FindImageByRef byRef;
+-            } f2;
+-            f2.byValue = FEFinder<TLImageInstance, 2>::Find<FEPresentation>;
+-            mImageInstances[i] = f2.byRef(
++            FindImageByValue f2;
++            f2 = FEFinder<TLImageInstance, 2>::Find<FEPresentation>;
++            mImageInstances[i] = f2(
+                 pPresentation,
+                 (InlineHasher&)s8,
+                 (InlineHasher&)s6,
+@@ -199,13 +198,9 @@
+             t8 = hash;
+         }
+ 
+-        union
+-        {
+-            FindImageByValue byValue;
+-            FindImageByRef byRef;
+-        } f3;
+-        f3.byValue = FEFinder<TLImageInstance, 2>::Find<FEPresentation>;
+-        mCurrentImageInstance = f3.byRef(
++        FindImageByValue f3;
++        f3 = FEFinder<TLImageInstance, 2>::Find<FEPresentation>;
++        mCurrentImageInstance = f3(
+             pPresentation,
+             (InlineHasher&)t8,
+             (InlineHasher&)t6,
+--- a/src/Game/SH/SHChooseCup.cpp
++++ b/src/Game/SH/SHChooseCup.cpp
+@@ -164,30 +164,23 @@
+  */
+ void ChooseCupSceneV2::SceneCreated()
+ {
++    // These are called through a plain function pointer, not through the
++    // ByValue/ByRef union the decomp used. That union punned a function taking
++    // InlineHasher by value into one taking InlineHasher&, which matched
++    // Metrowerks PPC (a class with a user-declared constructor was passed by
++    // hidden reference there). GCC on x86-64 passes a 4-byte trivially-copyable
++    // struct by value in a register, so the pun handed the callee the *address*
++    // of each volatile temporary and it read the low half of a stack pointer as
++    // the hash. Every lookup then missed and returned NULL.
+     typedef TLImageInstance* (*FindImageByValue)(TLSlide*, InlineHasher, InlineHasher, InlineHasher, InlineHasher, InlineHasher, InlineHasher);
+-    typedef TLImageInstance* (*FindImageByRef)(TLSlide*, InlineHasher&, InlineHasher&, InlineHasher&, InlineHasher&, InlineHasher&, InlineHasher&);
+     typedef TLTextInstance* (*FindTextByValue)(TLSlide*, InlineHasher, InlineHasher, InlineHasher, InlineHasher, InlineHasher, InlineHasher);
+-    typedef TLTextInstance* (*FindTextByRef)(TLSlide*, InlineHasher&, InlineHasher&, InlineHasher&, InlineHasher&, InlineHasher&, InlineHasher&);
+     typedef TLComponentInstance* (*FindCompByValue)(FEPresentation*, InlineHasher, InlineHasher, InlineHasher, InlineHasher, InlineHasher, InlineHasher);
+-    typedef TLComponentInstance* (*FindCompByRef)(FEPresentation*, InlineHasher&, InlineHasher&, InlineHasher&, InlineHasher&, InlineHasher&, InlineHasher&);
+ 
+-    union
+-    {
+-        FindImageByValue byValue;
+-        FindImageByRef byRef;
+-    } findImage;
++    FindImageByValue findImage;
+ 
+-    union
+-    {
+-        FindTextByValue byValue;
+-        FindTextByRef byRef;
+-    } findText;
++    FindTextByValue findText;
+ 
+-    union
+-    {
+-        FindCompByValue byValue;
+-        FindCompByRef byRef;
+-    } findComp;
++    FindCompByValue findComp;
+ 
+     volatile unsigned long hB, hA;
+     volatile unsigned long h9, h8, h7, h6, h5, h4, h3, h2, h1, h0;
+@@ -200,7 +193,7 @@
+ 
+     TLSlide* slide = m_pFEScene->m_pFEPackage->GetPresentation()->m_currentSlide;
+ 
+-    findImage.byValue = FEFinder<TLImageInstance, 2>::Find<TLSlide>;
++    findImage = FEFinder<TLImageInstance, 2>::Find<TLSlide>;
+ 
+     h0 = 0;
+     h1 = 0;
+@@ -219,12 +212,12 @@
+     hA = hash;
+     hB = hash;
+ 
+-    TLImageInstance* pTrophyImage = findImage.byRef(slide, (InlineHasher&)hB, (InlineHasher&)h9, (InlineHasher&)h7, (InlineHasher&)h5, (InlineHasher&)h3, (InlineHasher&)h1);
++    TLImageInstance* pTrophyImage = findImage(slide, (InlineHasher&)hB, (InlineHasher&)h9, (InlineHasher&)h7, (InlineHasher&)h5, (InlineHasher&)h3, (InlineHasher&)h1);
+     mCupImage->mImageInstance = pTrophyImage;
+ 
+     DisplayCup();
+ 
+-    findText.byValue = FEFinder<TLTextInstance, 3>::Find<TLSlide>;
++    findText = FEFinder<TLTextInstance, 3>::Find<TLSlide>;
+ 
+     s0 = 0;
+     h1 = 0;
+@@ -243,14 +236,14 @@
+     sA = hash;
+     sB = hash;
+ 
+-    TLTextInstance* scrollText = findText.byRef(slide, (InlineHasher&)sB, (InlineHasher&)s9, (InlineHasher&)h7, (InlineHasher&)h5, (InlineHasher&)h3, (InlineHasher&)h1);
++    TLTextInstance* scrollText = findText(slide, (InlineHasher&)sB, (InlineHasher&)s9, (InlineHasher&)h7, (InlineHasher&)h5, (InlineHasher&)h3, (InlineHasher&)h1);
+ 
+     gl_ScreenInfo* screenInfo = glGetScreenInfo();
+     FEScrollText* ticker = new (nlMalloc(sizeof(FEScrollText), 0x20, true)) FEScrollText(scrollText, 0, screenInfo->ScreenWidth + 0x32);
+     mTicker = ticker;
+     mTicker->SetDisplayMessage("CHOOSE_CUP_TICKER");
+ 
+-    findComp.byValue = FEFinder<TLComponentInstance, 4>::Find<FEPresentation>;
++    findComp = FEFinder<TLComponentInstance, 4>::Find<FEPresentation>;
+ 
+     p0 = 0;
+     h1 = 0;
+@@ -271,7 +264,7 @@
+     p8 = hash;
+     p7 = hash;
+ 
+-    mButtons.mButtonInstance = findComp.byRef(m_pFEPresentation, (InlineHasher&)p8, (InlineHasher&)p6, (InlineHasher&)p4, (InlineHasher&)h5, (InlineHasher&)h3, (InlineHasher&)h1);
++    mButtons.mButtonInstance = findComp(m_pFEPresentation, (InlineHasher&)p8, (InlineHasher&)p6, (InlineHasher&)p4, (InlineHasher&)h5, (InlineHasher&)h3, (InlineHasher&)h1);
+     mButtons.SetState(ButtonComponent::BS_A_AND_B);
+ 
+     q0 = 0;
+@@ -293,7 +286,7 @@
+     q8 = hash;
+     q7 = hash;
+ 
+-    mButtons2.mButtonInstance = findComp.byRef(m_pFEPresentation, (InlineHasher&)q8, (InlineHasher&)q6, (InlineHasher&)q4, (InlineHasher&)h5, (InlineHasher&)h3, (InlineHasher&)h1);
++    mButtons2.mButtonInstance = findComp(m_pFEPresentation, (InlineHasher&)q8, (InlineHasher&)q6, (InlineHasher&)q4, (InlineHasher&)h5, (InlineHasher&)h3, (InlineHasher&)h1);
+     mButtons2.SetState(ButtonComponent::BS_A_AND_B);
+ }
+ 
+@@ -305,21 +298,11 @@
+ void ChooseCupSceneV2::Update(float fDeltaT)
+ {
+     typedef TLComponentInstance* (*FindCompByValue)(TLSlide*, InlineHasher, InlineHasher, InlineHasher, InlineHasher, InlineHasher, InlineHasher);
+-    typedef TLComponentInstance* (*FindCompByRef)(TLSlide*, InlineHasher&, InlineHasher&, InlineHasher&, InlineHasher&, InlineHasher&, InlineHasher&);
+     typedef TLTextInstance* (*FindTextByValue)(TLSlide*, InlineHasher, InlineHasher, InlineHasher, InlineHasher, InlineHasher, InlineHasher);
+-    typedef TLTextInstance* (*FindTextByRef)(TLSlide*, InlineHasher&, InlineHasher&, InlineHasher&, InlineHasher&, InlineHasher&, InlineHasher&);
+ 
+-    union
+-    {
+-        FindCompByValue byValue;
+-        FindCompByRef byRef;
+-    } findComp;
++    FindCompByValue findComp;
+ 
+-    union
+-    {
+-        FindTextByValue byValue;
+-        FindTextByRef byRef;
+-    } findText;
++    FindTextByValue findText;
+ 
+     volatile unsigned long hB, hA;
+     volatile unsigned long h9, h8, h7, h6, h5, h4, h3, h2, h1, h0;
+@@ -360,7 +343,7 @@
+ 
+         if (currentScene == this)
+         {
+-            findComp.byValue = FEFinder<TLComponentInstance, 4>::Find<TLSlide>;
++            findComp = FEFinder<TLComponentInstance, 4>::Find<TLSlide>;
+ 
+             h0 = 0;
+             h1 = 0;
+@@ -379,7 +362,7 @@
+             hA = hash;
+             hB = hash;
+ 
+-            TLComponentInstance* textComp = findComp.byRef(activeSlide, (InlineHasher&)hB, (InlineHasher&)h9, (InlineHasher&)h7, (InlineHasher&)h5, (InlineHasher&)h3, (InlineHasher&)h1);
++            TLComponentInstance* textComp = findComp(activeSlide, (InlineHasher&)hB, (InlineHasher&)h9, (InlineHasher&)h7, (InlineHasher&)h5, (InlineHasher&)h3, (InlineHasher&)h1);
+ 
+             textComp->m_bVisible = mCupInProgressVisible;
+             mCupInProgressDirty = false;
+@@ -438,7 +421,7 @@
+ 
+         presentation = m_pFEPresentation;
+ 
+-        findComp.byValue = FEFinder<TLComponentInstance, 4>::Find<TLSlide>;
++        findComp = FEFinder<TLComponentInstance, 4>::Find<TLSlide>;
+ 
+         s0 = 0;
+         h1 = 0;
+@@ -457,7 +440,7 @@
+         sA = hash;
+         sB = hash;
+ 
+-        TLComponentInstance* starComp = findComp.byRef(presentation->m_currentSlide, (InlineHasher&)sA, (InlineHasher&)s9, (InlineHasher&)h7, (InlineHasher&)h5, (InlineHasher&)h3, (InlineHasher&)h1);
++        TLComponentInstance* starComp = findComp(presentation->m_currentSlide, (InlineHasher&)sA, (InlineHasher&)s9, (InlineHasher&)h7, (InlineHasher&)h5, (InlineHasher&)h3, (InlineHasher&)h1);
+ 
+         float starTime = starComp->GetActiveSlide()->m_time;
+ 
+@@ -473,7 +456,7 @@
+ 
+             TLSlide* activeSlide = presentation->m_currentSlide;
+ 
+-            findText.byValue = FEFinder<TLTextInstance, 3>::Find<TLSlide>;
++            findText = FEFinder<TLTextInstance, 3>::Find<TLSlide>;
+ 
+             t0 = 0;
+             h1 = 0;
+@@ -492,14 +475,14 @@
+             tA = hash2;
+             tB = hash2;
+ 
+-            TLTextInstance* scrollText = findText.byRef(activeSlide, (InlineHasher&)tB, (InlineHasher&)t9, (InlineHasher&)h7, (InlineHasher&)h5, (InlineHasher&)h3, (InlineHasher&)h1);
++            TLTextInstance* scrollText = findText(activeSlide, (InlineHasher&)tB, (InlineHasher&)t9, (InlineHasher&)h7, (InlineHasher&)h5, (InlineHasher&)h3, (InlineHasher&)h1);
+ 
+             scrollText->SetStringId("CHOOSE_CUP_TICKER");
+             mTicker->ApplyNewTextInstancePointer(scrollText, 8000.0f, 100.0f);
+ 
+             mTicker->Update(fDeltaT);
+ 
+-            findComp.byValue = FEFinder<TLComponentInstance, 4>::Find<TLSlide>;
++            findComp = FEFinder<TLComponentInstance, 4>::Find<TLSlide>;
+ 
+             y0 = 0;
+             h1 = 0;
+@@ -518,7 +501,7 @@
+             yA = hash;
+             yB = hash;
+ 
+-            starComp = findComp.byRef(presentation->m_currentSlide, (InlineHasher&)yA, (InlineHasher&)y9, (InlineHasher&)h7, (InlineHasher&)h5, (InlineHasher&)h3, (InlineHasher&)h1);
++            starComp = findComp(presentation->m_currentSlide, (InlineHasher&)yA, (InlineHasher&)y9, (InlineHasher&)h7, (InlineHasher&)h5, (InlineHasher&)h3, (InlineHasher&)h1);
+ 
+             starComp->Update(starTime);
+         }
+@@ -539,7 +522,7 @@
+ 
+         presentation = m_pFEPresentation;
+ 
+-        findComp.byValue = FEFinder<TLComponentInstance, 4>::Find<TLSlide>;
++        findComp = FEFinder<TLComponentInstance, 4>::Find<TLSlide>;
+ 
+         v0 = 0;
+         h1 = 0;
+@@ -558,7 +541,7 @@
+         vA = hash;
+         vB = hash;
+ 
+-        TLComponentInstance* starComp = findComp.byRef(presentation->m_currentSlide, (InlineHasher&)vA, (InlineHasher&)v9, (InlineHasher&)h7, (InlineHasher&)h5, (InlineHasher&)h3, (InlineHasher&)h1);
++        TLComponentInstance* starComp = findComp(presentation->m_currentSlide, (InlineHasher&)vA, (InlineHasher&)v9, (InlineHasher&)h7, (InlineHasher&)h5, (InlineHasher&)h3, (InlineHasher&)h1);
+ 
+         float starTime = starComp->GetActiveSlide()->m_time;
+ 
+@@ -574,7 +557,7 @@
+ 
+             TLSlide* activeSlide = presentation->m_currentSlide;
+ 
+-            findText.byValue = FEFinder<TLTextInstance, 3>::Find<TLSlide>;
++            findText = FEFinder<TLTextInstance, 3>::Find<TLSlide>;
+ 
+             w0 = 0;
+             h1 = 0;
+@@ -593,14 +576,14 @@
+             wA = hash2;
+             wB = hash2;
+ 
+-            TLTextInstance* scrollText = findText.byRef(activeSlide, (InlineHasher&)wB, (InlineHasher&)w9, (InlineHasher&)h7, (InlineHasher&)h5, (InlineHasher&)h3, (InlineHasher&)h1);
++            TLTextInstance* scrollText = findText(activeSlide, (InlineHasher&)wB, (InlineHasher&)w9, (InlineHasher&)h7, (InlineHasher&)h5, (InlineHasher&)h3, (InlineHasher&)h1);
+ 
+             scrollText->SetStringId("CHOOSE_CUP_TICKER");
+             mTicker->ApplyNewTextInstancePointer(scrollText, 8000.0f, 100.0f);
+ 
+             mTicker->Update(fDeltaT);
+ 
+-            findComp.byValue = FEFinder<TLComponentInstance, 4>::Find<TLSlide>;
++            findComp = FEFinder<TLComponentInstance, 4>::Find<TLSlide>;
+ 
+             x0 = 0;
+             h1 = 0;
+@@ -619,7 +602,7 @@
+             xA = hash;
+             xB = hash;
+ 
+-            starComp = findComp.byRef(presentation->m_currentSlide, (InlineHasher&)xA, (InlineHasher&)x9, (InlineHasher&)h7, (InlineHasher&)h5, (InlineHasher&)h3, (InlineHasher&)h1);
++            starComp = findComp(presentation->m_currentSlide, (InlineHasher&)xA, (InlineHasher&)x9, (InlineHasher&)h7, (InlineHasher&)h5, (InlineHasher&)h3, (InlineHasher&)h1);
+ 
+             starComp->Update(starTime);
+         }

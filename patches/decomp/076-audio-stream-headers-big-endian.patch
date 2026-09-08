@@ -1,0 +1,75 @@
+--- a/include/Game/Sys/GCStream.h
++++ b/include/Game/Sys/GCStream.h
+@@ -2,6 +2,8 @@
+ #define _GCSTREAM_H_
+ 
+ #include "NL/nlArrayAllocator.h"
++#include "NL/nlEndian.h"
++#include "NL/nlGCPtr.h"
+ #include "NL/nlWare.h"
+ #include "NL/nlFile.h"
+ #include "NL/nlFileGC.h"
+@@ -17,33 +19,44 @@
+ extern "C" void sndStreamLPFParameter(unsigned long, bool, unsigned long);
+ #endif
+ 
++// Both of these are the first bytes of an audio stream on the disc, read with a
++// DVD transfer and used where they land, so every scalar is still big-endian.
++// Missing that is not a subtle wrong-number bug here: m_Interleave and
++// m_StreamLength become the length and offset of the *next* DVD read, so a
++// byte-swapped 0x6A40 read back as 0x406A0000 turns the audio stream into a
++// gigabyte-long write through the middle of MEM1.
+ struct sDSPADPCM
+ {
+-    /* 0x00 */ unsigned long num_samples;
+-    /* 0x04 */ unsigned long num_adpcm_nibbles;
+-    /* 0x08 */ unsigned long sample_rate;
+-    /* 0x0C */ unsigned short loop_flag;
+-    /* 0x0E */ unsigned short format;
+-    /* 0x10 */ unsigned long sa;
+-    /* 0x14 */ unsigned long ea;
+-    /* 0x18 */ unsigned long ca;
+-    /* 0x1C */ unsigned short coef[16];
+-    /* 0x3C */ unsigned short gain;
+-    /* 0x3E */ unsigned short ps;
+-    /* 0x40 */ unsigned short yn1;
+-    /* 0x42 */ unsigned short yn2;
+-    /* 0x44 */ unsigned short lps;
+-    /* 0x46 */ unsigned short lyn1;
+-    /* 0x48 */ unsigned short lyn2;
+-    /* 0x4A */ unsigned short pad[11];
++    /* 0x00 */ beu32 num_samples;
++    /* 0x04 */ beu32 num_adpcm_nibbles;
++    /* 0x08 */ beu32 sample_rate;
++    /* 0x0C */ beu16 loop_flag;
++    /* 0x0E */ beu16 format;
++    /* 0x10 */ beu32 sa;
++    /* 0x14 */ beu32 ea;
++    /* 0x18 */ beu32 ca;
++    // Handed to musyx as a raw SND_ADPCMSTREAM_INFO*, never read as numbers
++    // here, so it stays a byte image -- which is what musyx wanted on hardware.
++    // Whoever turns GOLDEN_DISABLE_AUDIO off owns swapping it there.
++    /* 0x1C */ beu16 coef[16];
++    /* 0x3C */ beu16 gain;
++    /* 0x3E */ beu16 ps;
++    /* 0x40 */ beu16 yn1;
++    /* 0x42 */ beu16 yn2;
++    /* 0x44 */ beu16 lps;
++    /* 0x46 */ beu16 lyn1;
++    /* 0x48 */ beu16 lyn2;
++    /* 0x4A */ beu16 pad[11];
+ }; // total size: 0x60
++NL_GC_LAYOUT(sDSPADPCM, 0x60);
+ 
+ struct INTERLEAVED_ADPCM_HEADER
+ {
+     /* 0x0 */ char Thumbprint[4];
+-    /* 0x4 */ unsigned long Interleave;
+-    /* 0x8 */ unsigned long StreamLength;
++    /* 0x4 */ beu32 Interleave;
++    /* 0x8 */ beu32 StreamLength;
+ }; // total size: 0xC
++NL_GC_LAYOUT(INTERLEAVED_ADPCM_HEADER, 0xC);
+ 
+ namespace GCAudioStreaming
+ {

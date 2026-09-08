@@ -27,11 +27,16 @@ typedef GXTlut _GXTlut;
 inline void GXClearGPMetric() {}
 inline void GXSetGPMetric(int, int) {}
 inline void GXReadGPMetric(u32* val0, u32* val1) { *val0 = 0; *val1 = 0; }
-inline void GXInitFogAdjTable(void* table, u16 width, float projParam[4][4]) { /* stub */ }
 inline GXRenderModeObj GXEurgb60Hz480IntDf = {0}; // stub
 typedef const float (*CMtxP)[4];
 inline void SISetSamplingRate(int) {}
-inline void PADSetSamplingCallback(void (*)(void)) {}  // PADSamplingCallback = void (*)(void)
+// On hardware VI's retrace kicked off an SI transfer and this callback ran off
+// that interrupt, once per field. Nothing here generates it, so compat_shims.cpp
+// stores the callback and calls it once per host frame instead. It used to be a
+// no-op, which meant VBlankPadUpdate() never ran and the pad state the game reads
+// stayed zeroed forever.
+typedef void (*PADSamplingCallback)(void);
+void PADSetSamplingCallback(PADSamplingCallback callback);
 
 #ifdef __cplusplus
 extern "C" {

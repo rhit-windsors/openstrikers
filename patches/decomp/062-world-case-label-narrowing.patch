@@ -1,0 +1,12 @@
+diff --git a/src/Game/world.cpp b/src/Game/world.cpp
+--- a/src/Game/world.cpp
++++ b/src/Game/world.cpp
+@@ -568,7 +568,7 @@
+         case 0x19201:
+             CreateHelperObjFromChunk(pChunk);
+             break;
+-        case (int)0x8001D000:
++        case 0x8001D000:
+             LoadPhysicsPrimitives(pChunk);
+             break;
+         }

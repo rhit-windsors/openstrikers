@@ -1,0 +1,60 @@
+--- a/include/Game/Sys/gcmemcard.h
++++ b/include/Game/Sys/gcmemcard.h
+@@ -73,7 +73,11 @@
+     void Call(unsigned long slot, long result)
+     {
+         MCInternalFunctorBase* pFunctor = (MCInternalFunctorBase*)m_FunctorMem;
+-        if (*(long*)pFunctor != 0)
++        // The first word of a constructed functor is its vtable pointer, and an
++        // unset one is zeroed by the constructor. Read the whole pointer: at 32
++        // bits these agreed, but testing four bytes of an eight-byte vtable
++        // pointer asks whether its low half happens to be zero.
++        if (*(void**)m_FunctorMem != NULL)
+         {
+             pFunctor->Call(slot, result);
+         }
+@@ -103,6 +107,8 @@
+         ~MCMemberFunctor();
+         virtual void Call(unsigned long slot, long result)
+         {
++            static_assert(sizeof(MCMemberFunctor) <= sizeof(MemCardFunctor::m_FunctorMem),
++                          "MCMemberFunctor no longer fits in MemCardFunctor::m_FunctorMem");
+             (m_pObject->*m_cb)(slot, result, m_pData);
+         }
+         void Destroy();
+@@ -111,12 +117,32 @@
+         /* 0x14 */ T* m_pObject;
+     };
+ 
+-    /* 0x00 */ mutable unsigned char m_FunctorMem[24];
+-}; // total size: 0x18
++    // Callers placement-new an MCMemberFunctor into this buffer, so it has to
++    // be big enough for one. The offsets above are the GameCube's: vtable
++    // pointer and m_pData in the base, then MWCC's 12-byte
++    // pointer-to-member-function at 0x08 and a 4-byte object pointer at 0x14 --
++    // 24 bytes, exactly the size reserved here. All four widen on a 64-bit host,
++    // and a pointer-to-member-function becomes two pointers under the Itanium
++    // ABI rather than one, so the same object needs 40 bytes. The placement new
++    // had no idea: it ran 16 bytes past this array, over whatever local the
++    // caller had declared after its MemCardFunctor. Derive the size from the
++    // types so it is right on both, and let the static_assert in Call() catch
++    // it if that ever stops being true.
++    struct MCFunctorLayout
++    {
++        void* vtable;
++        void* pData;
++        unsigned long (MCInternalFunctorBase::*cb)(unsigned long, long, void*);
++        void* pObject;
++    };
++
++    /* 0x00 */ alignas(MCFunctorLayout) mutable unsigned char m_FunctorMem[sizeof(MCFunctorLayout)];
++}; // total size: 0x18 on the GameCube; sizeof(MCFunctorLayout) on the host
+ 
+ inline MemCardFunctor::MemCardFunctor()
+ {
+-    *(unsigned long*)m_FunctorMem = 0;
++    // Marks the functor unset for Call() above -- must clear the whole pointer.
++    *(void**)m_FunctorMem = NULL;
+ }
+ 
+ class MemCard

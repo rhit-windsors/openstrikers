@@ -1,0 +1,56 @@
+--- a/include/NL/nlDLRing.h
++++ b/include/NL/nlDLRing.h
+@@ -7,6 +7,22 @@
+ #include "NL/nlRing.h"
+ 
+ template <typename T>
++class DLListEntry;
++
++// Recover the node from a pointer to the value inside it. The decomp spells
++// this as `(Entry*)((char*)value - 8)`, 8 being the two 32-bit link pointers a
++// GameCube node started with; ours are 8 bytes each, so the hand-written
++// constant lands in the middle of the node and the next unlink writes through
++// whatever it finds there. Ask the type instead.
++template <typename T>
++inline DLListEntry<T>* nlDLEntryFromValue(T* value)
++{
++    const char* zero = (const char*)0;
++    const size_t offset = (const char*)&((DLListEntry<T>*)0)->entry - zero;
++    return (DLListEntry<T>*)((char*)value - offset);
++}
++
++template <typename T>
+ class DLListEntry
+ {
+ public:
+--- a/include/Game/Audio/StreamTrack.h
++++ b/include/Game/Audio/StreamTrack.h
+@@ -236,7 +236,7 @@
+     STREAM_FADE_CTRL* fadeCtrl = FindFade(stream);
+     if (fadeCtrl != NULL)
+     {
+-        FadeEntry* entry = (FadeEntry*)((char*)fadeCtrl - 8);
++        FadeEntry* entry = nlDLEntryFromValue(fadeCtrl);
+         nlDLRingIsEnd(m_Fades.m_Head, entry);
+         nlDLRingRemove(&m_Fades.m_Head, entry);
+         m_Fades.DeleteEntry(entry);
+--- a/src/Game/Audio/StreamTrack.cpp
++++ b/src/Game/Audio/StreamTrack.cpp
+@@ -179,7 +179,7 @@
+ 
+     Function<FnVoidVoid> callback(fadeCtrl->Callback);
+ 
+-    FadeEntry* entry = (FadeEntry*)((char*)fadeCtrl - 8);
++    FadeEntry* entry = nlDLEntryFromValue(fadeCtrl);
+     nlDLRingIsEnd(m_Fades.m_Head, entry);
+     nlDLRingRemove(&m_Fades.m_Head, entry);
+ 
+@@ -604,7 +604,7 @@
+     unsigned char flags = *((unsigned char*)pQueuedStream + 0xB);
+     StopStream(pQueuedStream->pStream, (flags >> 1) & 1);
+ 
+-    DLListEntry<QUEUED_STREAM>* entry = (DLListEntry<QUEUED_STREAM>*)((char*)pQueuedStream - 8);
++    DLListEntry<QUEUED_STREAM>* entry = nlDLEntryFromValue(pQueuedStream);
+ 
+     nlDLRingIsEnd(m_QueuedStreams.m_Head, entry);
+     nlDLRingRemove(&m_QueuedStreams.m_Head, entry);

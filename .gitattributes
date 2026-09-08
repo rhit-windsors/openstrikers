@@ -1,0 +1,10 @@
+# A patch file carries the line endings of the sources it patches as *content*:
+# a diff of CRLF sources has a literal CR at the end of every context, + and -
+# line, while its ---/+++/@@ headers do not. Line-ending normalisation cannot
+# tell those apart, so it rewrites the file to be uniformly one or the other and
+# the patch stops applying. Store and check these out byte for byte.
+*.patch -text
+
+# Same reasoning: these are exact bytes, not text to be normalised.
+*.png binary
+*.ppm binary

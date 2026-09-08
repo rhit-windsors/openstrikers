@@ -1,0 +1,22 @@
+--- a/src/Game/GL/GLInventory.cpp
++++ b/src/Game/GL/GLInventory.cpp
+@@ -97,6 +97,19 @@
+  */
+ void GLInventory::Delete()
+ {
++    // Every container below is allocated by Create(), so on an inventory that
++    // was never created these are all NULL and ReleaseLevel() dereferences the
++    // first one. That never mattered on hardware: the console does not exit,
++    // so this destructor -- registered for the file-scope glInventory -- never
++    // ran. On a host every exit runs it, including an early exit before the
++    // game starts, which turns a plain error message into an access violation
++    // printed after it. m_bCreated already tracks exactly this; it was simply
++    // never read.
++    if (!m_bCreated)
++    {
++        return;
++    }
++
+     m_bCreated = false;
+ 
+     nlListContainer<void*>* fileData = NULL;

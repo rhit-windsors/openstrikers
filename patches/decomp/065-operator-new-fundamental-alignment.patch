@@ -1,0 +1,16 @@
+diff --git a/src/NL/nlMemory.cpp b/src/NL/nlMemory.cpp
+--- a/src/NL/nlMemory.cpp
++++ b/src/NL/nlMemory.cpp
+@@ -58,7 +58,11 @@
+  */
+ void* operator new(unsigned long size)
+ {
+-    return nlMalloc(size);
++    // This replaces the *global* operator new, so it serves the host's C++
++    // libraries (Dawn, and LLVM pulled in by the Vulkan ICD) as well as the game.
++    // Those assume the platform's fundamental alignment -- 16 on x86-64 -- and
++    // fault on SSE accesses when handed the GameCube's 8-byte alignment.
++    return nlMalloc(size, __STDCPP_DEFAULT_NEW_ALIGNMENT__, false);
+ }
+ 
+ /**

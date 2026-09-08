@@ -1,0 +1,224 @@
+--- a/src/NL/MemAlloc.cpp
++++ b/src/NL/MemAlloc.cpp
+@@ -104,10 +104,39 @@
+     u32 lo;
+     u32 size;
+     u32 detail;
++    // Which thread did it. The game is single-threaded, but this allocator is
++    // also the global operator new, so aurora's FIFO and render workers are in
++    // here too -- and "who owns the block either side of the damage" is usually
++    // most of the answer.
++    u32 tid;
+ };
+ nlOpLogEntry s_nlOpLog[8192];
+ unsigned s_nlOpLogNext = 0;
+ 
++// Set NL_TRACE_ALLOC_SIZE (decimal or 0x-prefixed) to have every allocation of
++// exactly that user size print a backtrace. The op log says *where* a block is
++// and what happened to it; this says *who asked for it*, which is what you need
++// once the log has narrowed the damage to one buffer.
++extern "C" void osDumpBacktrace(const char* tag, unsigned skip);
++
++u32 nlTraceAllocSize()
++{
++    static bool read = false;
++    static u32 value = 0;
++    if (!read)
++    {
++        read = true;
++        const char* env = getenv("NL_TRACE_ALLOC_SIZE");
++        if (env != NULL)
++        {
++            value = (u32)strtoul(env, NULL, 0);
++        }
++    }
++    return value;
++}
++
++extern "C" unsigned long osCurrentThreadId(void);
++
+ void nlOpLog(const char* op, u32 lo, u32 size, u32 detail)
+ {
+     nlOpLogEntry& e = s_nlOpLog[s_nlOpLogNext % 8192];
+@@ -115,6 +144,7 @@
+     e.lo = lo;
+     e.size = size;
+     e.detail = detail;
++    e.tid = (u32)osCurrentThreadId();
+     s_nlOpLogNext++;
+ }
+ 
+@@ -129,8 +159,8 @@
+         const nlOpLogEntry& e = s_nlOpLog[(base + i) % 8192];
+         if (addr + 64 < e.lo || addr - 64 >= e.lo + e.size)
+             continue;
+-        fprintf(stderr, "  #%-6u %-22s %08x-%08x (size %u, detail %08x)\n", base + i, e.op, e.lo,
+-                e.lo + e.size, e.size, e.detail);
++        fprintf(stderr, "  #%-6u tid=%-6u %-22s %08x-%08x (size %u, detail %08x)\n", base + i, e.tid,
++                e.op, e.lo, e.lo + e.size, e.size, e.detail);
+     }
+ 
+     fprintf(stderr, "  --- last ops ---\n");
+@@ -138,11 +168,14 @@
+     for (unsigned i = total - tail; i < total; i++)
+     {
+         const nlOpLogEntry& e = s_nlOpLog[(base + i) % 8192];
+-        fprintf(stderr, "  #%-6u %-22s %08x-%08x (size %u, detail %08x)\n", base + i, e.op, e.lo,
+-                e.lo + e.size, e.size, e.detail);
++        fprintf(stderr, "  #%-6u tid=%-6u %-22s %08x-%08x (size %u, detail %08x)\n", base + i, e.tid,
++                e.op, e.lo, e.lo + e.size, e.size, e.detail);
+     }
+ }
+ 
++// Walks a ring that is already known to be broken, so every node has to be
++// bounds-checked before it is dereferenced -- otherwise the dump faults and
++// takes the far more useful op log down with it.
+ void nlRingDump(MemoryAllocator* self)
+ {
+     FreeBlockList* head = self->m_free_block_list;
+@@ -151,25 +184,68 @@
+         fprintf(stderr, "  <ring empty>\n");
+         return;
+     }
++
++    u32 lo = 0;
++    u32 hi = 0;
++    const bool haveRange = nlLookupHeapRange(self, &lo, &hi);
++
+     FreeBlockList* start = head->m_next;
+     FreeBlockList* cur = start;
+     for (unsigned i = 0; i < 32; i++)
+     {
+-        fprintf(stderr, "  [%2u] node=%08x size=%-10u next=%08x prev=%08x\n", i,
+-                (u32)(uintptr_t)cur, cur->m_size, cur->m_next.m_addr, cur->m_prev.m_addr);
++        const u32 addr = (u32)(uintptr_t)cur;
++        if (cur == NULL || (addr & 3) != 0 || (haveRange && (addr < lo || addr + 12 > hi)))
++        {
++            fprintf(stderr, "  [%2u] node=%08x <unreadable, stopping>\n", i, addr);
++            return;
++        }
++        fprintf(stderr, "  [%2u] node=%08x size=%-10u next=%08x prev=%08x\n", i, addr,
++                cur->m_size, cur->m_next.m_addr, cur->m_prev.m_addr);
+         cur = cur->m_next;
+-        if (cur == start || cur == NULL || ((uintptr_t)cur & 3) != 0)
++        if (cur == start)
+             return;
+     }
+     fprintf(stderr, "  ... (truncated)\n");
+ }
+ 
+-void nlRingFail(MemoryAllocator* self, const char* where, const char* why, FreeBlockList* node)
++// `node` is the node the check rejected; `prev` is the last node that read back
++// cleanly. When `node` is garbage -- which is the usual case, because the ring
++// links live inside free memory and an overrun rewrites them -- `node` is not an
++// address at all and has no history. `prev` is the block that was actually
++// written over, so that is what the op log is replayed for.
++void nlRingFail(MemoryAllocator* self, const char* where, const char* why, FreeBlockList* node,
++                FreeBlockList* prev)
+ {
+-    fprintf(stderr, "\n*** free ring corrupt: %s (%s), node=%08x\n", why, where,
+-            (u32)(uintptr_t)node);
++    fprintf(stderr, "\n*** free ring corrupt: %s (%s), node=%08x, after node=%08x\n", why, where,
++            (u32)(uintptr_t)node, (u32)(uintptr_t)prev);
++    if (prev != NULL)
++    {
++        u32 lo = 0;
++        u32 hi = 0;
++        const bool haveRange = nlLookupHeapRange(self, &lo, &hi);
++        const u32 paddr = (u32)(uintptr_t)prev;
++        if (!haveRange || (paddr >= lo && paddr + 12 <= hi))
++        {
++            fprintf(stderr, "  clobbered node %08x: size=%u next=%08x prev=%08x\n", paddr,
++                    prev->m_size, prev->m_next.m_addr, prev->m_prev.m_addr);
++        }
++        if (!haveRange || (paddr - 64 >= lo && paddr + 64 <= hi))
++        {
++            const unsigned char* p = (const unsigned char*)(uintptr_t)(paddr - 64);
++            for (unsigned row = 0; row < 8; row++)
++            {
++                fprintf(stderr, "  %08x  ", paddr - 64 + row * 16);
++                for (unsigned col = 0; col < 16; col++)
++                {
++                    fprintf(stderr, "%02x%s", p[row * 16 + col], col == 7 ? "  " : " ");
++                }
++                fprintf(stderr, "%s\n", row == 4 ? "  <- node" : "");
++            }
++        }
++        nlOpLogDump(paddr);
++        fflush(stderr);
++    }
+     nlRingDump(self);
+-    nlOpLogDump((u32)(uintptr_t)node);
+     fflush(stderr);
+     abort();
+ }
+@@ -227,35 +303,37 @@
+ 
+     FreeBlockList* start = head->m_next;
+     FreeBlockList* cur = start;
++    FreeBlockList* prev = head;
+     unsigned count = 0;
+     do
+     {
+         const u32 addr = (u32)(uintptr_t)cur;
+         if (haveRange && (addr < lo || addr >= hi))
+-            nlRingFail(self, where, "node outside heap", cur);
++            nlRingFail(self, where, "node outside heap", cur, prev);
+         if (addr & 3)
+-            nlRingFail(self, where, "node misaligned", cur);
++            nlRingFail(self, where, "node misaligned", cur, prev);
+         if (cur->m_size < 0xC || (cur->m_size & 3) != 0)
+-            nlRingFail(self, where, "implausible block size", cur);
++            nlRingFail(self, where, "implausible block size", cur, prev);
+         if (haveRange && addr + cur->m_size > hi)
+-            nlRingFail(self, where, "block runs past end of heap", cur);
++            nlRingFail(self, where, "block runs past end of heap", cur, prev);
+ 
+         FreeBlockList* const next = cur->m_next;
+         if ((FreeBlockList*)next->m_prev != cur)
+-            nlRingFail(self, where, "next->prev does not point back", next);
++            nlRingFail(self, where, "next->prev does not point back", next, cur);
+         if (next != start)
+         {
+             // The ring is kept in ascending address order, wrapping only at the
+             // tail; adjacent free blocks are coalesced, so they never touch.
+             if ((u32)(uintptr_t)next <= addr)
+-                nlRingFail(self, where, "ring not in ascending order", cur);
++                nlRingFail(self, where, "ring not in ascending order", cur, prev);
+             if (addr + cur->m_size > (u32)(uintptr_t)next)
+-                nlRingFail(self, where, "block overlaps its successor", cur);
++                nlRingFail(self, where, "block overlaps its successor", cur, prev);
+         }
+ 
++        prev = cur;
+         cur = next;
+         if (++count > 0x100000)
+-            nlRingFail(self, where, "ring does not terminate", cur);
++            nlRingFail(self, where, "ring does not terminate", cur, prev);
+     } while (cur != start);
+ }
+ 
+@@ -276,6 +354,7 @@
+ #define NL_RING_SCOPE(name) nlRingScope nlRingScope_(this, name " entry", name " exit")
+ #define NL_RING_RECORD(mem, size) nlRecordHeapRange(this, mem, size)
+ #define NL_OP_LOG(op, lo, size, detail) nlOpLog(op, (u32)(uintptr_t)(lo), (u32)(size), (u32)(uintptr_t)(detail))
++#define NL_TRACE_ALLOC(p, size)                                                                        do                                                                                                 {                                                                                                      const u32 want_ = nlTraceAllocSize();                                                              if (want_ != 0 && (u32)(size) == want_)                                                            {                                                                                                      fprintf(stderr, "\n*** alloc %u bytes at %08x\n", (unsigned)(size),                                        (u32)(uintptr_t)(p));                                                                      osDumpBacktrace("caller", 1);                                                                  }                                                                                              } while (0)
+ #define NL_RING_EXTENT(where, why, lo, hi, ignore) \
+     nlRingCheckExtent(this, where, why, (u32)(uintptr_t)(lo), (u32)(uintptr_t)(hi), ignore)
+ #else
+@@ -283,6 +362,7 @@
+ #define NL_RING_RECORD(mem, size) ((void)0)
+ #define NL_RING_EXTENT(where, why, lo, hi, ignore) ((void)0)
+ #define NL_OP_LOG(op, lo, size, detail) ((void)0)
++#define NL_TRACE_ALLOC(p, size) ((void)0)
+ #endif
+ 
+ // Built with `-inline deferred`: MWCC emits .text in REVERSE source order, so the
+@@ -544,6 +624,7 @@
+                            (char*)cur + currentBlockSize, NULL);
+             NL_OP_LOG("alloc block", cur, currentBlockSize, allocPtr);
+             NL_OP_LOG("alloc user", allocPtr, savedSize, (size << 8) | alignment);
++            NL_TRACE_ALLOC(allocPtr, savedSize);
+             result = allocPtr;
+         }
+     }

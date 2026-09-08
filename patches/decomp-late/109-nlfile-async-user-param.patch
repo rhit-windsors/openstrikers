@@ -1,0 +1,33 @@
+# nlAsyncLoadFileToVirtualMemory forwarded the wrong argument.
+#
+# The trailing parameter is the callback user parameter, not an alignment, and
+# nlReadAsyncToVirtualMemory takes an nlUserParam. Typing it `unsigned long`
+# truncated any pointer passed through it. Renamed and retyped to match.
+--- a/include/NL/nlFileGC.h
++++ b/include/NL/nlFileGC.h
+@@ -17,7 +17,7 @@
+ class GCFile;
+ 
+ void nlReadAsyncToVirtualMemory(nlFile* file, void* buffer, int size, ReadAsyncCallback callback, nlUserParam param, unsigned long chunkSize, void* userData);
+-void nlAsyncLoadFileToVirtualMemory(nlFile* file, int size, void* buffer, ReadAsyncCallback callback, unsigned long alignment);
++void nlAsyncLoadFileToVirtualMemory(nlFile* file, int size, void* buffer, ReadAsyncCallback callback, nlUserParam param);
+ void nlCancelPendingAsyncReads(nlFile* pFile, void (*callback)(nlFile*, void*, unsigned int, nlUserParam, void (*)(nlFile*, void*, unsigned int, nlUserParam)));
+ bool nlAsyncReadsPending(nlFile* file);
+ void* nlLoadEntireFileToVirtualMemory(const char* fileName, int* size, unsigned int transferSize, void* target, eAllocType allocType);
+--- a/src/NL/nlFileGC.cpp
++++ b/src/NL/nlFileGC.cpp
+@@ -913,10 +913,10 @@
+ /**
+  * Offset/Address/Size: 0xEC | 0x801CEE40 | size: 0x38
+  */
+-void nlAsyncLoadFileToVirtualMemory(nlFile* file, int size, void* buffer, ReadAsyncCallback callback, unsigned long alignment)
+-{
+-    nlReadAsyncToVirtualMemory(file, buffer, size, callback, alignment, 0x4000, asyncToVirMemBuffer);
+-}
++void nlAsyncLoadFileToVirtualMemory(nlFile* file, int size, void* buffer, ReadAsyncCallback callback, nlUserParam param)
++{
++    nlReadAsyncToVirtualMemory(file, buffer, size, callback, param, 0x4000, asyncToVirMemBuffer);
++}
+ 
+ /**
+  * Offset/Address/Size: 0x0 | 0x801CED54 | size: 0xEC
