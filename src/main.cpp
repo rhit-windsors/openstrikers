@@ -49,6 +49,7 @@ int main(int argc, char* argv[])   // <-- diventa aurora_main via macro
         .appName = "openstrikers",
         // Useful for automated runs whose process environment prevents SDL
         // from discovering its normal per-user preference directory.
+        .userPath = std::getenv("OPENSTRIKERS_CACHE_PATH"),
         .cachePath = std::getenv("OPENSTRIKERS_CACHE_PATH"),
         .vsync = false,
         .startFullscreen = false,

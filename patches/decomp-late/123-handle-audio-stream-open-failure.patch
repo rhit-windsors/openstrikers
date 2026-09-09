@@ -1,0 +1,160 @@
+# Once DolphinFile pool exhaustion became a recoverable nlOpen failure, audio
+# streams could retain a null file while claiming to be initialized. A queued
+# track would later finish fading out its predecessor, call Warm, and pass that
+# null file to nlSeek. The crash wrote through address 0xC.
+#
+# Report Open failure in the stream state, discard a failed queued track before
+# it can replace the active one, and let random crowd streams retry on a later
+# update. This also handles genuinely missing stream files without crashing.
+--- a/include/Game/Sys/GCStream.h
++++ b/include/Game/Sys/GCStream.h
+@@ -584,6 +584,6 @@ class MonoAudioStream : public AudioStream
+ public:
+     MonoAudioStream(AudioBufferMgr& mgr);
+-    void Open(const char* filename)
++    bool Open(const char* filename)
+     {
+         m_StreamLength = 0;
+         m_OldLength = 0;
+@@ -598,7 +598,13 @@ public:
+         m_LPFOn = 0;
+         m_LPFFreq = 0x3FFF;
+         m_pFile = nlOpen(filename);
++        if (m_pFile == NULL)
++        {
++            m_State = SS_New;
++            return false;
++        }
+         m_State = SS_Initd;
++        return true;
+     }
+     inline virtual ~MonoAudioStream();
+     virtual unsigned long DoUpdateRead(unsigned long MRAMOffsetA, unsigned long LengthA, unsigned long MRAMOffsetB, unsigned long LengthB, GCAudioStreaming::AudioStreamBuffer* pRequestingBuffer);
+@@ -633,7 +639,7 @@ class StereoAudioStream : public AudioStream
+ public:
+     StereoAudioStream(AudioBufferMgr& mgr);
+     void ReadHeader(unsigned long buffer);
+-    void Open(const char* filename)
++    bool Open(const char* filename)
+     {
+         m_StreamLength = 0;
+         m_OldLength = 0;
+@@ -647,7 +653,13 @@ public:
+         m_LPFOn = 0;
+         m_LPFFreq = 0x3FFF;
+         m_pFile = nlOpen(filename);
++        if (m_pFile == NULL)
++        {
++            m_State = SS_New;
++            return false;
++        }
+         m_State = SS_Initd;
++        return true;
+     }
+     virtual ~StereoAudioStream()
+     {
+--- a/include/Game/Audio/StreamTrack.h
++++ b/include/Game/Audio/StreamTrack.h
+@@ -276,7 +276,7 @@ public:
+ 
+     void Update(float dT);
+     void PlayStream(unsigned long StreamId, float Volume, bool Looping, unsigned long FadeIn, unsigned long ExistingFadeOut, const char* StreamParam, Audio::MasterVolume::VOLUME_GROUP OverrideVolGroup);
+-    void QueueStream(unsigned long StreamId, float Volume, bool Looping, unsigned long FadeIn, const char* StreamParam, Audio::MasterVolume::VOLUME_GROUP OverrideVolGroup);
++    bool QueueStream(unsigned long StreamId, float Volume, bool Looping, unsigned long FadeIn, const char* StreamParam, Audio::MasterVolume::VOLUME_GROUP OverrideVolGroup);
+     void ProcessNewHeadStream();
+     void SetIdleState();
+     void StopHead(unsigned long Fadeout);
+--- a/src/Game/Audio/StreamTrack.cpp
++++ b/src/Game/Audio/StreamTrack.cpp
+@@ -332,7 +332,10 @@ void AudioStreamTrack::StreamTrack::PlayStream(
+     }
+ 
+     TRACK_STATE StateAtStart = m_State;
+-    QueueStream(StreamId, Volume, Looping, FadeIn, StreamParam, OverrideVolGroup);
++    if (!QueueStream(StreamId, Volume, Looping, FadeIn, StreamParam, OverrideVolGroup))
++    {
++        return;
++    }
+ 
+     if (StateAtStart != TS_Playing)
+     {
+@@ -385,7 +388,7 @@ inline GCAudioStreaming::StereoAudioStream::StereoAudioStream(
+ /**
+  * Offset/Address/Size: 0x10BC | 0x80155E14 | size: 0x418
+  */
+-void AudioStreamTrack::StreamTrack::QueueStream(
++bool AudioStreamTrack::StreamTrack::QueueStream(
+     unsigned long StreamId, float Volume, bool Looping,
+     unsigned long FadeIn, const char* StreamParam,
+     Audio::MasterVolume::VOLUME_GROUP OverrideVolGroup)
+@@ -395,22 +398,7 @@ void AudioStreamTrack::StreamTrack::QueueStream(
+     if (Config::Global().Get<bool>("no_stream", false) == true)
+     {
+-        return;
++        return false;
+     }
+-
+-    QUEUED_STREAM* queuedStream = m_QueuedStreams.AllocateAtEnd(NULL);
+-    queuedStream->StreamId = StreamId;
+-
+-    TrackManagerBase& mgr = m_TrackMgr;
+-    GCAudioStreaming::StereoAudioStream* pStream = mgr.m_StreamPool.Allocate();
+-    new (pStream) GCAudioStreaming::StereoAudioStream(g_BufferMgr);
+-
+-    queuedStream->pStream = pStream;
+-    queuedStream->FadeIn = FadeIn;
+-    queuedStream->StartVolume = (int)(127.0f * Volume);
+-
+-    queuedStream->VolGroup = OverrideVolGroup == 0 ? m_VolumeGroup : OverrideVolGroup;
+-    queuedStream->Loop = Looping;
+-    queuedStream->TrackOwnsStream = m_TrackOwnsStreams;
+ 
+     nlStrNCpy<char>(FileName, "audio/data/streams/", 0x100);
+     unsigned long lookupKey = StreamId;
+@@ -436,11 +422,31 @@ void AudioStreamTrack::StreamTrack::QueueStream(
+         nlStrNCpy<char>(&FileName[19], lookup->FileName, 0xed);
+     }
+ 
+-    queuedStream->pStream->Open(FileName);
++    TrackManagerBase& mgr = m_TrackMgr;
++    GCAudioStreaming::StereoAudioStream* pStream = mgr.m_StreamPool.Allocate();
++    new (pStream) GCAudioStreaming::StereoAudioStream(g_BufferMgr);
++    if (!pStream->Open(FileName))
++    {
++        nlPrintf("WARNING! Unable to open audio stream %s\n", FileName);
++        pStream->~StereoAudioStream();
++        mgr.m_StreamPool.Free(pStream);
++        return false;
++    }
++
++    QUEUED_STREAM* queuedStream = m_QueuedStreams.AllocateAtEnd(NULL);
++    queuedStream->StreamId = StreamId;
++    queuedStream->pStream = pStream;
++    queuedStream->FadeIn = FadeIn;
++    queuedStream->StartVolume = (int)(127.0f * Volume);
++    queuedStream->VolGroup = OverrideVolGroup == 0 ? m_VolumeGroup : OverrideVolGroup;
++    queuedStream->Loop = Looping;
++    queuedStream->TrackOwnsStream = m_TrackOwnsStreams;
++
+     if (m_State == TS_Idle)
+     {
+         ProcessNewHeadStream();
+     }
++    return true;
+ }
+ 
+ extern "C" bool sndStreamActivate(SND_STREAMID stid);
+--- a/src/Game/Audio/CrowdMood.cpp
++++ b/src/Game/Audio/CrowdMood.cpp
+@@ -116,7 +116,10 @@ static void WarmRandomStream(const RANDOM_STREAMS& RandomStreams, T* pStream)
+     unsigned long randomIndex = nlRandom(RandomStreams.Count, &nlDefaultSeed);
+     const char* filename = RandomStreams.Files[randomIndex];
+ 
+-    pStream->Open(filename);
++    if (!pStream->Open(filename))
++    {
++        return;
++    }
+     pStream->Warm(true);
+ }
+ 

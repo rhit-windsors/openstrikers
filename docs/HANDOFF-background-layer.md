@@ -1,12 +1,33 @@
-# Handoff: the background defect is a render *view*, and it is down to three
+# Background-layer investigation: resolved in the depth-of-field capture
 
 Written 2026-09-09 mid-investigation, for whoever picks this up next.
 
 This is the "backgrounds render wrong in replays, intros, etc" issue from
-`ISSUES.md`. It is now reproduced on demand, confirmed against the retail game,
-and bisected from 34 render views down to **three**. The next step is three
-capture runs, spelled out at the bottom. Nothing here is speculative unless it
-says so.
+`ISSUES.md`. It was reproduced on demand, confirmed against the retail game,
+bisected from 34 render views to `GLV_DepthOfField`, and fixed on 2026-09-09.
+The remaining task is to confirm the same correction during a naturally
+triggered scored-goal replay.
+
+## Resolution
+
+The three final single-view captures identified view 17 conclusively:
+
+- Skipping view 6 (`build/bx-v6`) leaves the defect.
+- Skipping view 12 (`build/bx-v12`) leaves the defect.
+- Skipping view 17 (`build/bx-v17`) restores the stadium.
+
+`glx_DOFGrab` asked GX to copy 640x448, but Aurora's hosted
+`GXAdjustForOverscan` makes the active EFB 1280x960 at the default window size.
+The copy therefore contained only the upper-left portion of the current frame.
+The fullscreen DOF pass stretched that partial image over distant pixels,
+creating the apparent extra interior-stadium layer.
+
+`patches/decomp-late/118-scale-full-frame-efb-copies.patch` makes all three
+whole-EFB copy/clear operations use `AuroraGetRenderSize`. The unmasked
+verification capture is `build/bx-dof-srcfix/frame_600.png`: it shows the full
+stadium with the intended distant blur still enabled. `build/bx-v17/frame_600.png`
+is the no-DOF control, and `build/bx-dof-full/frame_600.png` is the diagnostic
+that exposed the cropped source over the entire screen.
 
 ---
 
@@ -78,7 +99,7 @@ without glob support, so tile inputs must be numbered `%02d.png`.
 
 ---
 
-## 3. The bisect, and where it stands
+## 3. The bisect
 
 `OPENSTRIKERS_SKIP_VIEW_MASK` is a 64-bit mask of `eGLView` ordinals to drop at
 the packet loop (`extern/decomp/src/NL/glx/glxSend.cpp`, around line 2973). The
@@ -115,14 +136,12 @@ Earlier single-view runs from 2026-09-08 (`build/iv-no3`, `iv-no16`, `iv-no21`,
 masks `8`, `0x10000`, `0x200000`) each left the defect in place, so views 3, 16
 and 21 are individually cleared.
 
-**So the culprit is view 6, 12 or 17** — `GLV_WorldShadowed`, `GLV_CoPlanar0`
-or `GLV_DepthOfField`. All three are shadow/post passes, which fits the
-symptom: large dark geometry over the background only.
+The subsequent single-view runs confirmed the culprit is view 17,
+`GLV_DepthOfField`. Views 6 and 12 are individually cleared.
 
-### The next three runs
+### Final single-view runs
 
-This is exactly where the session stopped. Run these and look at `frame_600.ppm`
-in each:
+These were the final bisect commands:
 
 ```powershell
 .\run-intro.ps1 -OutDir build\bx-v6  -Mask '0x40'
@@ -130,9 +149,7 @@ in each:
 .\run-intro.ps1 -OutDir build\bx-v17 -Mask '0x20000'
 ```
 
-Whichever one comes back looking like the retail shot names the view. If none
-does individually, it is a pair, and the three two-view masks are `0x1040`
-(6+12), `0x20040` (6+17), `0x21000` (12+17).
+Only the `bx-v17` result looks like the retail shot.
 
 ---
 

@@ -6,6 +6,51 @@ issue is reproduced, narrowed down, or fixed.
 
 ## Active issues
 
+- [The match clock goes negative at the end of a game](#the-match-clock-goes-negative-at-the-end-of-a-game) - medium priority, confirmed during manual play.
+- [Super goals do not display the x2 indicator](#super-goals-do-not-display-the-x2-indicator) - medium priority, confirmed during manual play.
+- [The game crashes during the end-of-game recaps](#the-game-crashes-during-the-end-of-game-recaps) - high priority, reproducible after a completed match.
+
+- [The match crashes after a couple of minutes](#the-match-crashes-after-a-couple-of-minutes) — high priority, newly reported.
+- [The match crashes when A is held down through play](#the-match-crashes-when-a-is-held-down-through-play) — medium priority, intermittent stress-path failure.
+- [Lighting and some character materials look incorrect](#lighting-and-some-character-materials-look-incorrect) — medium priority, especially visible in intros and replays.
+
+## Issue details
+
+### The match clock goes negative at the end of a game
+
+- **Expected:** The match clock stops at zero when regulation time expires.
+- **Actual:** The displayed clock continues below zero at the end of the game.
+- **Priority:** Medium. It is visible in a completed match but does not by
+  itself cause the recap crash.
+- **Status:** Active. Reported during manual play on 2026-09-09. Investigate
+  the end-of-regulation clock update and HUD formatting as a standalone issue.
+
+### Super goals do not display the x2 indicator
+
+- **Expected:** A super goal displays its x2 scoring indicator during the goal
+  presentation.
+- **Actual:** The super goal is awarded without displaying the x2 indicator.
+- **Priority:** Medium. The scoring presentation is incomplete, but this does
+  not by itself cause the recap crash.
+- **Status:** Active. Reported during manual play on 2026-09-09. Investigate
+  the super-goal overlay state and asset/component selection as a standalone
+  issue.
+
+### The game crashes during the end-of-game recaps
+
+- **Expected:** The end-of-game highlight recaps play through and advance to
+  the post-game summary.
+- **Actual:** The process exits during the recap sequence after a completed
+  match.
+- **Priority:** High. It prevents a normally completed match from reaching the
+  post-game flow.
+- **Status:** Active and separate from the negative clock and missing x2
+  indicator. The 2026-09-09 reproduction exited through the Windows runtime
+  fast-fail/abort path (`0xC0000409` in `ucrtbase.dll`) near host frame 24001,
+  without reaching the game's in-process fatal exception logger. A subsequent
+  GDB reproduction was stopped at the user's request before the match reached
+  the recaps. Reproduce under GDB and collect all thread stacks at the abort.
+
 ### The game crashes after a goal is scored
 
 - **Expected:** A goal plays its celebration and replay, then the match resumes
@@ -15,20 +60,15 @@ issue is reproduced, narrowed down, or fixed.
   matches. The replay-specific pointer and highlight-layout faults have now
   been fixed, so another goal-to-kickoff run will show whether this was the same
   bug or whether a separate goal-presentation fault remains.
-- **Status:** Not reproduced since the replay fix, and one run now argues
-  against it. A 60-second `capture.ps1` run on the current build pushed
+- **Status:** **Fixed, confirmed 2026-09-09.** A 60-second `capture.ps1` run on
+  the current build pushed
   `art/fe/goal_overlay.fen`, went 0-2 by frame 1800 and 0-3 by frame 3300, and
   was still rendering normally when the harness killed it on its timer -- no
   `FATAL EXCEPTION`, no early exit. So the build now survives goals that used to
   end the match, which is consistent with this having been the replay pointer
   bug all along.
-- **Do not close it on that.** It is one run, and the harness ended it rather
-  than the match ending on its own. Confirm with a full match played to the
-  final whistle before marking this fixed. To reproduce if it does recur, drive
-  a match with `OPENSTRIKERS_INPUT` (see the README) and let the AI score, then
-  capture the final stderr and note whether the crash lands before the goal
-  overlay, during the replay, or on the return to kickoff;
-  `art/fe/goal_overlay.fen` and `x2_sts.fen` scene pushes bracket the region.
+- **User verification:** Goals, their presentation path and the return to play
+  now complete without the old crash.
 
 ### Replay backgrounds render incorrectly
 
@@ -40,18 +80,18 @@ issue is reproduced, narrowed down, or fixed.
   pronounced.
 - **Priority:** Medium. Replays play through and return to gameplay now, so this
   is cosmetic rather than blocking, but it is on the path every goal takes.
-- **Status:** Partly explained, one cause fixed on 2026-09-09, and the main one
-  bisected the same day to three render views.
-- **It is a render *view*, and it is down to three: 6, 12 or 17.** The same
-  defect reproduces in the match intro, which is far cheaper to capture, and a
-  view-mask bisect against the retail reference narrowed it from 34 views to
-  `GLV_WorldShadowed` (6), `GLV_CoPlanar0` (12) and `GLV_DepthOfField` (17) --
-  all shadow or post passes, which fits large dark geometry over the background
-  only. Skipping those three (`OPENSTRIKERS_SKIP_VIEW_MASK=0x21040`) makes our
-  intro frame 600 match the retail shot; the unmasked run does not. Views 3, 16
-  and 21 are individually cleared. **The whole investigation, the exact
-  reproduction, the run table and the next three commands are in
-  `docs/HANDOFF-background-layer.md` -- start there, not here.**
+- **Status:** **Fixed, confirmed 2026-09-09.** The intro reproduction and real
+  replay presentation now render without the duplicated background layer.
+- **Confirmed as view 17, `GLV_DepthOfField`.** Skipping view 17 alone restores
+  the full stadium; skipping views 6 or 12 does not. Aurora renders the EFB at
+  1280x960, but `glx_DOFGrab` still captured the GameCube-era 640x448 rectangle.
+  That copied only the upper-left part of the current frame, then the fullscreen
+  DOF quad stretched it over the distant stadium. Full-frame EFB copies now use
+  `AuroraGetRenderSize`, in
+  `patches/decomp-late/118-scale-full-frame-efb-copies.patch`. An unmasked intro
+  capture preserves the intended distant blur while showing the complete
+  stadium. The capture evidence and bisect history are in
+  `docs/HANDOFF-background-layer.md`.
 - **The in-stadium screens were one of the causes.** The stadium has screens set
   into the wall below the crowd at both ends of the pitch, driven by
   `Jumbotron`, and they play a different 16-frame animation for kickoff, for a
@@ -93,6 +133,53 @@ issue is reproduced, narrowed down, or fixed.
   conditionally, and this is a texturing symptom. Confirm the interval actually
   is 1 on the frames that look wrong before going further afield.
 
+### The match crashes after a couple of minutes
+
+- **Expected:** A match runs through to the final whistle.
+- **Actual:** The game can crash after playing for a couple of minutes.
+- **Priority:** High. This interrupts ordinary match play.
+- **Status:** Five faults in the normal-play crash chain were captured and
+  fixed on 2026-09-09. The
+  first manual diagnostic run died at frame 12900 in
+  `PhysicsBanana::Contact`, reading address `0x24`: the code fetched
+  `PhysicsAIBall::m_pAIBall` through the GameCube byte offset `other+0x40`,
+  which is not its offset in the 64-bit host layout. Patch 119 replaces that
+  chain (including the ball owner, shot timer and damage flag) with typed field
+  access.
+- The rebuilt game passed that failure point, then exposed a second fault at
+  frame 16260 during a replay. `Replay::Play` decodes both interpolation
+  endpoints each rendered frame, and `RenderSnapshot` applied the discrete
+  crowd state for both. When the endpoints straddled a crowd-state transition,
+  they started two asynchronous texture loads per frame until the 32-entry
+  `DolphinFile` pool returned null. Patch 120 consumes the current endpoint's
+  serialized crowd state without applying its side effects.
+- A longer normal-play run reached frame 75960 before the same exhausted-file
+  failure recurred from live `CrowdManager::SetState`. That exposed the
+  underlying boundary bug: the pool-backed class `operator new` can return
+  null, but GCC still invokes the constructor for ordinary throwing `new`, so
+  the `DolphinFile` constructor wrote its vtable through address zero. Patch
+  121 acquires the pool slot explicitly and uses placement new only after a
+  successful allocation; queue saturation now follows `nlOpen`'s existing
+  null/failure path. The equivalent TDEV path is guarded as well.
+- That safe failure exposed a fourth fault at frame 17400: `NisPlayer` reserved
+  its arena space and marked a cinematic load started before checking whether
+  `nlOpen` succeeded, then passed the null file to `AsyncManager::AddEntry`.
+  Patch 122 opens first; if the file pool is temporarily full, it leaves the
+  queue entry untouched and retries on a later frame.
+- The next run exposed a fifth fault at frame 15900. An audio stream open could
+  fail while the file pool was saturated, but `StereoAudioStream::Warm` still
+  called `nlSeek` through the null handle. Patch 123 makes stream opening
+  report failure, avoids queueing failed streams, and leaves random crowd
+  streams eligible for a later retry.
+- **Verification:** The deterministic goal-replay hook now prints both
+  `AUTO_REPLAY_TEST begin=...` and `completed time=...`, returns to gameplay,
+  and passes the 45-second survival window. A five-minute patch-123 smoke run
+  crossed the previous frame-15900 failure point without a fatal marker. A
+  later manual run found a separate free-ring corruption at frame 7620, so the
+  general normal-play report remains active. Keep it separate from both the
+  end-of-game recap abort and the `OPENSTRIKERS_AUTO_A` stress crash unless a
+  future capture produces the same stack.
+
 ### The match crashes when A is held down through play
 
 - **Expected:** Mashing or holding A during a match shoots and passes; it does
@@ -126,15 +213,19 @@ issue is reproduced, narrowed down, or fixed.
 ### Lighting and some character materials look incorrect
 
 - **Expected:** Stadium and character lighting and material shading match the
-  original game.
-- **Status:** **Fixed 2026-09-08.** Aurora used the raw vertex color for
-  `GX_TG_COLOR0/1` texgens. GX uses the completed lighting-channel result;
-  feeding that result to the light-ramp coordinate restores the dark
-  olive-grey stadium surfaces, tunnel shadows, and directional character
-  shading.
+  original game and remain stable from frame to frame.
+- **Actual:** Lighting still glitches, particularly during replays and the
+  pre-match intro screens.
+- **Priority:** Medium. Gameplay remains functional, but the defect is highly
+  visible during presentation cameras.
+- **Status:** Active. The 2026-09-08 fix corrected the consistently wrong base
+  shading by feeding `GX_TG_COLOR0/1` texgens from the completed lighting
+  channel. A separate temporal/state problem remains and must be captured at a
+  tighter frame cadence before narrowing it.
 
-The intro investigation found two independent bugs, both now fixed. Replay
-backgrounds still need a fresh comparison before closing that separate report.
+The intro investigation fixed the texture-animation and base light-ramp bugs.
+The duplicated replay/intro background is now also fixed; intermittent lighting
+glitches remain a separate active report.
 
 ### What the captures say so far
 

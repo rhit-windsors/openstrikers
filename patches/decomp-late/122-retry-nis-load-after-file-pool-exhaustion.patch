@@ -1,0 +1,47 @@
+# NisPlayer marked a queued cinematic as started and reserved its arena space
+# before opening the file. If DolphinFile's fixed 32-entry pool was temporarily
+# full, nlOpen returned null but the loader passed it into AsyncManager and
+# dereferenced it. Merely dropping that async read would also strand the queue
+# in its started state forever.
+#
+# Open the file before changing either piece of queue bookkeeping. A failed
+# open now leaves the request pending, so HandleAsyncs retries it on a later
+# frame after older asynchronous reads have released their file handles.
+--- a/src/Game/NisPlayer.cpp
++++ b/src/Game/NisPlayer.cpp
+@@ -195,6 +195,22 @@ void NisPlayer::HandleAsyncs()
+         {
+             if (!mAsyncStarted[i])
+             {
++                BasicString<char, Detail::TempStringAllocator> fileName("art/nis/");
++                fileName.AppendInPlace(mLoadQueue[i]->name);
++
++                nlFile* file = NULL;
++                if (useAsyncLoading)
++                {
++                    file = nlOpen(fileName.c_str());
++                    if (file == NULL)
++                    {
++                        // The fixed-size file pool can be temporarily full.
++                        // Leave this queue entry untouched and retry it after
++                        // older asynchronous reads release their handles.
++                        continue;
++                    }
++                }
++
+                 mAsyncStarted[i] = 1;
+ 
+                 if (mLoadingFromBack)
+@@ -227,12 +243,8 @@ void NisPlayer::HandleAsyncs()
+                     nlBreak();
+                 }
+ 
+-                BasicString<char, Detail::TempStringAllocator> fileName("art/nis/");
+-                fileName.AppendInPlace(mLoadQueue[i]->name);
+-
+                 if (useAsyncLoading)
+                 {
+-                    nlFile* file = nlOpen(fileName.c_str());
+                     if ((OSGetConsoleType() & 0x20000000) != 0)
+                     {
+                         nlReadAsync(file, loadAt, mLoadQueue[i]->size, AsyncLoad, (nlUserParam)mLoadQueue[i]);

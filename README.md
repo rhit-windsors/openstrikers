@@ -1467,7 +1467,9 @@ A few smaller traps that have each cost a debugging session:
 * Aurora's `GXAdjustForOverscan` rewrites the render mode to the *host*
   framebuffer size, so viewports the game derives from its render mode are
   already in render pixels. Anywhere the game hard-codes the GameCube's 640x448
-  EFB extents instead, the frame gets clipped to the top-left corner.
+  EFB extents instead, the frame gets clipped to the top-left corner. This also
+  applies to `GXSetTexCopySrc`: a fullscreen post-process capture must use
+  `AuroraGetRenderSize` (`patches/decomp-late/118`).
 * `GXSetArray` takes an `le` flag that aurora does not have on hardware. Vertex
   arrays filled by the game at runtime are host little-endian, so it must be
   `true`; passing `false` byte-swaps every position and the geometry vanishes.

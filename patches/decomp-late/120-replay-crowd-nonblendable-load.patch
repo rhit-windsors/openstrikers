@@ -1,0 +1,34 @@
+# Replay::Play decodes both interpolation endpoints on every rendered frame.
+# The current endpoint is marked DO_NOT_REPLAY_NON_BLENDABLES, but
+# RenderSnapshot applied CrowdManager anyway. When the endpoints straddled a
+# crowd-state change they alternated the singleton between two states, starting
+# two asynchronous texture-bundle reads per frame until DolphinFile's 32 slots
+# were exhausted and placement-new wrote a vtable through address zero.
+#
+# Crowd state is discrete. Apply its side effects only for the previous
+# endpoint, like EmissionManager already does. The current endpoint's serialized
+# int must still be consumed so the interval-1 stream remains aligned for the
+# animated net meshes that follow it.
+--- a/include/Game/RenderSnapshot.h
++++ b/include/Game/RenderSnapshot.h
+@@ -119,7 +119,19 @@ void RenderSnapshot::Replay(T& frame)
+     Replayable<1, T, nlVector3>(frame, mCameraUp);
+     Replayable<1, T, bool>(frame, mGoalLight);
+ 
+-    Replayable<1, T, CrowdManager>(frame, CrowdManager::instance);
++    if (!FrameTraits::IsLoadFrame || loadFrame.mReplayNonBlendables == REPLAY_NON_BLENDABLES)
++    {
++        Replayable<1, T, CrowdManager>(frame, CrowdManager::instance);
++    }
++    else
++    {
++        // The current interpolation endpoint still has to consume the crowd
++        // state from the stream, but applying it would start an asynchronous
++        // texture load and then the previous endpoint would switch it back on
++        // the next rendered frame.
++        int ignoredCrowdState = 0;
++        Replayable<1, T, int>(frame, ignoredCrowdState);
++    }
+ 
+     if (!FrameTraits::IsLoadFrame || loadFrame.mReplayNonBlendables == REPLAY_NON_BLENDABLES)
+     {

@@ -1,0 +1,47 @@
+# TDEVChunkFile::Open and DolphinFile::Open used ordinary new with a class
+# allocator that can return null. GCC assumes a throwing operator new never
+# returns null and invokes the constructor anyway, so exhausting the 32-entry
+# file pool writes the object's vtable through address zero before the old
+# post-allocation null loop can run.
+#
+# Acquire the pool slot explicitly and use global placement new only after the
+# allocation succeeds. nlOpen can then return null through its existing API;
+# asynchronous bundle callers already treat that as a failed load. Close the
+# host FILE on the equivalent TDEV failure path as well.
+--- a/include/NL/nlFileGC.h
++++ b/include/NL/nlFileGC.h
+@@ -126,12 +126,13 @@ public:
+             return NULL;
+         }
+ 
+-        GCFile* pGCFile = new TDEVChunkFile(pFile);
+-        while (pFile == NULL)
++        TDEVChunkFile* storage = s_pAllocator->Allocate();
++        if (storage == NULL)
+         {
++            fclose(pFile);
++            return NULL;
+         }
+-
+-        return pGCFile;
++        return ::new ((void*)storage) TDEVChunkFile(pFile);
+     }
+ 
+     static nlArrayAllocator<TDEVChunkFile>* s_pAllocator;
+@@ -197,12 +198,12 @@ public:
+             return NULL;
+         }
+ 
+-        GCFile* pFile = new DolphinFile(FileEntrynum);
+-        while (pFile == NULL)
++        DolphinFile* storage = s_pAllocator->Allocate();
++        if (storage == NULL)
+         {
++            return NULL;
+         }
+-
+-        return pFile;
++        return ::new ((void*)storage) DolphinFile(FileEntrynum);
+     }
+ 
+     static nlArrayAllocator<DolphinFile>* s_pAllocator;

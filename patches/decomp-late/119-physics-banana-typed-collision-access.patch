@@ -1,0 +1,54 @@
+# PhysicsBanana::Contact still followed GameCube byte offsets through colliding
+# objects. Pointer growth moves PhysicsAIBall::m_pAIBall on the 64-bit host, so
+# an ordinary banana/ball collision read a null pointer at other+0x40 and
+# faulted while dereferencing the supposed ball owner at address 0x24. Use the
+# declared host fields for the ball path.
+#
+# The two ball fields tested through cBall+0x08 and cBall+0xA2 are the shot
+# timer and mbCanDamage. Expressing that directly also preserves the original
+# behavior without treating a four-byte Timer as a pointer.
+--- a/src/Game/Physics/PhysicsBanana.cpp
++++ b/src/Game/Physics/PhysicsBanana.cpp
+@@ -2,9 +2,11 @@
+ 
+ #include "Game/Game.h"
+ #include "Game/AI/Powerups.h"
++#include "Game/Ball.h"
+ #include "Game/Character.h"
+ #include "Game/Player.h"
++#include "Game/Physics/PhysicsAIBall.h"
+ #include "Game/Physics/PhysicsCharacter.h"
+ 
+ #include "NL/nlMemory.h"
+ 
+@@ -136,8 +138,8 @@ ContactType PhysicsBanana::Contact(PhysicsObject* other, dContact* contact, int
+     }
+     case 0x0F:
+     {
+-        cCharacter* charData = *(cCharacter**)((u8*)other + 0x40);
+-        cCharacter* character = *(cCharacter**)((u8*)charData + 0x24);
++        cBall* ball = ((PhysicsAIBall*)other)->m_pAIBall;
++        cPlayer* character = ball->m_pOwner;
+         if (character != NULL && character->m_eClassType == FIELDER)
+         {
+             if (m_pPowerupObject->mtNoHitTimer.m_uPackedTime != 0 && m_pPowerupObject->m_pThrower == (cFielder*)character)
+@@ -150,17 +152,8 @@ ContactType PhysicsBanana::Contact(PhysicsObject* other, dContact* contact, int
+             }
+         }
+         {
+-            bool hasBall = false;
+-            void* ballPtr = *(void**)((u8*)charData + 0x08);
+-            if (ballPtr != NULL)
+-            {
+-                u8 ballFlag = *((u8*)charData + 0xA2);
+-                if (ballFlag != 0)
+-                {
+-                    hasBall = true;
+-                }
+-            }
+-            if (!hasBall)
++            bool canDamage = ball->m_tShotTimer.m_uPackedTime != 0 && ball->mbCanDamage;
++            if (!canDamage)
+             {
+                 if (m_pTriggerCallbackFunc != NULL)
+                 {

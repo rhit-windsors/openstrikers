@@ -1,0 +1,66 @@
+# Aurora's hosted GXAdjustForOverscan maps glx_rmode to the host framebuffer,
+# but the game's full-frame texture copies still use the GameCube's 640x448
+# constants. At the default 1280x960 window that resolves only the upper-left
+# part of the EFB. The depth-of-field quad then stretches that partial copy
+# across the distant scene, making the inner stadium appear over the exterior.
+#
+# Use Aurora's current render extent for the three calls whose intent is to
+# capture (or clear through) the entire EFB. Keep the destination textures at
+# their original 320x224 dimensions; only the source rectangle was wrong.
+--- a/src/NL/glx/glxTarget.cpp
++++ b/src/NL/glx/glxTarget.cpp
+@@ -1,6 +1,7 @@
+ #include "NL/glx/glxTarget.h"
+ #include "NL/glx/glxTexture.h"
+ #include "dolphin/gx.h"
++#include "dolphin/gx/GXAurora.h"
+ #include "NL/nlDebug.h"
+ 
+ #include "dolphin/mtx.h"
+@@ -20,6 +21,19 @@ static u32 glx_SharedMemory = 0;
+ static u32 glx_SharedSize = 0;
+ static bool glx_SharedLock = false;
+ 
++// GXAdjustForOverscan maps the game's render mode to Aurora's host-sized EFB,
++// while these copies were authored against the GameCube's fixed 640x448 EFB.
++// Use the actual EFB extent for operations that mean "copy the whole frame";
++// otherwise a 2x window copies only its upper-left quarter and stretches that
++// partial image across the depth-of-field layer.
++static void glx_SetFullFrameTexCopySrc()
++{
++    u32 renderWidth = 640;
++    u32 renderHeight = 448;
++    AuroraGetRenderSize(&renderWidth, &renderHeight);
++    GXSetTexCopySrc(0, 0, (u16)renderWidth, (u16)renderHeight);
++}
++
+ /**
+  * Offset/Address/Size: 0x890 | 0x801C2F6C | size: 0x8
+  */
+@@ -156,7 +170,7 @@ void glx_ClearZBuffer()
+         bool alphaUpdate = gxSetAlphaUpdate(false);
+         gxSaveZMode();
+         gxSetZMode(0, GX_LEQUAL, 1);
+-        GXSetTexCopySrc(0, 0, 0x280, 0x1C0);
++        glx_SetFullFrameTexCopySrc();
+         GXSetTexCopyDst(0x140, 0xE0, (_GXTexFmt)0x28, 1);
+         GXCopyTex(clearz_mem, 1);
+         gxSetColourUpdate(colorUpdate);
+@@ -216,7 +230,7 @@ void glx_ShadowTextureGrab()
+     clearColour.a = (u8)(*pClearColour);
+ 
+     GXSetCopyClear(clearColour, 0xFFFFFF);
+-    GXSetTexCopySrc(0, 0, 640, 448);
++    glx_SetFullFrameTexCopySrc();
+     GXSetTexCopyDst(320, 224, (_GXTexFmt)0x28, true);
+     GXCopyTex(clearz_mem, true);
+ 
+@@ -234,7 +248,7 @@ void glx_DOFGrab()
+         bool alphaUpdate = gxSetAlphaUpdate(true);
+         gxSaveZMode();
+         gxSetZMode(1, GX_LEQUAL, 1);
+-        GXSetTexCopySrc(0, 0, 0x280, 0x1C0);
++        glx_SetFullFrameTexCopySrc();
+         GXSetTexCopyDst(0x140, 0xE0, GX_TF_RGB565, 1);
+         GXCopyTex(glx_GetTex(DOFTextureName, true, true)->m_SwizzledData, 0);
+         GXPixModeSync();
