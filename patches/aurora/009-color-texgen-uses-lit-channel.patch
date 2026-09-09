@@ -1,0 +1,32 @@
+--- a/lib/gx/shader.cpp
++++ b/lib/gx/shader.cpp
+@@ -1235,9 +1235,12 @@
+     } else if (tcg.src == GX_TG_NRM) {
+       vtxXfrAttrs += fmt::format("\n    var tc{} = vec4f({}, 1.0);", i, vtx_attr(config, GX_VA_NRM));
+     } else if (tcg.src == GX_TG_COLOR0) {
+-      vtxXfrAttrs += fmt::format("\n    var tc{} = {};", i, vtx_attr(config, GX_VA_CLR0));
++      // GX color texgens use the post-lighting channel result. Light-ramp
++      // materials depend on this: using the raw material/vertex color drives
++      // the ramp to its bright end regardless of the surface normal.
++      vtxXfrAttrs += fmt::format("\n    var tc{} = out.cc0;", i);
+     } else if (tcg.src == GX_TG_COLOR1) {
+-      vtxXfrAttrs += fmt::format("\n    var tc{} = {};", i, vtx_attr(config, GX_VA_CLR1));
++      vtxXfrAttrs += fmt::format("\n    var tc{} = out.cc1;", i);
+     } else if (tcg.src == GX_TG_BINRM) {
+       vtxXfrAttrs += fmt::format("\n    var tc{} = vec4f({}, 1.0);", i, nbt_slice_local(NbtSlice::B));
+     } else if (tcg.src == GX_TG_TANGENT) {
+--- a/lib/gx/shader_info.cpp
++++ b/lib/gx/shader_info.cpp
+@@ -301,6 +301,12 @@
+       continue;
+     }
+     const auto& tcg = config.tcgs[i];
++    // SRTG color sources consume the result of the corresponding GX lighting
++    // channel, not the raw vertex color. That channel may be used only by the
++    // texgen and never selected as a TEV raster input, so account for it here.
++    if (tcg.src == GX_TG_COLOR0 || tcg.src == GX_TG_COLOR1) {
++      info.sampledColorChannels.set(tcg.src - GX_TG_COLOR0);
++    }
+     if (tcg.type >= GX_TG_BUMP0 && tcg.type <= GX_TG_BUMP7) {
+       info.sampledTexCoords.set(tcg.embossSrc);
+       info.lightingEnabled = true;

@@ -1,0 +1,62 @@
+--- a/src/Game/GL/GLInventory.cpp
++++ b/src/Game/GL/GLInventory.cpp
+@@ -251,46 +251,6 @@
+     pTree->Add(k, value);
+ }
+ 
+-/**
+- * Helper struct for inlining FindGet with bool return to match target assembly.
+- * The target uses a bool found flag pattern (li r0,1 / li r0,0 / clrlwi.)
+- * which the native AVLTreeBase::FindGet (returning ValueType*) does not produce.
+- */
+-struct TextureAnimFindHelper
+-{
+-    char pad[0x8];
+-    AVLTreeEntry<unsigned long, GLTextureAnim*>* m_Root;
+-
+-    inline bool FindGet(unsigned long key, GLTextureAnim*** foundValue) const
+-    {
+-        AVLTreeEntry<unsigned long, GLTextureAnim*>* node = m_Root;
+-        while (node != NULL)
+-        {
+-            int cmpResult;
+-            if (key == node->key)
+-                cmpResult = 0;
+-            else if (key < node->key)
+-                cmpResult = -1;
+-            else
+-                cmpResult = 1;
+-            if (cmpResult == 0)
+-            {
+-                if (foundValue != NULL)
+-                    *foundValue = &node->value;
+-                return true;
+-            }
+-            else
+-            {
+-                if (cmpResult < 0)
+-                    node = (AVLTreeEntry<unsigned long, GLTextureAnim*>*)node->node.left;
+-                else
+-                    node = (AVLTreeEntry<unsigned long, GLTextureAnim*>*)node->node.right;
+-            }
+-        }
+-        return false;
+-    }
+-};
+-
+ /**
+  * Offset/Address/Size: 0x7C0 | 0x801E2A58 | size: 0xC8
+  */
+@@ -299,7 +259,11 @@
+     for (int i = m_nLevel; i >= 0; i--)
+     {
+         GLTextureAnim** foundValue;
+-        bool found = ((TextureAnimFindHelper*)m_pTextureAnims[i]->m_pItems)->FindGet(id, &foundValue);
++        // Use the tree's real host layout. The former hand-written helper
++        // assumed the GameCube's 32-bit object layout and read m_Root at byte
++        // 8; on a 64-bit host the vtable pointer and alignment put it later,
++        // so every texture animation lookup falsely returned not found.
++        bool found = m_pTextureAnims[i]->m_pItems->FindGet(id, &foundValue);
+         GLTextureAnim* result;
+         if (found)
+             result = *foundValue;
