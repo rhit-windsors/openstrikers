@@ -40,11 +40,28 @@ issue is reproduced, narrowed down, or fixed.
   pronounced.
 - **Priority:** Medium. Replays play through and return to gameplay now, so this
   is cosmetic rather than blocking, but it is on the path every goal takes.
-- **Status:** Reported from watching a replay; not yet characterised here. The
-  first thing to establish is whether this is its own bug or the existing
-  lighting/material issue below showing up more plainly against a replay
-  background -- capture the same camera angle live and in replay and compare,
-  rather than assuming either way.
+- **Status:** Partly explained, and one cause fixed on 2026-09-09.
+- **The in-stadium screens were one of the causes.** The stadium has screens set
+  into the wall below the crowd at both ends of the pitch, driven by
+  `Jumbotron`, and they play a different 16-frame animation for kickoff, for a
+  goal and for a win. Aurora's `GXInvalidateTexAll` was a no-op, and the
+  jumbotron refills one fixed buffer behind texture objects it never re-creates,
+  so the first animation to play pinned all sixteen frames: **a goal replayed
+  the kickoff animation**. That is on the celebration path, which is where this
+  issue is reported to look worst. Fixed by
+  `patches/aurora/010-honour-gxinvalidatetexall.patch`; the crowd atlas had the
+  same fault and stopped updating with crowd mood.
+- **What that does not explain.** The fix was verified at the upload level (24
+  jumbotron frames and a crowd atlas now reach the GPU that previously never
+  did), not by watching a replay. Whether the replay background still looks
+  wrong once the screens are correct is the open question -- watch one and say.
+  Do not compare screenshots across runs to decide it; runs do not line up frame
+  for frame.
+- **Tools for the next look.** `OPENSTRIKERS_JUMBO_DEBUG=1` traces the jumbotron
+  state machine and reports, per frame, how many screen surfaces drew and how
+  many took an animation texture. `OPENSTRIKERS_JUMBO_FORCE=1` makes the screens
+  opaque and gives them a known-good frame, which is how they were located.
+  Both are inert unless set; `patches/decomp-late/116-*`.
 - **The auto-replay hook does not currently render a replay.** A run on
   2026-09-08 printed `AUTO_REPLAY_TEST begin=0.020 end=6.040` and
   `completed time=3.060` on consecutive lines, between host frames 360 and 420,
@@ -88,31 +105,25 @@ issue is reproduced, narrowed down, or fixed.
 
 - **Expected:** The pre-match intro scene looks like the original game's.
 - **Was:** The intro ran without displaying at all while still waiting for
-  input. **That part is fixed** -- the intro screen now runs and is visible.
-- **Actual:** It draws, but with texture oddities, and the background textures
-  in particular look wrong.
+  input. The intro screen now runs and is visible.
+- **Status:** **Fixed 2026-09-08.** The animated pennants resolve their frame
+  textures, and color-sourced texgens now sample the post-lighting channel, so
+  the stadium and character light ramps match the retail scene.
 - **Harness behavior:** `capture.ps1` still pulses A with `OPENSTRIKERS_AUTO_A=1`
   to skip the intro and reach gameplay, which is worth keeping regardless.
-- **Status:** Reproducible. Treat it as one of the background-texture group
-  below rather than as an intro-specific bug until that is ruled out.
 
 ### Lighting and some character materials look incorrect
 
 - **Expected:** Stadium and character lighting and material shading match the
   original game.
-- **Actual:** Lighting is visibly off. Some character areas appear flat
-  yellow/lime or unusually bright. Geometry, animation, texture streams, and
-  texture-bundle loading are present.
-- **Status:** Likely a lighting or material-state translation issue; not yet
-  isolated.
+- **Status:** **Fixed 2026-09-08.** Aurora used the raw vertex color for
+  `GX_TG_COLOR0/1` texgens. GX uses the completed lighting-channel result;
+  feeding that result to the light-ramp coordinate restores the dark
+  olive-grey stadium surfaces, tunnel shadows, and directional character
+  shading.
 
-**These three are probably one bug.** Background textures now look wrong in
-replays, on the match intro screen, and materials look wrong in open play --
-three different scenes, one symptom family. Before investigating any of them
-separately, get the same background captured in two of those contexts and
-compare; a single texture-format, material-state or TEV-stage translation fault
-would explain all three, and chasing them as three bugs is how a session gets
-spent three times over.
+The intro investigation found two independent bugs, both now fixed. Replay
+backgrounds still need a fresh comparison before closing that separate report.
 
 ### What the captures say so far
 
@@ -151,6 +162,9 @@ camera, same scene, so the differences are the bug list.
 
 **Two distinct defects, not one.**
 
+Both defects below were fixed on 2026-09-08 and verified in a new frame-300
+Palace capture against the Dolphin reference.
+
 1. **The dome-top pennants draw as flat white rectangles.** Retail has small
    textured flags -- yellow and red on a purple pole -- on the domes and towers.
    We draw a plain white quad, larger than the pennant, in the same place. The
@@ -187,19 +201,23 @@ camera, same scene, so the differences are the bug list.
   normal-mapped `GX_TEXMTX9` set for environment mapping and a few `GX_TG_SRTG`.
   Nothing looks mis-translated at the config level.
 
-### Where to pick it up
+### Resolution
 
-For (1): the shader samples a texmap and the result is white, so the question is
-what is *bound* at that draw -- a stale or wrong `GXTexObj`, or a texture whose
-data pointer no longer refers to what it did when it was uploaded. Log the bound
-texture's source key per draw and find the one the pennant uses.
+For (1), the missing handles were the three canonical texture-animation IDs in
+the Palace GLG. `GLInventory::GetTextureAnim` bypassed the typed AVL tree with a
+hand-written 32-bit object-layout view; that view reads the wrong member on a
+64-bit host, so every animation lookup failed and the renderer selected its
+white/magenta fallback texture. Calling the AVL tree's real `FindGet` resolves
+all three animations and their frame textures. The clean-checkout fix is stored
+as `patches/decomp/095-texture-animation-tree-host-layout.patch`.
 
-For (2): 107 of the 230 configs light `GX_COLOR0` with `mat GX_SRC_VTX amb
-GX_SRC_REG`, so the ambient term comes from a register. An ambient register
-being set to white would produce exactly this -- fully lit, hue preserved,
-detail washed out. Dump the channel material/ambient colours and the light
-objects at runtime and compare them against what the decomp sets. That is a
-much smaller search than "lighting is off".
+For (2), the runtime ambient trace showed black, not white. The light records
+were valid; the error was downstream in Aurora. `GX_TG_SRTG` with
+`GX_TG_COLOR0/1` must use the post-lighting channel result. Aurora used the raw
+vertex color, which drove the Palace's 256-pixel light ramp to the bright end
+regardless of the surface normal. The shader generator now uses `out.cc0/cc1`,
+and shader-info dependency tracking includes channels used only by texgen. The
+Aurora fix is stored as `patches/aurora/009-color-texgen-uses-lit-channel.patch`.
 
 The screenshots are in `dolphinscreenshots/` (not committed -- they are retail
 game frames).

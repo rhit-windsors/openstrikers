@@ -1,0 +1,54 @@
+# GXInvalidateTexAll was a no-op, which pinned every texture whose pixels the
+# game refills in place -- the jumbotron animation frames and the crowd atlas --
+# to whatever those bytes held on the texture's first draw.
+#
+# GX reads texture pixels straight out of main memory, so refilling the buffer
+# behind an unchanged GXTexObj and then invalidating is a legitimate way to
+# animate a texture. Aurora keys its upload cache on texture-object identity
+# (texObjId + texDataVersion), and neither changes when only the bytes change,
+# so the call has to drop that cache. The content cache is left alone, so a
+# redundant invalidate costs a re-hash rather than a re-upload.
+#
+# Measured on a 90s match, texture dumps on: the fixed run uploads 24 more
+# 128x128 CMPR textures (a second and third jumbotron frame set) and a second
+# 256x512 crowd atlas that the unfixed run never uploads at all.
+#
+# OPENSTRIKERS_NO_TEX_INVALIDATE=1 restores the old behaviour for A/B.
+--- a/lib/dolphin/gx/GXTexture.cpp
++++ b/lib/dolphin/gx/GXTexture.cpp
+@@ -5,6 +5,7 @@
+ #include "dolphin/gx/GXAurora.h"
+ 
+ #include <algorithm>
++#include <cstdlib>
+ 
+ #include "tracy/Tracy.hpp"
+ 
+@@ -345,7 +346,26 @@
+ // TODO GXInvalidateTexRegion
+ 
+ void GXInvalidateTexAll() {
+-  // no-op?
++  // Not a no-op. GX reads texture pixels straight out of main memory, so a
++  // game that DMAs new pixels over a texture's backing store and then
++  // invalidates is entitled to see the new pixels through the *same* GXTexObj.
++  // Aurora caches uploads per texture-object identity (texObjId +
++  // texDataVersion), neither of which changes when only the bytes behind the
++  // object change, so ignoring this call pins such a texture to whatever it
++  // held on its first draw. Dropping the object-identity cache forces the next
++  // resolve to re-hash the source; the content cache still keeps the upload
++  // when the bytes really are unchanged, so a redundant invalidate costs a
++  // hash rather than a copy.
++  //
++  // Set OPENSTRIKERS_NO_TEX_INVALIDATE=1 to restore the old no-op behaviour.
++  static const bool disabled = [] {
++    const char* v = std::getenv("OPENSTRIKERS_NO_TEX_INVALIDATE");
++    return v != nullptr && *v != 0 && *v != '0';
++  }();
++  if (disabled) {
++    return;
++  }
++  aurora::gx::clear_static_texture_cache();
+ }
+ 
+ // TODO GXPreLoadEntireTexture

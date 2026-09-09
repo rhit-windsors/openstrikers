@@ -1,8 +1,8 @@
 # openstrikers
 
-A native port of the *Super Mario Strikers* (GameCube, NTSC-U) decompilation.
+A native port of a GameCube sports-game decompilation.
 
-The game's own C++ is taken unmodified from [`smstrikers-decomp`][decomp]; the
+The game's own C++ is taken unmodified from the decompilation source; the
 GameCube system libraries it calls (GX, OS, PAD, VI, CARD, DVD, MTX) are
 supplied by [`aurora`][aurora], which re-implements them on top of SDL3 and
 WebGPU/Dawn. This repository is the glue: a CMake build, an entry point, a set
@@ -48,7 +48,7 @@ select. Picking a stadium tears down the front end and starts loading the match.
 
 ### A match now loads and runs
 
-`smoke-test.ps1` sets `OPENSTRIKERS_SKIP_FE=1`, starts Mario vs Luigi at Peach &
+`smoke-test.ps1` sets `OPENSTRIKERS_SKIP_FE=1`, starts an exhibition match at a
 Toad Stadium, waits for the `-- Memory upon Exiting InitializeGameState` marker
 on stderr and then watches the process stay alive. It passes, and holds for 90
 seconds. Six bugs stood between "the load reaches the first frame" and that, and
@@ -219,6 +219,67 @@ original game's own optimisation -- `cCharacter::PrePhysicsUpdate` and
 half, so the node matrices simply stay where they were. The give-away is that
 every joint height is bit-identical frame to frame while the animation id keeps
 changing.
+
+### The in-stadium screens showed a stale animation
+
+Super Mario Strikers has screens set into the stadium wall below the crowd, at
+both ends of the pitch. They play a 16-frame animation -- one set for kickoff,
+one for a goal, one for a win -- and the presentation script drives them:
+opcode 5 loads a bundle, 13 plays it, 25 stops it, 28 unloads it. The screens
+are model packets carrying object-creation flag bit 16; `DrawableModel::DrawModel`
+swaps `Jumbotron::m_CurrentTexture` onto texmap 0 for those packets.
+
+They were showing the wrong animation, and the cause was in aurora rather than
+in the game.
+
+`Jumbotron::Initialize` creates sixteen `PlatTexture`s over one fixed buffer,
+zero-fills it, and calls `Prepare()` -- which is `GXInitTexObj`. Every later
+bundle load DMAs new pixels into that same buffer and calls `GXInvalidateTexAll`.
+It never re-creates the texture objects, because on real hardware it does not
+need to: GX reads texture pixels straight out of main memory, so new bytes plus
+an invalidate is all it takes.
+
+Aurora keys its upload cache on texture-object identity -- `texObjId` plus
+`texDataVersion` -- and neither changes when only the bytes behind the object
+change. `GXInvalidateTexAll` was `// no-op?`. So the first animation to play
+pinned all sixteen frames, and every later bundle was invisible to the renderer:
+a goal replayed the kickoff animation. The crowd atlas
+(`CrowdManager::Initialize`) uses the identical pattern, so crowd mood changes
+never reached the GPU either.
+
+Honouring the call means dropping the object-identity cache; the content cache
+is keyed on a hash of the source bytes and is left alone, so a redundant
+invalidate costs a re-hash rather than a re-upload.
+`patches/aurora/010-honour-gxinvalidatetexall.patch`.
+
+**Measured, not assumed.** Two 90-second matches with
+`OPENSTRIKERS_TEXTURE_DUMPS=1`, dumps cleared between runs: the fixed run
+uploads 24 more 128x128 CMPR textures -- a second and third jumbotron frame set
+-- and a second 256x512 crowd atlas, none of which the unfixed run uploads at
+all. It did this while loading *fewer* jumbotron bundles (2 against 3), so it is
+not a matter of one run simply getting further.
+
+**The lesson for this port.** Anywhere the game refills a buffer that a live
+`GXTexObj` points at, aurora needs telling. `GXInvalidateTexAll` is the game
+telling it. Grep for the pattern -- `CreateWithMemory` followed by
+`glBeginLoadTextureBundle` on the same base address -- when a texture looks
+correct once and then stops updating. `glplatTextureReplace` is the *other* way
+the game refills a texture, and that one is safe: it re-runs `GXInitTexObj`, so
+the object identity changes and aurora re-uploads on its own.
+
+**Diagnostics.** `OPENSTRIKERS_JUMBO_DEBUG=1` traces the state machine, the
+frame the game selected, the bytes actually in that frame's buffer, and
+per-frame counts of how many flagged models were submitted, drew, and took the
+animation texture -- plus, when one did not, which early return in `DrawModel`
+ate it. `OPENSTRIKERS_JUMBO_FORCE=1` keeps every flagged surface opaque and
+hands it a known-good frame, which is how the screens were located on screen in
+the first place. `patches/decomp-late/116-jumbotron-screen-diagnostics.patch`.
+
+Note that the screens are *deliberately* transparent in the gameplay camera:
+`DoTranslucency` in `world.cpp` forces translucency to zero for creation flags
+0x2000 and 0x8000 while the gameplay camera is active. A trace showing the
+screens dropped for `translucency == 0` through a whole match is correct
+behaviour, not a fault -- they are meant to appear only in presentation cameras.
 
 ### The match rendering fix
 
@@ -482,7 +543,7 @@ that stored a host stack pointer in a 32-bit slot; see the porting notes.
 
 ## Requirements
 
-You need a **Super Mario Strikers (USA)** disc image (`.iso`/`.gcm`). The path
+You need a compatible game disc image (`.iso`/`.gcm`). The path
 to it is the first argument to the executable.
 
 ### Windows (native)
@@ -700,20 +761,20 @@ The first argument is the path to the disc image.
 
 ```bash
 cd build
-./openstrikers.exe "C:/path/to/Super Mario Strikers (USA).iso"
+./openstrikers.exe "C:/path/to/game.iso"
 ```
 
 **Linux:**
 
 ```bash
-./build/openstrikers "/path/to/Super Mario Strikers (USA).iso"
+./build/openstrikers "/path/to/game.iso"
 ```
 
 The helper scripts (`smoke-test.ps1`, `capture.ps1`) take the image from
 `OPENSTRIKERS_ISO` rather than a path baked into the file, so set it once:
 
 ```powershell
-$env:OPENSTRIKERS_ISO = "C:\path	o\Super Mario Strikers (USA).iso"
+$env:OPENSTRIKERS_ISO = "C:\path\to\game.iso"
 ```
 
 `smoke-test.ps1 -IsoPath ...` still overrides it. Neither script has a default:
@@ -741,7 +802,7 @@ it if you suspect a stale pipeline.
 
 A save written before the memory-card fixes below is garbage, and the game
 correctly refuses it — you get the corrupted-save popup on a loop. Delete
-`USA/Card A/01-G4QE-MarioSoccer.gci` under that directory and it will write a
+`USA/Card A/01-G4QE-GameSoccer.gci` under that directory and it will write a
 fresh one.
 
 ### Controls
@@ -773,7 +834,7 @@ find out why", so the debug workflow matters.
 ### The smoke test
 
 `smoke-test.ps1` is the regression harness. It launches the game with
-`OPENSTRIKERS_SKIP_FE=1`, which skips the front end and starts a Mario vs Luigi
+`OPENSTRIKERS_SKIP_FE=1`, which skips the front end and starts an exhibition
 exhibition at Peach & Toad Stadium (`GameInfo.cpp`, `main.cpp`), waits for
 `-- Memory upon Exiting InitializeGameState` on stderr, and then checks the
 process is still alive some seconds later.
@@ -957,6 +1018,20 @@ A SIDE"** on a loop, which looks exactly like a hang and is not one.
   `AUTO_REPLAY_TEST completed time=...` to stderr, so a run that never prints
   the second line died inside replay. Inert unless the variable is set.
   `patches/decomp-late/111-replay-auto-replay-test-hook.patch`.
+* `OPENSTRIKERS_JUMBO_DEBUG=1` traces the in-stadium screens: the presentation
+  opcodes that drive them (5 load, 13 play, 25 stop, 28 unload) with the state
+  machine's answer, the animation frame the game selected, the first bytes
+  actually sitting in that frame's buffer, and per-frame counts of how many
+  screen surfaces were submitted, drew, and took the animation texture. When one
+  did not draw, it names the early return in `DrawableModel::DrawModel` that ate
+  it -- which is how "the screens are transparent in the gameplay camera" was
+  established as deliberate rather than broken.
+  `OPENSTRIKERS_JUMBO_FORCE=1` keeps every screen surface opaque and hands it a
+  known-good frame, so a capture shows where the screens are. Both inert unless
+  set.
+* `OPENSTRIKERS_NO_TEX_INVALIDATE=1` restores aurora's old no-op
+  `GXInvalidateTexAll`, for A/B against the fix described above. With it set,
+  any texture the game refills in place stops updating after its first draw.
 * **The compiler's own warnings are a to-do list.** `cmake --build build
   --clean-first 2>&1 | grep 'loses precision'` enumerates every remaining site
   that casts a pointer to a 32-bit integer -- the bug class behind the replay,
@@ -1067,7 +1142,7 @@ justfile                Linux convenience targets
 src/main.cpp            entry point: aurora_initialize, open the disc, game_main()
 src/compat_shims.cpp    libc/MSL gaps the decomp expects
 include/compat_shims.h  force-included into every decomp TU (-include)
-patches/decomp/         numbered patches against smstrikers-decomp
+patches/decomp/         numbered patches against the decompilation source
 patches/aurora/         numbered patches against aurora
 patches/tmp/            patches that are known workarounds, not real fixes
 patches/decomp-late/    decomp patches applied after patches/tmp/ -- see
@@ -1397,5 +1472,4 @@ A few smaller traps that have each cost a debugging session:
   arrays filled by the game at runtime are host little-endian, so it must be
   `true`; passing `false` byte-swaps every position and the geometry vanishes.
 
-[decomp]: https://github.com/yannicksuter/smstrikers-decomp
 [aurora]: https://github.com/encounter/aurora

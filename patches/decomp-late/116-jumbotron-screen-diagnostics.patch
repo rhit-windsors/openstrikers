@@ -1,0 +1,312 @@
+# Diagnostics for the in-stadium screens (the "jumbotron").
+#
+# The screens are model packets carrying object-creation flag bit 16.
+# DrawableModel swaps Jumbotron::m_CurrentTexture onto texmap 0 for those
+# packets, and Jumbotron plays a 16-frame animation loaded from
+# jumbotron/{kickoff,goal,wins}.glt into one fixed buffer.
+#
+# Nothing here changes what the game renders unless a switch is set:
+#
+#   OPENSTRIKERS_JUMBO_DEBUG=1  traces the state machine (the four presentation
+#       opcodes 5/13/25/28 that drive it, the frame the game selected, and the
+#       first bytes actually sitting in the frame's buffer), plus per-frame
+#       counts of how many flagged models were submitted, how many reached the
+#       packet loop, how many took the animation texture, and -- when one did
+#       not -- which early return in DrawModel ate it.
+#
+#   OPENSTRIKERS_JUMBO_FORCE=1  keeps every flagged surface opaque and hands it
+#       a known-good frame, so a capture shows where the screens actually are.
+#       This is how they were located: they are the wide panels set into the
+#       stadium wall below the crowd, at both ends of the pitch.
+#
+# Note that the screens are deliberately transparent in the gameplay camera
+# (World.cpp DoTranslucency hides creation flags 0x2000/0x8000 there), so
+# "not drawn during play" is correct behaviour, not a fault.
+#
+# This patch also folds in the SKYDROP diagnostic from the earlier skybox
+# investigation, which was sitting unsaved in the working tree and would
+# otherwise have been lost the next time the stack was re-applied.
+--- a/src/Game/Drawable/DrawableModel.cpp
++++ b/src/Game/Drawable/DrawableModel.cpp
+@@ -16,8 +16,40 @@
+ #include "Game/Render/CrowdManager.h"
+ #include "Game/WorldManager.h"
+ 
++#include <cstdlib>
++
+ const u32 GLTT_BumpLocal_bit = 1 << (int)GLTT_BumpLocal;
+ 
++// JUMBODBG counters, reported once a second from Jumbotron::Update. Three of
++// them, so a screen that is flagged but never reaches the packet loop stays
++// distinguishable from one that is never flagged at all. All of this is inert
++// unless OPENSTRIKERS_JUMBO_DEBUG is set.
++static bool JumboDbg()
++{
++    static const bool on = getenv("OPENSTRIKERS_JUMBO_DEBUG") != NULL;
++    return on;
++}
++
++unsigned int g_JumboModelsSeen = 0;
++unsigned int g_JumboModelsDrawn = 0;
++unsigned int g_JumboPacketsTextured = 0;
++// One counter per early return between the flag test and the packet loop, so
++// the trace names the exact gate a jumbotron screen dies at.
++unsigned int g_JumboDropShadow = 0;
++unsigned int g_JumboDropAlpha = 0;
++unsigned int g_JumboDropLit = 0;
++unsigned int g_JumboDropSpec = 0;
++float g_JumboLastAlpha = -1.0f;
++
++// OPENSTRIKERS_JUMBO_FORCE=1: keep every jumbotron-flagged surface opaque and
++// hand it a known-good animation frame, so a capture shows where the in-stadium
++// screens actually are and what they would be carrying. Diagnostic only.
++static bool JumboForce()
++{
++    static const bool on = getenv("OPENSTRIKERS_JUMBO_FORCE") != NULL;
++    return on;
++}
++
+ static const unsigned long UnlitProgram = glGetProgram("3d unlit");
+ static const unsigned long LitProgram = glGetProgram("3d pointlit");
+ static const unsigned long LightTexture = glGetTexture("global/lightramp");
+@@ -356,20 +388,49 @@
+     if (!g_bEnableDrawableModel)
+         return;
+ 
++    const bool jumboDbgObj = (JumboDbg() || JumboForce())
++                             && ((m_uObjectCreationFlags >> 16) & 1) != 0;
++    if (jumboDbgObj)
++        ++g_JumboModelsSeen;
++
+     if (!g_bDrawObjectsWithPlanarShadows && m_bRenderPlanarShadow)
++    {
++        if (jumboDbgObj)
++            ++g_JumboDropShadow;
+         return;
++    }
+ 
+     if (m_uObjectCreationFlags & 0x00100000)
+     {
+         pNoFogData = glAppGetNoFogUserData();
+     }
+ 
++    // SKYDROP: say why a skybox-flagged object never reaches glViewAttachModel.
++    const bool skyDbgObj = (m_uObjectCreationFlags & 0x100) != 0
++        && getenv("OPENSTRIKERS_SKY_DEBUG") != NULL;
++    static u32 sSkyDropN = 0;
++    const bool skyDbgTick = skyDbgObj && ((sSkyDropN++ % 60) == 0);
++
+     unsigned char bTransparent = (m_uObjectCreationFlags & 0x0000F000) != 0;
+     if (bTransparent)
+     {
+         float f31 = m_translucency;
++        if (jumboDbgObj)
++            g_JumboLastAlpha = f31;
++        if (jumboDbgObj && JumboForce())
++            f31 = 1.0f;
+         if (f31 == 0.0f)
++        {
++            if (jumboDbgObj)
++                ++g_JumboDropAlpha;
++            if (skyDbgTick)
++            {
++                fprintf(stderr, "SKYDROP id=%08x dropped: translucency==0 create=%08x\n",
++                        (unsigned)m_pModel->id, (unsigned)m_uObjectCreationFlags);
++                fflush(stderr);
++            }
+             return;
++        }
+         if (f31 == 1.0f)
+             bTransparent = 0;
+         if (bTransparent)
+@@ -431,14 +492,22 @@
+     if ((unsigned char)bLight)
+     {
+         if (!g_bDrawLitObjects)
++        {
++            if (jumboDbgObj)
++                ++g_JumboDropLit;
+             return;
++        }
+     }
+ 
+     bSpec = (m_uObjectCreationFlags >> 3) & 1;
+     if (bSpec)
+     {
+         if (!g_bDrawSpecularObjects)
++        {
++            if (jumboDbgObj)
++                ++g_JumboDropSpec;
+             return;
++        }
+     }
+ 
+     if (m_bVertexAnimated)
+@@ -531,9 +600,17 @@
+         if (bJumbotron)
+         {
+             u32 tex = Jumbotron::instance.m_CurrentTexture;
++            if (jumboDbgObj)
++                ++g_JumboModelsDrawn;
++            if (JumboForce() && tex + 0x10000 == 0xFFFF)
++            {
++                tex = glGetTexture("kickoff/frame004");
++            }
+             if (tex + 0x10000 != 0xFFFF)
+             {
+                 pPacket->state.texture[0] = tex;
++                if (jumboDbgObj)
++                    ++g_JumboPacketsTextured;
+             }
+         }
+ 
+@@ -591,6 +668,13 @@
+             return;
+     }
+ 
++    if (skyDbgTick)
++    {
++        fprintf(stderr, "SKYDROP id=%08x attached view=%d packets=%u create=%08x trans=%.3f\n",
++                (unsigned)newModel->id, (int)view, (unsigned)newModel->numPackets,
++                (unsigned)m_uObjectCreationFlags, m_translucency);
++        fflush(stderr);
++    }
+     glViewAttachModel(view, m_uRenderLayer, newModel);
+ 
+     if (m_bRenderPlanarShadow)
+--- a/src/Game/Render/Jumbotron.cpp
++++ b/src/Game/Render/Jumbotron.cpp
+@@ -9,6 +9,35 @@
+ #include "NL/gc/gcSwizzler.h"
+ #include "NL/gl/glMemory.h"
+ #include "dolphin/os/OSThread.h"
++#include "NL/glx/glxTexture.h"
++
++#include <cstdio>
++#include <cstdlib>
++
++// JUMBODBG: trace the in-stadium screens. The jumbotron pre-creates 16 texture
++// objects over a fixed buffer at Initialize() time, then refills that buffer by
++// DMA for each animation bundle without ever re-creating the objects -- so it
++// is the textbook case for a host renderer that caches uploads by object
++// identity. Set OPENSTRIKERS_JUMBO_DEBUG=1 to see the state machine, the frame
++// the game selected, and the first bytes actually sitting in that buffer.
++static bool JumboDbg()
++{
++    static const bool on = getenv("OPENSTRIKERS_JUMBO_DEBUG") != NULL;
++    return on;
++}
++
++static void JumboDbgFrame(const char* what, const char* name, unsigned long handle)
++{
++    if (!JumboDbg())
++        return;
++    PlatTexture* pTex = glx_GetTex(handle, false, false);
++    const unsigned char* p = pTex ? (const unsigned char*)pTex->m_SwizzledData : NULL;
++    fprintf(stderr, "JUMBODBG %s name=%s handle=%08lx pTex=%p data=%p bytes=%02x%02x%02x%02x%02x%02x%02x%02x\n",
++            what, name, handle, (void*)pTex, (void*)p,
++            p ? p[0] : 0, p ? p[1] : 0, p ? p[2] : 0, p ? p[3] : 0,
++            p ? p[4] : 0, p ? p[5] : 0, p ? p[6] : 0, p ? p[7] : 0);
++    fflush(stderr);
++}
+ 
+ extern bool g_e3_Build;
+ 
+@@ -148,6 +177,8 @@
+     {
+         j->m_State = JState_Ready;
+     }
++
++    JumboDbgFrame("loaded", j->m_szTexture, glGetTexture(j->m_szTexture));
+ }
+ 
+ /**
+@@ -230,6 +261,12 @@
+     char szTextureBundle[0x80];
+     nlStrNCpy<char>(m_szPrefix, pPrefix, 0x40);
+     nlSNPrintf(szTextureBundle, 0x80, "jumbotron/%s.glt", m_szPrefix);
++    if (JumboDbg())
++    {
++        fprintf(stderr, "JUMBODBG BeginLoad class=%d bundle=%s base=%p\n",
++                (int)m_AnimationClass, szTextureBundle, m_BundleLoadBase);
++        fflush(stderr);
++    }
+     glBeginLoadTextureBundle(szTextureBundle, BundleLoad_cb, m_BundleLoadBase);
+ }
+ 
+@@ -313,8 +350,34 @@
+ /**
+  * Offset/Address/Size: 0x0 | 0x801637E8 | size: 0xD0
+  */
++extern unsigned int g_JumboModelsSeen;
++extern unsigned int g_JumboModelsDrawn;
++extern unsigned int g_JumboPacketsTextured;
++extern unsigned int g_JumboDropShadow;
++extern unsigned int g_JumboDropAlpha;
++extern unsigned int g_JumboDropLit;
++extern unsigned int g_JumboDropSpec;
++extern float g_JumboLastAlpha;
++
+ void Jumbotron::Update(float dt)
+ {
++    if (JumboDbg())
++    {
++        static unsigned int sTick = 0;
++        if ((sTick++ % 60) == 0)
++        {
++            fprintf(stderr, "JUMBODBG tick=%u state=%d class=%d frame=%d/%d tex=%08x"
++                            " seen=%u drawn=%u textured=%u"
++                            " drop(shadow=%u alpha=%u lit=%u spec=%u) alpha=%f\n",
++                    sTick, (int)m_State, (int)m_AnimationClass, m_nCurrentFrame,
++                    m_nNumFrames, (unsigned)m_CurrentTexture,
++                    g_JumboModelsSeen, g_JumboModelsDrawn, g_JumboPacketsTextured,
++                    g_JumboDropShadow, g_JumboDropAlpha, g_JumboDropLit,
++                    g_JumboDropSpec, (double)g_JumboLastAlpha);
++            fflush(stderr);
++        }
++    }
++
+     if (m_State == JState_Playing)
+     {
+         m_fTime += dt * StateTimeScale[m_AnimationClass];
+@@ -333,6 +396,7 @@
+             }
+             nlSNPrintf(m_szTexture, 0x80, "kickoff/frame%03d", m_nCurrentFrame);
+             m_CurrentTexture = glGetTexture(m_szTexture);
++            JumboDbgFrame("advance", m_szTexture, m_CurrentTexture);
+         }
+     }
+ }
+--- a/src/Game/Render/Presentation.cpp
++++ b/src/Game/Render/Presentation.cpp
+@@ -25,6 +25,9 @@
+ #include "Game/Render/CrowdManager.h"
+ #include "Game/Render/ElectricFence.h"
+ #include "Game/Render/Jumbotron.h"
++
++#include <cstdio>
++#include <cstdlib>
+ #include "Game/Render/Wiper.h"
+ #include "NL/gl/gl.h"
+ #include "NL/nlConfig.h"
+--- a/src/Game/Render/Presentation_interp.cpp
++++ b/src/Game/Render/Presentation_interp.cpp
+@@ -3,6 +3,18 @@
+  */
+ void Presentation::DoFunctionCall(unsigned int func)
+ {
++    // JUMBODBG: the four opcodes that drive the in-stadium screens, in the
++    // order the presentation script actually issues them, with the state
++    // machine's answer. 5=BeginLoad 13=Play 25=Stop 28=Unload.
++    if ((func == 5 || func == 13 || func == 25 || func == 28)
++        && getenv("OPENSTRIKERS_JUMBO_DEBUG") != NULL)
++    {
++        const int before = (int)Jumbotron::instance.m_State;
++        fprintf(stderr, "JUMBODBG op=%u stateBefore=%d class=%d\n",
++                func, before, (int)Jumbotron::instance.m_AnimationClass);
++        fflush(stderr);
++    }
++
+     switch (func)
+     {
+     case 0:
