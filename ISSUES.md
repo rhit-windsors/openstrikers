@@ -40,7 +40,18 @@ issue is reproduced, narrowed down, or fixed.
   pronounced.
 - **Priority:** Medium. Replays play through and return to gameplay now, so this
   is cosmetic rather than blocking, but it is on the path every goal takes.
-- **Status:** Partly explained, and one cause fixed on 2026-09-09.
+- **Status:** Partly explained, one cause fixed on 2026-09-09, and the main one
+  bisected the same day to three render views.
+- **It is a render *view*, and it is down to three: 6, 12 or 17.** The same
+  defect reproduces in the match intro, which is far cheaper to capture, and a
+  view-mask bisect against the retail reference narrowed it from 34 views to
+  `GLV_WorldShadowed` (6), `GLV_CoPlanar0` (12) and `GLV_DepthOfField` (17) --
+  all shadow or post passes, which fits large dark geometry over the background
+  only. Skipping those three (`OPENSTRIKERS_SKIP_VIEW_MASK=0x21040`) makes our
+  intro frame 600 match the retail shot; the unmasked run does not. Views 3, 16
+  and 21 are individually cleared. **The whole investigation, the exact
+  reproduction, the run table and the next three commands are in
+  `docs/HANDOFF-background-layer.md` -- start there, not here.**
 - **The in-stadium screens were one of the causes.** The stadium has screens set
   into the wall below the crowd at both ends of the pitch, driven by
   `Jumbotron`, and they play a different 16-frame animation for kickoff, for a
