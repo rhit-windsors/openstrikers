@@ -47,6 +47,9 @@ int main(int argc, char* argv[])   // <-- diventa aurora_main via macro
     }
     const AuroraConfig config = {
         .appName = "openstrikers",
+        // Useful for automated runs whose process environment prevents SDL
+        // from discovering its normal per-user preference directory.
+        .cachePath = std::getenv("OPENSTRIKERS_CACHE_PATH"),
         .vsync = false,
         .startFullscreen = false,
         // OPENSTRIKERS_TEXTURE_DUMPS=1 writes every uploaded texture to

@@ -16,7 +16,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 if ([string]::IsNullOrWhiteSpace($IsoPath)) {
-    throw "Pass -IsoPath, or set OPENSTRIKERS_ISO to your Super Mario Strikers disc image. No game data ships with this repository."
+    throw "Pass -IsoPath, or set OPENSTRIKERS_ISO to your game disc image. No game data ships with this repository."
 }
 
 if ([string]::IsNullOrWhiteSpace($ExePath)) {

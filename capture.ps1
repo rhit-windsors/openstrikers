@@ -18,7 +18,7 @@ $ErrorActionPreference = 'Stop'
 # Point OPENSTRIKERS_ISO at your own disc image. No game data ships with this
 # repository, so there is no default to fall back to.
 $iso = $env:OPENSTRIKERS_ISO
-if (-not $iso) { throw "Set OPENSTRIKERS_ISO to the path of your Super Mario Strikers disc image." }
+if (-not $iso) { throw "Set OPENSTRIKERS_ISO to the path of your game disc image." }
 if (-not (Test-Path $iso)) { throw "OPENSTRIKERS_ISO does not exist: $iso" }
 $exe = Join-Path $PSScriptRoot 'build\openstrikers.exe'
 

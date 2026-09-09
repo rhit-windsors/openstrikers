@@ -1,0 +1,1067 @@
+# Diagnostics from the skybox / background investigation, recovered from the
+# working tree where they had been left unsaved.
+#
+# None of this changes what the game renders unless a switch is set; every
+# addition is behind a getenv, and the default path through glxSend's packet
+# loop is still a plain glx_DrawPacket(p).
+#
+#   OPENSTRIKERS_SKY_DEBUG=1            BasicStadium reports what the skybox and
+#       clouds objects resolved to at init (hash, flags, bounding radius, model
+#       pointer); world.cpp reports whether the Palace "hills" backdrop survives
+#       the render loop and whether it is in the frustum.
+#   OPENSTRIKERS_TRACE_LIGHTING=1       glxSend logs each distinct world/ambient
+#       /material colour it packs, once per distinct value.
+#   OPENSTRIKERS_TRACE_MISSING_TEXTURES=1  glxTexture reports every texture
+#       handle that had to be resolved through an animation, once per pair.
+#   OPENSTRIKERS_CHAR_RASTER_DEBUG=1    DrawableCharacter dumps the raster state
+#       of the first few skin-mesh packets (depth test/write/func, alpha, blend,
+#       cull, colour write).
+#   OPENSTRIKERS_CHAR_DEPTHWRITE=1 / OPENSTRIKERS_CHAR_ZALWAYS=1   make the
+#       character view write depth, or ignore it entirely. These were the A/B
+#       for "distant geometry occludes near characters"; note that the
+#       conclusion drawn from them at the time was later retracted.
+#   OPENSTRIKERS_FIXED_STEP=<ms>        drives every task from a constant delta
+#       instead of the wall clock, so two runs reach the same game state at the
+#       same frame number. This is the closest thing to a deterministic capture
+#       the port has -- but it does NOT make runs identical, so still do not
+#       decide anything by diffing frame N of one run against frame N of
+#       another.
+--- a/src/Game/BasicStadium.cpp
++++ b/src/Game/BasicStadium.cpp
+@@ -1,5 +1,6 @@
+ #include "Game/BasicStadium.h"
+ #include <cstdio>
++#include <cstdlib>
+ #include "Game/AI/Powerups.h"
+ #include "Game/Render/NetMesh.h"
+ #include "Game/Render/CrowdManager.h"
+@@ -217,6 +218,222 @@
+         mCloudTM = m_pCloudsObject->GetWorldMatrix();
+     }
+ 
++    if (getenv("OPENSTRIKERS_SKY_DEBUG") != NULL)
++    {
++        std::fprintf(stderr,
++            "SKYDBG lookup base='%s' backhash=%08x back=%p cloudhash=%08x clouds=%p\n",
++            m_szBaseName, (unsigned)uSkyBoxHashID, (void*)m_pSkyboxObject,
++            (unsigned)uCloudsHashID, (void*)m_pCloudsObject);
++        if (m_pSkyboxObject != NULL)
++        {
++            std::fprintf(stderr, "SKYDBG back flags=%08x create=%08x radius=%.2f\n",
++                (unsigned)m_pSkyboxObject->m_uObjectFlags,
++                (unsigned)m_pSkyboxObject->m_uObjectCreationFlags,
++                m_pSkyboxObject->m_fBoundingRadius);
++        }
++        if (m_pCloudsObject != NULL)
++        {
++            std::fprintf(stderr, "SKYDBG clouds flags=%08x create=%08x radius=%.2f\n",
++                (unsigned)m_pCloudsObject->m_uObjectFlags,
++                (unsigned)m_pCloudsObject->m_uObjectCreationFlags,
++                m_pCloudsObject->m_fBoundingRadius);
++        }
++        // Walk the skybox model packet by packet: view 2 only ever draws one,
++        // so the question is whether the model has more that never arrive.
++        if (m_pSkyboxObject != NULL)
++        {
++            DrawableModel* pMdl = m_pSkyboxObject->AsDrawableModel();
++            std::fprintf(stderr, "SKYDBG back drawablemodel=%p model=%p\n",
++                (void*)pMdl, (void*)(pMdl ? pMdl->m_pModel : NULL));
++            if (pMdl != NULL && pMdl->m_pModel != NULL)
++            {
++                const glModel* m = pMdl->m_pModel;
++                std::fprintf(stderr, "SKYDBG back id=%08x numPackets=%u\n",
++                    (unsigned)m->id, (unsigned)m->numPackets);
++                for (u32 i = 0; i < m->numPackets; i++)
++                {
++                    const glModelPacket* pk = &((const glModelPacket*)m->packets)[i];
++                    std::fprintf(stderr,
++                        "SKYDBG   back packet[%u] nVerts=%u prim=%u nStreams=%u"
++                        " prog=%08x raster=%08x mtx=%08x texcfg=%u"
++                        " tex=[%08x %08x %08x %08x %08x %08x]\n",
++                        (unsigned)i, (unsigned)pk->numVertices, (unsigned)pk->primType,
++                        (unsigned)pk->numStreams, (unsigned)pk->state.program,
++                        (unsigned)pk->state.raster, (unsigned)pk->state.matrix,
++                        (unsigned)pk->state.texconfig,
++                        (unsigned)pk->state.texture[0], (unsigned)pk->state.texture[1],
++                        (unsigned)pk->state.texture[2], (unsigned)pk->state.texture[3],
++                        (unsigned)pk->state.texture[4], (unsigned)pk->state.texture[5]);
++                    {
++                        u32 r = pk->state.raster;
++                        std::fprintf(stderr,
++                            "RASTDBG sky   raster=%08x depthTest=%u depthWrite=%u"
++                            " depthFunc=%u alphaTest=%u alphaRef=%u blend=%u"
++                            " cull=%u colourWrite=%u\n",
++                            (unsigned)r,
++                            (unsigned)glGetRasterState(r, GLS_DepthTest),
++                            (unsigned)glGetRasterState(r, GLS_DepthWrite),
++                            (unsigned)glGetRasterState(r, GLS_DepthFunc),
++                            (unsigned)glGetRasterState(r, GLS_AlphaTest),
++                            (unsigned)glGetRasterState(r, GLS_AlphaTestRef),
++                            (unsigned)glGetRasterState(r, GLS_AlphaBlend),
++                            (unsigned)glGetRasterState(r, GLS_Culling),
++                            (unsigned)glGetRasterState(r, GLS_ColourWrite));
++                    }
++                }
++            }
++        }
++        // Probe the world for every plausible spelling of the second skybox
++        // layer, and report how many drawables the stadium actually built.
++        {
++            static const char* kSuffixes[] = {
++                "/skybox clouds", "/skybox cloud", "/skyboxclouds", "/skybox_clouds",
++                "/clouds", "/cloud", "/skybox front", "/skybox mid", "/skybox hills",
++                "/skybox", "/skybox back", "/sky", "/hills", "/skybox sky",
++            };
++            char szProbe[0x100];
++            for (unsigned i = 0; i < sizeof(kSuffixes) / sizeof(kSuffixes[0]); i++)
++            {
++                nlStrNCat<char>(szProbe, m_szBaseName, kSuffixes[i], 0x100);
++                unsigned long h = nlStringLowerHash(szProbe);
++                DrawableObject* o = FindDrawableObject(h);
++                std::fprintf(stderr, "SKYPROBE %-20s hash=%08x obj=%p\n",
++                    kSuffixes[i], (unsigned)h, (void*)o);
++            }
++            // The Palace has a separate "hills" drawable that never shows up
++            // on screen. Report everything about it that gates rendering.
++            {
++                nlStrNCat<char>(szProbe, m_szBaseName, "/hills", 0x100);
++                DrawableObject* pHills = FindDrawableObject(nlStringLowerHash(szProbe));
++                if (pHills != NULL)
++                {
++                    std::fprintf(stderr,
++                        "HILLS obj=%p flags=%08x create=%08x radius=%.2f translucency=%.2f\n",
++                        (void*)pHills, (unsigned)pHills->m_uObjectFlags,
++                        (unsigned)pHills->m_uObjectCreationFlags,
++                        pHills->m_fBoundingRadius, pHills->m_translucency);
++                    const nlMatrix4& wm = pHills->GetWorldMatrix();
++                    std::fprintf(stderr, "HILLS world t=(%.2f, %.2f, %.2f)\n",
++                        wm.e2[3][0], wm.e2[3][1], wm.e2[3][2]);
++                    for (int r = 0; r < 4; r++)
++                    {
++                        std::fprintf(stderr,
++                            "HILLS world[%d] = %12.4f %12.4f %12.4f %12.4f\n", r,
++                            wm.e2[r][0], wm.e2[r][1], wm.e2[r][2], wm.e2[r][3]);
++                    }
++                    {
++                        AABBDimensions ab;
++                        pHills->GetAABBDimensions(ab, false);
++                        std::fprintf(stderr,
++                            "HILLS aabb min=(%.2f, %.2f, %.2f) dim=(%.2f, %.2f, %.2f)\n",
++                            ab.mMin.x, ab.mMin.y, ab.mMin.z,
++                            ab.mDim.x, ab.mDim.y, ab.mDim.z);
++                    }
++                    if (m_pSkyboxObject != NULL)
++                    {
++                        AABBDimensions ab;
++                        m_pSkyboxObject->GetAABBDimensions(ab, false);
++                        const nlMatrix4& sm = m_pSkyboxObject->GetWorldMatrix();
++                        std::fprintf(stderr,
++                            "SKY   aabb min=(%.2f, %.2f, %.2f) dim=(%.2f, %.2f, %.2f)"
++                            " world t=(%.2f, %.2f, %.2f)\n",
++                            ab.mMin.x, ab.mMin.y, ab.mMin.z,
++                            ab.mDim.x, ab.mDim.y, ab.mDim.z,
++                            sm.e2[3][0], sm.e2[3][1], sm.e2[3][2]);
++                    }
++                    DrawableModel* pHM = pHills->AsDrawableModel();
++                    if (pHM != NULL && pHM->m_pModel != NULL)
++                    {
++                        const glModel* m = pHM->m_pModel;
++                        std::fprintf(stderr, "HILLS id=%08x numPackets=%u\n",
++                            (unsigned)m->id, (unsigned)m->numPackets);
++                        for (u32 i = 0; i < m->numPackets; i++)
++                        {
++                            const glModelPacket* pk = &((const glModelPacket*)m->packets)[i];
++                            std::fprintf(stderr,
++                                "HILLS   packet[%u] nVerts=%u prim=%u nStreams=%u"
++                                " prog=%08x raster=%08x mtx=%08x texcfg=%u tex0=%08x\n",
++                                (unsigned)i, (unsigned)pk->numVertices, (unsigned)pk->primType,
++                                (unsigned)pk->numStreams, (unsigned)pk->state.program,
++                                (unsigned)pk->state.raster, (unsigned)pk->state.matrix,
++                                (unsigned)pk->state.texconfig, (unsigned)pk->state.texture[0]);
++                            if (i == 0)
++                            {
++                                extern const void* g_pOpenStrikersHillsPacket;
++                                extern unsigned g_uOpenStrikersHillsTex;
++                                g_pOpenStrikersHillsPacket = (const void*)pk;
++                                g_uOpenStrikersHillsTex = (unsigned)pk->state.texture[0];
++                            }
++                            {
++                                u32 r = pk->state.raster;
++                                std::fprintf(stderr,
++                                    "RASTDBG hills raster=%08x depthTest=%u depthWrite=%u"
++                                    " depthFunc=%u alphaTest=%u alphaRef=%u blend=%u"
++                                    " cull=%u colourWrite=%u\n",
++                                    (unsigned)r,
++                                    (unsigned)glGetRasterState(r, GLS_DepthTest),
++                                    (unsigned)glGetRasterState(r, GLS_DepthWrite),
++                                    (unsigned)glGetRasterState(r, GLS_DepthFunc),
++                                    (unsigned)glGetRasterState(r, GLS_AlphaTest),
++                                    (unsigned)glGetRasterState(r, GLS_AlphaTestRef),
++                                    (unsigned)glGetRasterState(r, GLS_AlphaBlend),
++                                    (unsigned)glGetRasterState(r, GLS_Culling),
++                                    (unsigned)glGetRasterState(r, GLS_ColourWrite));
++                            }
++                        }
++                    }
++                    else
++                    {
++                        std::fprintf(stderr, "HILLS not a DrawableModel (pHM=%p)\n", (void*)pHM);
++                    }
++                }
++            }
++            // Are creation flags read at all? Tally them across every drawable.
++            {
++                nlAVLTreeIterator<unsigned long, DrawableObject*,
++                    DefaultKeyCompare<unsigned long> > it(m_drawableMap);
++                unsigned nTotal = 0, nZero = 0;
++                unsigned long orAll = 0;
++                unsigned shown = 0;
++                while (it.IsValid())
++                {
++                    DrawableObject* o = it.CurrentValue();
++                    if (o != NULL)
++                    {
++                        nTotal++;
++                        orAll |= o->m_uObjectCreationFlags;
++                        if ((o->m_uObjectCreationFlags & 0x100) != 0)
++                        {
++                            DrawableModel* dm = o->AsDrawableModel();
++                            std::fprintf(stderr,
++                                "SKYOBJ hash=%08x flags=%08x create=%08x trans=%.3f"
++                                " model=%p packets=%u radius=%.2f\n",
++                                (unsigned)o->m_uHashID, (unsigned)o->m_uObjectFlags,
++                                (unsigned)o->m_uObjectCreationFlags, o->m_translucency,
++                                (void*)(dm ? dm->m_pModel : NULL),
++                                (unsigned)((dm && dm->m_pModel) ? dm->m_pModel->numPackets : 0),
++                                o->m_fBoundingRadius);
++                        }
++                        if (o->m_uObjectCreationFlags == 0) nZero++;
++                        else if (shown < 24)
++                        {
++                            std::fprintf(stderr, "CREFLAGS hash=%08x flags=%08x create=%08x\n",
++                                (unsigned)o->m_uHashID, (unsigned)o->m_uObjectFlags,
++                                (unsigned)o->m_uObjectCreationFlags);
++                            shown++;
++                        }
++                    }
++                    it.Next();
++                }
++                std::fprintf(stderr, "CREFLAGS total=%u zero=%u or=%08x\n",
++                    nTotal, nZero, (unsigned)orAll);
++            }
++            std::fprintf(stderr, "SKYPROBE drawables=%u\n",
++                (unsigned)m_drawableMap.m_NumElements);
++        }
++        std::fflush(stderr);
++    }
++
+     std::fprintf(stderr, "STADBG greenshell hash=%08x obj=%p\n",
+         (unsigned)nlStringLowerHash("gameplay/greenshell"),
+         (void*)FindDrawableObject(nlStringLowerHash("gameplay/greenshell")));
+--- a/src/Game/Drawable/DrawableCharacter.cpp
++++ b/src/Game/Drawable/DrawableCharacter.cpp
+@@ -266,7 +266,7 @@
+ /**
+  * Offset/Address/Size: 0x29F0 | 0x8011B8A0 | size: 0x2C
+  */
+-static void DrawableCharacterHeadTrackCallback(std::uintptr_t ctx, unsigned int, cPoseAccumulator* poseAccumulator, unsigned int currentNodeIndex, int)
++static void DrawableCharacterHeadTrackCallback(std::uintptr_t ctx, unsigned int, cPoseAccumulator* poseAccumulator, unsigned int currentNodeIndex, int)
+ {
+     DrawableCharacter* drawableChar = (DrawableCharacter*)ctx;
+     CalcHeadTrackMatrix(drawableChar->mHeadSpin, drawableChar->mHeadTilt, poseAccumulator, currentNodeIndex);
+@@ -275,7 +275,7 @@
+ /**
+  * Offset/Address/Size: 0x290C | 0x8011B7BC | size: 0xE4
+  */
+-void DrawableCharacter::DrawableBowserHeadTrackCallback(std::uintptr_t ctx, unsigned int nParam2, cPoseAccumulator* poseAccumulator, unsigned int currentNodeIndex, int nParentIndex)
++void DrawableCharacter::DrawableBowserHeadTrackCallback(std::uintptr_t ctx, unsigned int nParam2, cPoseAccumulator* poseAccumulator, unsigned int currentNodeIndex, int nParentIndex)
+ {
+     DrawableCharacter* drawableChar = (DrawableCharacter*)ctx;
+     nlMatrix4& nodeMatrix = poseAccumulator->GetNodeMatrix(currentNodeIndex);
+@@ -296,13 +296,13 @@
+ 
+     if (mCharacter != nullptr)
+     {
+-        mPoseAccumulator->SetBuildNodeMatrixCallback(mCharacter->m_nHeadJointIndex, DrawableCharacterHeadTrackCallback, reinterpret_cast<std::uintptr_t>(this), 0);
++        mPoseAccumulator->SetBuildNodeMatrixCallback(mCharacter->m_nHeadJointIndex, DrawableCharacterHeadTrackCallback, reinterpret_cast<std::uintptr_t>(this), 0);
+     }
+     else
+     {
+         if (mBowser != nullptr)
+         {
+-            mPoseAccumulator->SetBuildNodeMatrixCallback(mBowser->mnHeadJointIndex, DrawableBowserHeadTrackCallback, reinterpret_cast<std::uintptr_t>(this), 0);
++            mPoseAccumulator->SetBuildNodeMatrixCallback(mBowser->mnHeadJointIndex, DrawableBowserHeadTrackCallback, reinterpret_cast<std::uintptr_t>(this), 0);
+         }
+     }
+ 
+@@ -611,6 +611,31 @@
+     GLSkinMesh* skinMesh = character.GetSkinMesh();
+     skinMesh->PrepareToRender(program, nullptr);
+ 
++    // CHARRAST: is DepthWrite already 0 in the asset, or cleared later?
++    {
++        static bool sCharRast = getenv("OPENSTRIKERS_CHAR_RASTER_DEBUG") != NULL;
++        static u32 sCharRastN = 0;
++        if (sCharRast && skinMesh->pModel != NULL && (sCharRastN++ % 600) == 0)
++        {
++            for (u32 i = 0; i < skinMesh->pModel->numPackets && i < 4; i++)
++            {
++                u32 r = skinMesh->pModel->packets[i].state.raster;
++                std::fprintf(stderr,
++                    "CHARRAST packet[%u] raster=%08x ztest=%u zwrite=%u zfunc=%u"
++                    " alphaTest=%u blend=%u cull=%u colourWrite=%u\n",
++                    (unsigned)i, (unsigned)r,
++                    (unsigned)glGetRasterState(r, GLS_DepthTest),
++                    (unsigned)glGetRasterState(r, GLS_DepthWrite),
++                    (unsigned)glGetRasterState(r, GLS_DepthFunc),
++                    (unsigned)glGetRasterState(r, GLS_AlphaTest),
++                    (unsigned)glGetRasterState(r, GLS_AlphaBlend),
++                    (unsigned)glGetRasterState(r, GLS_Culling),
++                    (unsigned)glGetRasterState(r, GLS_ColourWrite));
++            }
++            std::fflush(stderr);
++        }
++    }
++
+     if (ec == DONKEYKONG || ec == MYSTERY)
+     {
+         for (glModelPacket* pPacket = skinMesh->pModel->packets; pPacket < skinMesh->pModel->packets + skinMesh->pModel->numPackets; pPacket++)
+@@ -1000,11 +1025,11 @@
+     rotMatrix.e2[3][2] = mPosition.z;
+     if (mCharacter != nullptr)
+     {
+-        mPoseAccumulator->SetBuildNodeMatrixCallback(mCharacter->m_nHeadJointIndex, DrawableCharacterHeadTrackCallback, reinterpret_cast<std::uintptr_t>(this), 0);
++        mPoseAccumulator->SetBuildNodeMatrixCallback(mCharacter->m_nHeadJointIndex, DrawableCharacterHeadTrackCallback, reinterpret_cast<std::uintptr_t>(this), 0);
+     }
+     else if (mBowser != nullptr)
+     {
+-        mPoseAccumulator->SetBuildNodeMatrixCallback(mBowser->mnHeadJointIndex, DrawableBowserHeadTrackCallback, reinterpret_cast<std::uintptr_t>(this), 0);
++        mPoseAccumulator->SetBuildNodeMatrixCallback(mBowser->mnHeadJointIndex, DrawableBowserHeadTrackCallback, reinterpret_cast<std::uintptr_t>(this), 0);
+     }
+     mPoseAccumulator->BuildNodeMatrices(rotMatrix);
+     if (mCharacter != nullptr)
+@@ -1047,13 +1072,13 @@
+ 
+     if (mCharacter != nullptr)
+     {
+-        mPoseAccumulator->SetBuildNodeMatrixCallback(mCharacter->m_nHeadJointIndex, DrawableCharacterHeadTrackCallback, reinterpret_cast<std::uintptr_t>(this), 0);
++        mPoseAccumulator->SetBuildNodeMatrixCallback(mCharacter->m_nHeadJointIndex, DrawableCharacterHeadTrackCallback, reinterpret_cast<std::uintptr_t>(this), 0);
+     }
+     else
+     {
+         if (mBowser != nullptr)
+         {
+-            mPoseAccumulator->SetBuildNodeMatrixCallback(mBowser->mnHeadJointIndex, DrawableBowserHeadTrackCallback, reinterpret_cast<std::uintptr_t>(this), 0);
++            mPoseAccumulator->SetBuildNodeMatrixCallback(mBowser->mnHeadJointIndex, DrawableBowserHeadTrackCallback, reinterpret_cast<std::uintptr_t>(this), 0);
+         }
+     }
+ 
+@@ -1149,13 +1174,13 @@
+     Replayable<1>(frame, mFacingDirection);
+     Replayable<1>(frame, mHeadSpin);
+     Replayable<1>(frame, mHeadTilt);
+-    std::uintptr_t effectsTexturing = reinterpret_cast<std::uintptr_t>(mEffectsTexturing);
+-    Replayable<1>(frame, effectsTexturing);
+-    if (ReplayFrameTraits<T>::IsLoadFrame && frame.mInterval == 1)
+-    {
+-        mEffectsTexturing = reinterpret_cast<EffectsTexturing*>(effectsTexturing);
+-    }
+-    ReplayablePolymorphic<1>(frame, mPoseTree);
++    std::uintptr_t effectsTexturing = reinterpret_cast<std::uintptr_t>(mEffectsTexturing);
++    Replayable<1>(frame, effectsTexturing);
++    if (ReplayFrameTraits<T>::IsLoadFrame && frame.mInterval == 1)
++    {
++        mEffectsTexturing = reinterpret_cast<EffectsTexturing*>(effectsTexturing);
++    }
++    ReplayablePolymorphic<1>(frame, mPoseTree);
+ 
+     if (ReplayFrameTraits<T>::IsLoadFrame && frame.mInterval == 1)
+     {
+--- a/src/Game/world.cpp
++++ b/src/Game/world.cpp
+@@ -1485,6 +1485,26 @@
+                         iter->Next();
+                         continue;
+                     }
++                    // HILLSDBG: the Palace "hills" backdrop never appears on
++                    // screen; report whether it even survives this loop.
++                    {
++                        static bool sHillsDbg = getenv("OPENSTRIKERS_SKY_DEBUG") != NULL;
++                        static u32 sHillsN = 0;
++                        if (sHillsDbg && pObject->m_uHashID == 0x1a77d7d0u)
++                        {
++                            if ((sHillsN++ % 60) == 0)
++                            {
++                                bool inFrustum = World_IsSphereInFrustumInline(
++                                    pWorld, pObject->GetWorldMatrix(), pObject->m_fBoundingRadius);
++                                std::fprintf(stderr,
++                                    "HILLSDBG reached loop flags=%08x create=%08x frustum=%d radius=%.2f\n",
++                                    (unsigned)objectFlags,
++                                    (unsigned)pObject->m_uObjectCreationFlags,
++                                    (int)inFrustum, pObject->m_fBoundingRadius);
++                                std::fflush(stderr);
++                            }
++                        }
++                    }
+                     if (objectFlags & 0x1)
+                     {
+                         if ((objectFlags & 0x10) || World_IsSphereInFrustumInline(pWorld, pObject->GetWorldMatrix(), pObject->m_fBoundingRadius))
+--- a/src/NL/glx/glxSend.cpp
++++ b/src/NL/glx/glxSend.cpp
+@@ -96,8 +96,48 @@
+ static _GXTevScale glx_tevscale;
+ static int glx_aniso;
+ static u8 glx_InvXposeChar;
+-static u32 glx_DebugFrame;
+-static u32 glx_DebugViewCounts[GLV_Num];
++static u32 glx_DebugFrame;
++static u32 glx_DebugViewCounts[GLV_Num];
++
++static bool glx_TraceLighting()
++{
++    static const bool enabled = [] {
++        const char* value = getenv("OPENSTRIKERS_TRACE_LIGHTING");
++        return value != NULL && value[0] != '\0' && value[0] != '0';
++    }();
++    return enabled;
++}
++
++static void glx_TraceColour(const char* kind, const nlFloatColour& source, const nlColour& packed)
++{
++    if (!glx_TraceLighting())
++    {
++        return;
++    }
++
++    // These values repeat for hundreds of packets. Keep one line per distinct
++    // kind/value pair so the trace describes the scene's lighting palette.
++    static u32 seen[3][128];
++    static u32 seenCount[3];
++    const u32 kindIndex = kind[0] == 'w' ? 0 : kind[0] == 'a' ? 1 : 2;
++    const u32 value = (u32)packed.c[0] << 24 | (u32)packed.c[1] << 16 | (u32)packed.c[2] << 8 | packed.c[3];
++    for (u32 i = 0; i < seenCount[kindIndex]; ++i)
++    {
++        if (seen[kindIndex][i] == value)
++        {
++            return;
++        }
++    }
++    if (seenCount[kindIndex] < 128)
++    {
++        seen[kindIndex][seenCount[kindIndex]++] = value;
++    }
++    fprintf(stderr,
++        "LIGHTDBG frame=%u view=%d program=%08X %s float=(%.4f,%.4f,%.4f,%.4f) byte=(%u,%u,%u,%u)\n",
++        glx_DebugFrame, (int)prev_view, glx_program, kind,
++        source.c[0], source.c[1], source.c[2], source.c[3],
++        packed.c[0], packed.c[1], packed.c[2], packed.c[3]);
++}
+ 
+ static void glud_Specular(void*);
+ 
+@@ -149,6 +189,24 @@
+ static void glx_SwitchStreams(const glModelPacket*);
+ static void glx_SwitchRaster(const glModelPacket*);
+ 
++// Set by BasicStadium when OPENSTRIKERS_SKY_DEBUG is on, so the send path can
++// recognise the Palace hills packet and report what happens to it.
++// Sum a texture's pixel bytes, so a texture whose memory is being overwritten
++// after upload shows up as a checksum that changes from frame to frame.
++static unsigned skydbg_checksum(const void* p, unsigned n)
++{
++    if (p == NULL) return 0u;
++    const unsigned char* b = (const unsigned char*)p;
++    unsigned h = 2166136261u;
++    for (unsigned i = 0; i < n; i++) { h = (h ^ b[i]) * 16777619u; }
++    return h;
++}
++#include "Game/GL/GLInventory.h"
++extern GLInventory glInventory;
++
++const void* g_pOpenStrikersHillsPacket = NULL;
++unsigned g_uOpenStrikersHillsTex = 0xFFFFFFFFu;
++
+ struct GLSkinUserData
+ {
+     int reg;
+@@ -206,9 +264,12 @@
+         const nlVector4& v = glConstantGet("lighting/ambient_colour");
+         ambient = makeColor(v.x, v.y, v.z, v.w);
+         world_ambient.c[0] = ambient.r;
+-        world_ambient.c[1] = ambient.g;
+-        world_ambient.c[2] = ambient.b;
+-        world_ambient.c[3] = ambient.a;
++        world_ambient.c[1] = ambient.g;
++        world_ambient.c[2] = ambient.b;
++        world_ambient.c[3] = ambient.a;
++        nlFloatColour source = { { v.x, v.y, v.z, v.w } };
++        nlColour packed = { { ambient.r, ambient.g, ambient.b, ambient.a } };
++        glx_TraceColour("world", source, packed);
+     }
+ 
+     glConstantGet("water/scale", water_Scale);
+@@ -1126,28 +1187,60 @@
+ 
+ static const u32 glv_TexConfigChanged = 0x80;
+ 
+-static inline void glx_SwitchTexture(const glModelPacket* p)
+-{
+-    static u32 errorTextures[2] = {
+-        glGetTexture("global/white"),
+-        glGetTexture("global/magenta"),
+-    };
+-    int bit;
+-    int texnum;
+-    PlatTexture* pTex;
+-    unsigned long texhandle;
++static inline void glx_SwitchTexture(const glModelPacket* p)
++{
++    static u32 errorTextures[2] = {
++        glGetTexture("global/white"),
++        glGetTexture("global/magenta"),
++    };
++    static int traceMissingTextures = -1;
++    static u32 reportedMissingTextures[256];
++    static u32 numReportedMissingTextures;
++    int bit;
++    int texnum;
++    PlatTexture* pTex;
++    unsigned long texhandle;
++
++    if (traceMissingTextures == -1)
++    {
++        traceMissingTextures = getenv("OPENSTRIKERS_TRACE_MISSING_TEXTURES") != NULL;
++    }
+ 
+     for (bit = texnum = 0; bit < 6; bit++)
+     {
+         if (glx_texconfig & (1 << bit))
+         {
+-            texhandle = p->state.texture[bit];
+-            pTex = glx_GetTex(texhandle, false, prev_view != GLV_Debug);
+-            if (pTex == NULL || pTex->m_bMissingTexture)
+-            {
+-                texhandle = errorTextures[(glGetCurrentFrame() & 4) >> 2];
+-                pTex = glx_GetTex(texhandle, true, false);
+-            }
++            texhandle = p->state.texture[bit];
++            pTex = glx_GetTex(texhandle, false, prev_view != GLV_Debug);
++            if (pTex == NULL || pTex->m_bMissingTexture)
++            {
++                if (traceMissingTextures)
++                {
++                    bool alreadyReported = false;
++                    for (u32 i = 0; i < numReportedMissingTextures; i++)
++                    {
++                        if (reportedMissingTextures[i] == texhandle)
++                        {
++                            alreadyReported = true;
++                            break;
++                        }
++                    }
++
++                    if (!alreadyReported && numReportedMissingTextures < 256)
++                    {
++                        reportedMissingTextures[numReportedMissingTextures++] = texhandle;
++                        fprintf(stderr,
++                                "MISSINGTEX frame=%u handle=0x%08lX packet=%p slot=%d "
++                                "program=0x%08X texconfig=0x%08X lookup=%s\n",
++                                glGetCurrentFrame(), texhandle, (const void*)p, bit,
++                                glx_program, glx_texconfig,
++                                pTex == NULL ? "null" : "marked-missing");
++                    }
++                }
++
++                texhandle = errorTextures[(glGetCurrentFrame() & 4) >> 2];
++                pTex = glx_GetTex(texhandle, true, false);
++            }
+ 
+             memcpy(&glx_texobj[texnum], &pTex->m_TexObj, sizeof(GXTexObj));
+             if (pTex->m_nPaletteEntries != 0)
+@@ -1246,6 +1339,23 @@
+     }
+ 
+     Culling = glGetRasterState(GLS_Culling);
++    // RASTDBG: dump the decoded raster state for the two backdrop packets.
++    {
++        extern unsigned g_uOpenStrikersHillsTex;
++        static bool sRastDbg = getenv("OPENSTRIKERS_SKY_DEBUG") != NULL;
++        static u32 sRastN = 0;
++        if (sRastDbg && g_uOpenStrikersHillsTex != 0xFFFFFFFFu
++            && p->state.texture[0] == g_uOpenStrikersHillsTex && (sRastN++ % 60) == 0)
++        {
++            fprintf(stderr,
++                "RASTDBG hills raster=%08x depthTest=%lu depthWrite=%lu depthFunc=%d"
++                " alphaTest=%d alphaRef=%lu blend=%lu cull=%d colourWrite=%d\n",
++                (unsigned)p->state.raster, DepthTest, DepthWrite, DepthFunc,
++                AlphaTest, AlphaTestRef, AlphaBlend, Culling,
++                (int)glGetRasterState(GLS_ColourWrite));
++            fflush(stderr);
++        }
++    }
+     gxSetCullMode(gx_Culling[Culling]);
+ 
+     ColourWrite = glGetRasterState(GLS_ColourWrite);
+@@ -1628,9 +1738,10 @@
+     nlColour colour;
+     colour.c[0] = (u8)(255.0f * pColour->c[0]);
+     colour.c[1] = (u8)(255.0f * pColour->c[1]);
+-    colour.c[2] = (u8)(255.0f * pColour->c[2]);
+-    colour.c[3] = (u8)(255.0f * pColour->c[3]);
+-    gxSetChanAmbColour(0, colour);
++    colour.c[2] = (u8)(255.0f * pColour->c[2]);
++    colour.c[3] = (u8)(255.0f * pColour->c[3]);
++    glx_TraceColour("ambient", *pColour, colour);
++    gxSetChanAmbColour(0, colour);
+ }
+ 
+ static inline void glud_Diffuse(void* pData)
+@@ -1639,9 +1750,10 @@
+     nlColour colour;
+     colour.c[0] = (u8)(255.0f * pColour->c[0]);
+     colour.c[1] = (u8)(255.0f * pColour->c[1]);
+-    colour.c[2] = (u8)(255.0f * pColour->c[2]);
+-    colour.c[3] = (u8)(255.0f * pColour->c[3]);
+-    gxSetChanMatColour(0, colour);
++    colour.c[2] = (u8)(255.0f * pColour->c[2]);
++    colour.c[3] = (u8)(255.0f * pColour->c[3]);
++    glx_TraceColour("diffuse", *pColour, colour);
++    gxSetChanMatColour(0, colour);
+ 
+     u32 lightMask = glx_prevLightMask;
+     if (lightMask)
+@@ -1668,10 +1780,28 @@
+     GLLightUserData* pLight;
+     GLLightUserData* pEndLight;
+ 
+-    if (lightData->numLights != 0)
+-    {
+-        pLight = (GLLightUserData*)((u8*)pUserData + 4);
+-        light_id = 0;
++    if (lightData->numLights != 0)
++    {
++        pLight = (GLLightUserData*)((u8*)pUserData + 4);
++        if (glx_TraceLighting())
++        {
++            static u32 traceCount;
++            if (traceCount++ < 64)
++            {
++                fprintf(stderr, "LIGHTDBG frame=%u view=%d program=%08X point-count=%u\n",
++                    glx_DebugFrame, (int)prev_view, glx_program, lightData->numLights);
++                for (u32 traceIndex = 0; traceIndex < lightData->numLights && traceIndex < 4; ++traceIndex)
++                {
++                    const GLLightUserData& traceLight = pLight[traceIndex];
++                    fprintf(stderr,
++                        "LIGHTDBG point[%u] pos=(%.3f,%.3f,%.3f) colour=(%.4f,%.4f,%.4f,%.4f) intensity=%.4f radii=(%.3f,%.3f)\n",
++                        traceIndex, traceLight.worldPosition.x, traceLight.worldPosition.y, traceLight.worldPosition.z,
++                        traceLight.colour.c[0], traceLight.colour.c[1], traceLight.colour.c[2], traceLight.colour.c[3],
++                        traceLight.intensity, traceLight.innerRadius, traceLight.outerRadius);
++                }
++            }
++        }
++        light_id = 0;
+         lightMask = 0;
+         pEndLight = &pLight[lightData->numLights];
+         while (pLight < pEndLight)
+@@ -2724,6 +2854,34 @@
+         }
+     }
+ 
++    // SKYDBG: the skybox is the one world object carrying a per-frame model
++    // matrix, so dump both the matrix its handle points at and the modelview
++    // that comes out, to separate a bad pointer from a bad transform.
++    {
++        static bool sSkyMtx = getenv("OPENSTRIKERS_SKY_DEBUG") != NULL;
++        static u32 sSkyMtxN = 0;
++        if (sSkyMtx && prev_view == GLV_Skybox && (sSkyMtxN++ % 60) == 0)
++        {
++            const nlMatrix4* src = (const nlMatrix4*)matrix;
++            fprintf(stderr, "SKYMTX handle=0x%08lx ident=%d identhandle=0x%08lx\n",
++                    (unsigned long)matrix, (int)(matrix == glGetIdentityMatrix()),
++                    (unsigned long)glGetIdentityMatrix());
++            if (matrix != glGetIdentityMatrix())
++            {
++                for (int r = 0; r < 4; r++)
++                {
++                    fprintf(stderr, "SKYMTX  src[%d] = %12.4f %12.4f %12.4f %12.4f\n", r,
++                            src->e2[r][0], src->e2[r][1], src->e2[r][2], src->e2[r][3]);
++                }
++            }
++            for (int r = 0; r < 3; r++)
++            {
++                fprintf(stderr, "SKYMTX  mv[%d]  = %12.4f %12.4f %12.4f %12.4f\n", r,
++                        gx_modelview[r][0], gx_modelview[r][1], gx_modelview[r][2], gx_modelview[r][3]);
++            }
++            fflush(stderr);
++        }
++    }
+     GXLoadPosMtxImm(gx_modelview, 0);
+     if (glx_normals)
+     {
+@@ -2893,9 +3051,244 @@
+             }
+         }
+ 
++        // SKYDBG: report every packet that reaches the skybox view, with the
++        // texture handles it would sample and the geometry it would draw.
++        {
++            static bool sSkyDbg = getenv("OPENSTRIKERS_SKY_DEBUG") != NULL;
++            static u32 sSkyN = 0;
++            if (sSkyDbg && view == GLV_Skybox && (sSkyN++ % 60) == 0)
++            {
++                fprintf(stderr,
++                        "SKYDBG frame=%u nVerts=%u prim=%u nStreams=%u prog=0x%08x"
++                        " raster=0x%08x mtx=0x%08x tex=[%08x %08x %08x %08x %08x %08x]"
++                        " texcfg=%u matset=0x%08x\n",
++                        glx_DebugFrame, (unsigned)p->numVertices, (unsigned)p->primType,
++                        (unsigned)p->numStreams, (unsigned)p->state.program,
++                        (unsigned)p->state.raster, (unsigned)p->state.matrix,
++                        (unsigned)p->state.texture[0], (unsigned)p->state.texture[1],
++                        (unsigned)p->state.texture[2], (unsigned)p->state.texture[3],
++                        (unsigned)p->state.texture[4], (unsigned)p->state.texture[5],
++                        (unsigned)p->state.texconfig, (unsigned)p->materialset);
++                // Resolve the bound texture so its dump file can be identified.
++                {
++                    PlatTexture* pt = glx_GetTex(p->state.texture[0], false, false);
++                    if (pt == NULL)
++                    {
++                        fprintf(stderr, "SKYTEX handle=0x%08x -> NULL\n",
++                                (unsigned)p->state.texture[0]);
++                    }
++                    else
++                    {
++                        fprintf(stderr,
++                            "SKYTEX handle=0x%08x %dx%d fmt=%d levels=%d pal=%d missing=%d"
++                            " swz=%p lin=%p sum=%08x\n",
++                            (unsigned)p->state.texture[0], (int)pt->m_Width, (int)pt->m_Height,
++                            (int)pt->m_Format, (int)pt->m_Levels, (int)pt->m_nPaletteEntries,
++                            (int)pt->m_bMissingTexture,
++                            (void*)pt->m_SwizzledData, (void*)pt->m_LinearData,
++                            skydbg_checksum(pt->m_SwizzledData, 16384u));
++                    }
++                }
++                fflush(stderr);
++            }
++        }
++
++        if (g_uOpenStrikersHillsTex != 0xFFFFFFFFu && p->state.texture[0] == g_uOpenStrikersHillsTex)
++        {
++            static u32 sHillsViewN = 0;
++            if ((sHillsViewN++ % 60) == 0)
++            {
++                fprintf(stderr,
++                        "HILLSVIEW view=%u skipped=%d nVerts=%u raster=%08x prog=%08x\n",
++                        (unsigned)view,
++                        (int)((sSkipViewMask & (1ULL << (u32)view)) != 0 || skipByOrdinal),
++                        (unsigned)p->numVertices,
++                        (unsigned)p->state.raster, (unsigned)p->state.program);
++                fflush(stderr);
++            }
++        }
++        // OPENSTRIKERS_HILLS_NODEPTH draws the Palace hills with the depth test
++        // off, so their screen position shows even when the stadium occludes
++        // them. OPENSTRIKERS_HILLS_ONLY drops every other packet in the frame.
++        static int sHillsMode = -1;
++        if (sHillsMode < 0)
++        {
++            sHillsMode = 0;
++            if (getenv("OPENSTRIKERS_HILLS_NODEPTH") != NULL) sHillsMode |= 1;
++            if (getenv("OPENSTRIKERS_HILLS_ONLY") != NULL) sHillsMode |= 2;
++        }
++        const bool isHills = (g_uOpenStrikersHillsTex != 0xFFFFFFFFu
++                              && p->state.texture[0] == g_uOpenStrikersHillsTex);
++        if ((sHillsMode & 2) != 0 && !isHills)
++        {
++            skipByOrdinal = true;
++        }
++
++        // ANIMDBG: the dome pennants are the animated textures, so match them
++        // through the texture-animation lookup and report the view they draw
++        // in, their depth state, and how far away the modelview puts them.
++        {
++            static bool sAnimDbg = getenv("OPENSTRIKERS_ANIM_DEBUG") != NULL;
++            static u32 sAnimN = 0;
++            if (sAnimDbg && glInventory.GetTextureAnim(p->state.texture[0]) != NULL
++                && (sAnimN++ % 240) == 0)
++            {
++                fprintf(stderr,
++                    "ANIMDBG view=%u nVerts=%u tex0=%08x ztest=%u zwrite=%u zfunc=%u"
++                    " mvT=(%.2f, %.2f, %.2f)\n",
++                    (unsigned)view, (unsigned)p->numVertices,
++                    (unsigned)p->state.texture[0],
++                    (unsigned)glGetRasterState(p->state.raster, GLS_DepthTest),
++                    (unsigned)glGetRasterState(p->state.raster, GLS_DepthWrite),
++                    (unsigned)glGetRasterState(p->state.raster, GLS_DepthFunc),
++                    gx_modelview[0][3], gx_modelview[1][3], gx_modelview[2][3]);
++                fflush(stderr);
++            }
++        }
++        // PENDBG: the pennant billboards draw over everything, including
++        // characters with the depth test forced off, so they must be drawn late
++        // and think they are very close. Report the small quads in the late
++        // views with the world position their matrix puts them at.
++        {
++            static bool sPenDbg = getenv("OPENSTRIKERS_PENNANT_DEBUG") != NULL;
++            static u32 sPenN = 0;
++            if (sPenDbg && (u32)view > GLV_Characters && (u32)view < GLV_UnsortedOrtho
++                && p->numVertices <= 16 && (sPenN++ % 600) == 0)
++            {
++                const u32 mh = p->state.matrix;
++                float tx = 0.0f, ty = 0.0f, tz = 0.0f;
++                int ident = (mh == glGetIdentityMatrix());
++                if (!ident && mh != 0 && mh != 0xFFFFFFFFu)
++                {
++                    const nlMatrix4* mm = (const nlMatrix4*)mh;
++                    tx = mm->e2[3][0]; ty = mm->e2[3][1]; tz = mm->e2[3][2];
++                }
++                fprintf(stderr,
++                    "PENDBG view=%u nVerts=%u prim=%u tex0=%08x raster=%08x"
++                    " ztest=%u zwrite=%u ident=%d world=(%.2f, %.2f, %.2f)\n",
++                    (unsigned)view, (unsigned)p->numVertices, (unsigned)p->primType,
++                    (unsigned)p->state.texture[0], (unsigned)p->state.raster,
++                    (unsigned)glGetRasterState(p->state.raster, GLS_DepthTest),
++                    (unsigned)glGetRasterState(p->state.raster, GLS_DepthWrite),
++                    ident, tx, ty, tz);
++                fflush(stderr);
++            }
++        }
++        // OPENSTRIKERS_SKIP_ANIMQUAD drops the small animated-texture quads in
++        // the character view -- the sprite that sits on every character head.
++        {
++            static int sSkipAnimQuad = -1;
++            if (sSkipAnimQuad < 0)
++            {
++                sSkipAnimQuad = (getenv("OPENSTRIKERS_SKIP_ANIMQUAD") != NULL) ? 1 : 0;
++            }
++            if (view == GLV_Characters && p->numVertices <= 8
++                && glInventory.GetTextureAnim(p->state.texture[0]) != NULL)
++            {
++                static u32 sAQ = 0;
++                if (getenv("OPENSTRIKERS_ANIM_DEBUG") != NULL && (sAQ++ % 300) == 0)
++                {
++                    PlatTexture* pt = glx_GetTex(p->state.texture[0], false, false);
++                    fprintf(stderr,
++                        "ANIMQUAD nVerts=%u prim=%u tex=%08x res=%dx%d fmt=%d"
++                        " prog=%08x mvT=(%.2f, %.2f, %.2f)\n",
++                        (unsigned)p->numVertices, (unsigned)p->primType,
++                        (unsigned)p->state.texture[0],
++                        pt ? (int)pt->m_Width : -1, pt ? (int)pt->m_Height : -1,
++                        pt ? (int)pt->m_Format : -1, (unsigned)p->state.program,
++                        gx_modelview[0][3], gx_modelview[1][3], gx_modelview[2][3]);
++                    fflush(stderr);
++                }
++            }
++            if (sSkipAnimQuad != 0 && view == GLV_Characters && p->numVertices <= 8
++                && glInventory.GetTextureAnim(p->state.texture[0]) != NULL)
++            {
++                skipByOrdinal = true;
++            }
++        }
++        // CHARSUBMIT: the raster words actually submitted in the character view,
++        // to compare against the 0x001d0007 the asset carries.
++        {
++            static bool sSub = getenv("OPENSTRIKERS_CHAR_RASTER_DEBUG") != NULL;
++            static u32 sSeen[16];
++            static u32 sNumSeen = 0;
++            if (sSub && view == GLV_Characters)
++            {
++                u32 r = p->state.raster;
++                bool known = false;
++                for (u32 i = 0; i < sNumSeen; i++) { if (sSeen[i] == r) { known = true; break; } }
++                if (!known && sNumSeen < 16)
++                {
++                    sSeen[sNumSeen++] = r;
++                    fprintf(stderr, "CHARSUBMIT raster=%08x ztest=%u zwrite=%u zfunc=%u prog=%08x\n",
++                            (unsigned)r,
++                            (unsigned)glGetRasterState(r, GLS_DepthTest),
++                            (unsigned)glGetRasterState(r, GLS_DepthWrite),
++                            (unsigned)glGetRasterState(r, GLS_DepthFunc),
++                            (unsigned)p->state.program);
++                    fflush(stderr);
++                }
++            }
++        }
++        // DEPTHDBG: per view, count packets drawn with the depth test on vs
++        // off. A world view drawing with depth off paints over near geometry.
++        {
++            static bool sDepthDbg = getenv("OPENSTRIKERS_DEPTH_DEBUG") != NULL;
++            static u32 sOn[GLV_Num];
++            static u32 sOff[GLV_Num];
++            static u32 sNoWrite[GLV_Num];
++            static u32 sTick = 0;
++            if (sDepthDbg && (u32)view < GLV_Num)
++            {
++                if (glGetRasterState(p->state.raster, GLS_DepthTest) != 0) sOn[view]++;
++                else sOff[view]++;
++                if (glGetRasterState(p->state.raster, GLS_DepthWrite) == 0) sNoWrite[view]++;
++                if (++sTick % 20000 == 0)
++                {
++                    fprintf(stderr, "DEPTHDBG frame=%u", glx_DebugFrame);
++                    for (u32 v = 0; v < GLV_Num; v++)
++                    {
++                        if (sOn[v] || sOff[v])
++                        {
++                            fprintf(stderr, " %u:on=%u,off=%u,nowr=%u", v, sOn[v], sOff[v], sNoWrite[v]);
++                        }
++                        sOn[v] = sOff[v] = sNoWrite[v] = 0;
++                    }
++                    fputc(10, stderr);
++                    fflush(stderr);
++                }
++            }
++        }
+         if ((sSkipViewMask & (1ULL << (u32)view)) == 0 && !skipByOrdinal)
+         {
+-            glx_DrawPacket(p);
++            static int sCharZWrite = -1;
++            if (sCharZWrite < 0)
++            {
++                sCharZWrite = 0;
++                if (getenv("OPENSTRIKERS_CHAR_DEPTHWRITE") != NULL) sCharZWrite = 1;
++                if (getenv("OPENSTRIKERS_CHAR_ZALWAYS") != NULL) sCharZWrite = 2;
++            }
++            if (sCharZWrite != 0 && view == GLV_Characters)
++            {
++                // Characters test depth but do not write it, so anything drawn
++                // after them that clears the stadium depth paints over them.
++                // mode 1: also write depth. mode 2: ignore depth entirely, so a
++                // character can never lose to geometry drawn before it.
++                if (sCharZWrite == 2) gxSetZMode(false, GX_ALWAYS, true);
++                else gxSetZMode(true, GX_LEQUAL, true);
++                glx_DrawPacket(p);
++                glx_DirtyFlags |= 0x08;
++            }
++            else if ((sHillsMode & 1) != 0 && isHills)
++            {
++                gxSetZMode(false, GX_ALWAYS, false);
++                glx_DrawPacket(p);
++                glx_DirtyFlags |= 0x08;
++            }
++            else
++            {
++                glx_DrawPacket(p);
++            }
+         }
+     }
+ }
+--- a/src/NL/glx/glxTexture.cpp
++++ b/src/NL/glx/glxTexture.cpp
+@@ -2,8 +2,9 @@
+ // Constructors initialize the tag, and glx_GetTex checks it when a texture handle may be a direct pointer.
+ // It is not an on-disk texture file signature.
+ 
+-#include "NL/glx/glxTexture.h"
+-#include <cstdio>
++#include "NL/glx/glxTexture.h"
++#include <cstdio>
++#include <cstdlib>
+ 
+ #include "NL/nlAVLTree.h"
+ #include "NL/nlList.h"
+@@ -224,11 +225,12 @@
+ /**
+  * Offset/Address/Size: 0xF94 | 0x801B8250 | size: 0x194
+  */
+-PlatTexture* glx_GetTex(unsigned long handle, bool bMissingFatal, bool bAllowGrids)
+-{
+-    PlatTexture** tex;
+-    GLTextureAnim* pAnim;
+-    int index;
++PlatTexture* glx_GetTex(unsigned long handle, bool bMissingFatal, bool bAllowGrids)
++{
++    PlatTexture** tex;
++    GLTextureAnim* pAnim;
++    int index;
++    const unsigned long originalHandle = handle;
+ 
+     // Check if handle is already a PlatTexture pointer (high byte 0x80)
+     if (((handle & 0xFF000000) + 0x80000000) == 0)
+@@ -246,7 +248,7 @@
+         handle = pAnim->GetTexture(-1)->textureHandle;
+     }
+ 
+-    for (index = currentMarkerLevel; index >= 0; index--)
++    for (index = currentMarkerLevel; index >= 0; index--)
+     {
+         if (textures[index]->FindGet(handle, &tex))
+         {
+@@ -259,11 +261,38 @@
+                     return pTex;
+                 }
+             }
+-            return *tex;
+-        }
+-    }
+-
+-    if (bMissingFatal)
++            return *tex;
++        }
++    }
++
++    {
++        static const bool traceMissingTextures = std::getenv("OPENSTRIKERS_TRACE_MISSING_TEXTURES") != NULL;
++        static unsigned long reportedOriginalHandles[256];
++        static unsigned long reportedResolvedHandles[256];
++        static u32 numReportedHandles;
++        bool alreadyReported = false;
++
++        for (u32 i = 0; i < numReportedHandles; i++)
++        {
++            if (reportedOriginalHandles[i] == originalHandle && reportedResolvedHandles[i] == handle)
++            {
++                alreadyReported = true;
++                break;
++            }
++        }
++
++        if (traceMissingTextures && !alreadyReported && numReportedHandles < 256)
++        {
++            reportedOriginalHandles[numReportedHandles] = originalHandle;
++            reportedResolvedHandles[numReportedHandles] = handle;
++            numReportedHandles++;
++            std::fprintf(stderr,
++                         "MISSINGTEX_RESOLVE original=0x%08lX resolved=0x%08lX anim=%p marker=%d\n",
++                         originalHandle, handle, (void*)pAnim, currentMarkerLevel);
++        }
++    }
++
++    if (bMissingFatal)
+     {
+         tDebugPrintManager::Print(DC_GLPLAT, "texture 0x%08X not found\n", handle);
+     }
+--- a/src/NL/nlTask.cpp
++++ b/src/NL/nlTask.cpp
+@@ -2,6 +2,7 @@
+ #include "NL/nlMemory.h"
+ #include "NL/nlTicker.h"
+ #include "NL/nlDLRing.h"
++#include <cstdlib>
+ 
+ #define assert(condition) ((condition) ? ((void)0) : ((void)0))
+ 
+@@ -62,6 +63,25 @@
+             currentTicker = nlGetTicker();
+             tickerDifference = nlGetTickerDifference(taskIterator->nPrevTicker, currentTicker);
+             taskIterator->nPrevTicker = currentTicker;
++
++            // OPENSTRIKERS_FIXED_STEP=<ms> drives every task from a constant
++            // delta instead of the wall clock. Two runs then reach the same
++            // game state at the same frame number, which is what makes an A/B
++            // capture comparable; without it frame N of one run and frame N of
++            // another are different moments and diffing them proves nothing.
++            {
++                static float sFixedStep = -1.0f;
++                if (sFixedStep < 0.0f)
++                {
++                    const char* v = getenv("OPENSTRIKERS_FIXED_STEP");
++                    sFixedStep = (v != NULL) ? (float)atof(v) : 0.0f;
++                    if (sFixedStep < 0.0f) sFixedStep = 0.0f;
++                }
++                if (sFixedStep > 0.0f)
++                {
++                    tickerDifference = sFixedStep;
++                }
++            }
+             if (taskIterator->statesActive & m_pInstance->m_CurrState)
+             {
+                 clampedDeltaTime = tickerDifference / 1000.f;
