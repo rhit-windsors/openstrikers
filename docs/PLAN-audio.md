@@ -91,7 +91,8 @@ and peak active voices every 600 frames.
   header's ADPCM coefficients were handed over still big-endian, which made
   every stream full-scale noise.
 - Measured on a 40 s capture: varied levels, no clipping, ~3-4.5k zero
-  crossings/s. **Not yet confirmed by ear.**
+  crossings/s. Confirmed by ear 2026-10-09: music and crowd play; "some of
+  the audio works" -- next session, ask which sounds are missing or wrong.
 - Open: all voices stop ~30 s in (voices 0, output 0) -- likely streams not
   restarting after a state change; aux A/B buses, surround, ITD, low-pass,
   depop not mixed; volume curve (`mix.vL` scale) unverified.
