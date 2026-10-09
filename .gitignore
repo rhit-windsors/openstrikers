@@ -3,6 +3,7 @@
 .env
 build/
 build-dbg/
+build-validate/
 .cache
 compile_commands.json
 

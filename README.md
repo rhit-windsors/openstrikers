@@ -890,6 +890,61 @@ Note that the crash is often on a worker thread (Aurora runs the GX FIFO
 processor and a render worker), so `thread apply all bt` is usually more
 informative than `bt` alone.
 
+### Soak testing: playing whole matches unattended
+
+The smoke test proves a match starts. Most of the crashes left take minutes of
+real play to reach -- goals, replays, cinematics, the final whistle, the recaps
+-- and a person playing through them is slow and does not reproduce. `soak.ps1`
+plays matches by itself and collects every failure:
+
+```powershell
+$env:OPENSTRIKERS_ISO = 'C:\path\to\game.iso'
+.\soak.ps1 -Runs 10                      # ten seeds, full-length matches
+.\soak.ps1 -Runs 10 -MatchSeconds 60     # short matches: more whistles and recaps per hour
+.\soak.ps1 -Seed 1234 -Runs 1            # rerun one seed
+```
+
+Each run is a skip-front-end match with these switches, all of which also work
+on their own:
+
+| Switch | Effect |
+|---|---|
+| `OPENSTRIKERS_AUTOPLAY=<seed>` | Plays port 0. While the ball is live (`osHostLiveGameplay()`, `patches/decomp-late/132`) it runs the stick in random directions and passes, shoots, charges shots, uses items and turbos at random. Anywhere else -- intro, goal celebration, replay, summary, post-game menu -- it presses nothing for 20 game-seconds, so replays and cinematics play out, then taps A once a second, which steps through the summary and takes Rematch. One run therefore plays match after match (seven 60-second matches in six minutes). Random input in the menus used to wander off to the main menu and Strikers 101 instead. Replaces `OPENSTRIKERS_AUTO_A`; `OPENSTRIKERS_INPUT` presses still apply on top. Logs `heartbeat frame N` every 600 frames. |
+| `OPENSTRIKERS_FIXED_STEP=16.6667` | Constant game delta, so a seed replays the same input against the same game time. |
+| `OPENSTRIKERS_UNCAPPED=1` | No frame pacing. With a fixed step this is fast-forward: about 2.75x real time here, limited by the 165 Hz present (Dawn picks `Mailbox`). |
+| `OPENSTRIKERS_AI_SKILL=4` | 0 Training .. 4 Legend; the host's version of the game's own `soak_diff` key. At Legend the AI scores constantly -- seven goals in a 60-second match is normal -- which is the point: every goal is a replay, an overlay and a celebration cinematic. |
+| `OPENSTRIKERS_MATCH_SECONDS=<n>` | Overrides the 300-second match length. |
+
+A run ends as **crash** (the in-process handler printed `FATAL EXCEPTION`;
+the stack is symbolized and runs with the same innermost frames are grouped),
+**died** (exited with no report), **hang** (heartbeat stopped for
+`-StallSeconds`), or **survived** (still playing at `-RunSeconds`, which is the
+pass). The line for each run gives its seed, the frame it got to, how many
+matches it finished and how many goals were scored -- the HUD logs
+`openstrikers: score L-R` on every change -- and a failure prints the command
+that reruns its seed. Everything is in `build\logs\soak-<stamp>\`, one directory
+per seed plus `summary.tsv`.
+
+Run one at a time (`-Parallel` defaults to 1). Uncapped, each instance takes
+every frame the GPU will give it; two at once made the desktop unusable. Runs
+start at below-normal priority for the same reason, and are not minimized,
+because aurora skips frames for a minimized window and the game would stall.
+
+**Seeds are not fully deterministic.** The fixed step pins the game's delta,
+but asynchronous file loads still complete on whatever frame they complete, so
+a rerun of a crashing seed reproduces the conditions, not always the crash.
+Rerun it a few times, and trust the grouping across seeds more than any single
+run.
+
+**Every way out is reported now.** The exception filter only ever saw SEH
+faults; `abort()` (which `std::terminate` and failed library assertions end
+in), CRT invalid-parameter and pure-call failures went out through
+`__fastfail` as a bare `0xC0000409`, and a stack overflow had no stack left to
+report on. `src/compat_shims.cpp` now catches `SIGABRT`, terminate, invalid
+parameter and pure call with the same `FATAL EXCEPTION` header plus a `kind`
+line, and reserves stack for the filter with `SetThreadStackGuarantee`. Every
+report also gives the host frame and thread id.
+
 ### Capturing what is actually on screen
 
 Do not try to screenshot the window from outside the process. The swapchain is a

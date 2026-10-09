@@ -1,0 +1,84 @@
+# Three more fields reached through raw GameCube offsets, found by sweeping for
+# the pattern after the soak's post-match soft-lock. (1)
+# PausePostGameScene::Update, on B, re-pushes the summary and set its button
+# state through offset 0xC3C; on the host SummaryOverlay::mButtonState is at
+# 0xC54 and 0xC3C is the upper half of mSlideMenu. The summary was left with no
+# A button -- the only way on from it, so a soft-lock -- and a wild slide-menu
+# pointer. (2) Starting a cup set CupHubScene::mDoAutoSave through 0x226, which
+# on the host is inside mAllTeamStats. (3) PhysicsBanana::SetContactInfo read
+# PhysicsNPC::mpAINPC through 0x30 (it is at 0x48) and called vtable slot 0x0C
+# on it, which on the NPC is GetSkinAnimatedNPC_Type: retail asks whether the
+# NPC is Bowser. Use the named fields.
+--- a/src/Game/SH/SHPausePostGame.cpp
++++ b/src/Game/SH/SHPausePostGame.cpp
+@@ -10,6 +10,7 @@
+ #include "Game/Game.h"
+ #include "Game/GameInfo.h"
+ #include "Game/OverlayManager.h"
++#include "Game/FE/Overlay/OverlayHandlerSummary.h"
+ #include "NL/nlLocalization.h"
+ #include "NL/nlString.h"
+ 
+@@ -327,7 +328,12 @@
+     if (g_pFEInput->JustPressed(FE_ALL_PADS, 0x200, false, NULL))
+     {
+         BaseSceneHandler* summary = nlSingleton<OverlayManager>::Instance()->Push(OVERLAY_SUMMARY, SCREEN_NOTHING, true);
+-        *(ButtonComponent::ButtonState*)((u8*)summary + 0xC3C) = (ButtonComponent::ButtonState)1;
++        // Retail wrote BS_A_ONLY through raw offset 0xC3C, which is
++        // SummaryOverlay::mButtonState in the GameCube layout. On the host that
++        // offset is the upper half of mSlideMenu, so backing out of this menu
++        // left the summary with no A button -- a soft-lock, since A is the only
++        // way on from it -- and turned mSlideMenu into a wild pointer.
++        ((SummaryOverlay*)summary)->mButtonState = ButtonComponent::BS_A_ONLY;
+         FEAudio::PlayAnimAudioEvent("sfx_back", false);
+         return;
+     }
+--- a/src/Game/SH/SHCupChooseCaptain.cpp
++++ b/src/Game/SH/SHCupChooseCaptain.cpp
+@@ -1,6 +1,7 @@
+ #include "Game/SH/SHCupChooseCaptain.h"
+ #include "Game/GameInfo.h"
+ #include "Game/GameSceneManager.h"
++#include "Game/SH/SHCupHub.h"
+ #include "Game/FE/feHelpFuncs.h"
+ #include "NL/gl/glStruct.h"
+ #include "NL/nlFormatFwd.h"
+@@ -399,7 +400,11 @@
+                 nlSingleton<GameSceneManager>::Instance()->Pop();
+                 SceneList nextScene = mIsSuperCup ? SCENE_SUPER_CUP_STANDINGS : SCENE_CUP_STANDINGS;
+                 BaseSceneHandler* hubScene = nlSingleton<GameSceneManager>::Instance()->Push(nextScene, SCREEN_FORWARD, false);
+-                *(u8*)((u8*)hubScene + 0x226) = 1;
++                // Retail set this through raw offset 0x226, CupHubScene::mDoAutoSave
++                // in the GameCube layout. On the host that is inside mAllTeamStats,
++                // so starting a cup wrote a stray 1 into the standings and never
++                // asked the hub to autosave.
++                ((CupHubScene*)hubScene)->mDoAutoSave = true;
+                 FEAudio::PlayAnimAudioEvent("sfx_accept", false);
+             }
+             else if (g_pFEInput->JustPressed(FE_ALL_PADS, 0x200, false, NULL))
+--- a/src/Game/Physics/PhysicsBanana.cpp
++++ b/src/Game/Physics/PhysicsBanana.cpp
+@@ -7,6 +7,7 @@
+ #include "Game/Player.h"
+ #include "Game/Physics/PhysicsAIBall.h"
+ #include "Game/Physics/PhysicsCharacter.h"
++#include "Game/Render/SkinAnimatedMovableNPC.h"
+ 
+ #include "NL/nlMemory.h"
+ 
+@@ -207,8 +208,13 @@
+     {
+         if (m_pPowerupObject->mtNoHitTimer.m_uPackedTime != 0)
+         {
+-            PhysicsObject* innerObj = *(PhysicsObject**)((u8*)other + 0x30);
+-            if (innerObj->GetObjectType() == 0x4)
++            // Retail loaded PhysicsNPC::mpAINPC from raw offset 0x30 and made the
++            // virtual call in slot 0x0C, which on that NPC object is
++            // GetSkinAnimatedNPC_Type -- so this asks "is it Bowser". On the
++            // host mpAINPC is at 0x48 and 0x30 is inside PhysicsSphere, so the
++            // call went through whatever pointer-sized value sat there.
++            SkinAnimatedMovableNPC* pNPC = ((PhysicsNPC*)other)->mpAINPC;
++            if (pNPC->GetSkinAnimatedNPC_Type() == SkinAnimatedNPC_BOWSER)
+             {
+                 if (m_pPowerupObject->m_pThrower == NULL)
+                 {

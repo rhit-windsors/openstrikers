@@ -1,0 +1,54 @@
+# PlayRandomCharDialogue's flag-clearing loops end at charDialogueSFX[baseIndex
+# + numRandom], which for the last group (26, three entries) is one past the
+# 29-entry table. On the GameCube that read
+# charDialogueSFXInfo[0].charDialogueSFXIndex == 0 and the loop ran no times.
+# GCC lays the tables out differently and the read hit string data ('CHAR',
+# ~1.4e9), so a cinematic playing that group cleared a flag across gigabytes
+# until it faulted -- found by the first soak run, Nis::Trigger::Fire ->
+# PlayNISRandomCharDialogue. Keep the retail outcome: past the table the bound
+# is 0.
+--- a/src/Game/Audio/CharacterAudio.cpp
++++ b/src/Game/Audio/CharacterAudio.cpp
+@@ -240,6 +240,24 @@
+     { 0x1A, 0x00 }, // 26, 0
+ };
+ 
++// The exclusive upper bound of a dialogue group, as the SFX id that follows
++// its last entry. The last group (index 26, three entries) puts that one past
++// the end of charDialogueSFX. On the GameCube the read landed on the next word
++// in .data, charDialogueSFXInfo[0].charDialogueSFXIndex == 0, so the clearing
++// loops that use this ran no times for it. GCC lays the tables out
++// differently and the same read landed on string data ("CHAR", ~1.4 billion),
++// so a cinematic playing that group cleared a flag across gigabytes of memory
++// until it faulted. Keep the retail outcome: past the table, the bound is 0.
++static int DialogueGroupEndSFX(int baseIndex, int numRandom)
++{
++    const int endIndex = baseIndex + numRandom;
++    if (endIndex >= (int)(sizeof(charDialogueSFX) / sizeof(charDialogueSFX[0])))
++    {
++        return 0;
++    }
++    return (int)charDialogueSFX[endIndex];
++}
++
+ static Audio::eCharSFX charFootstepSFX[2][5] = {
+     {
+         Audio::CHARSFX_RUN_01,
+@@ -523,7 +541,7 @@
+         }
+     }
+ 
+-    for (int i = charDialogueSFX[baseIndex]; i < (int)charDialogueSFX[baseIndex + numRandom]; i++)
++    for (int i = charDialogueSFX[baseIndex]; i < DialogueGroupEndSFX(baseIndex, numRandom); i++)
+     {
+         mCharSFX[i].m_unk_0x40 = false;
+     }
+@@ -649,7 +667,7 @@
+         }
+     }
+ 
+-    for (int i = charDialogueSFX[baseIndex]; i < (int)charDialogueSFX[baseIndex + numRandom]; i++)
++    for (int i = charDialogueSFX[baseIndex]; i < DialogueGroupEndSFX(baseIndex, numRandom); i++)
+     {
+         mCharSFX[i].m_unk_0x40 = false;
+     }

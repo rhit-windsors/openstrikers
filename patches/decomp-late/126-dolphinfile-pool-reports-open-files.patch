@@ -1,0 +1,87 @@
+# When the 32-slot DolphinFile pool is exhausted, print the path holding every
+# slot. Pool exhaustion ended several runs (patches 120-123 each guarded one
+# symptom) and the question each time was who holds the slots. This answered it
+# on its first outing: stale audio streams, fixed in 129.
+--- a/include/NL/nlFileGC.h
++++ b/include/NL/nlFileGC.h
+@@ -6,6 +6,8 @@
+ #include "NL/nlArrayAllocator.h"
+ #include "dolphin/dvd.h"
+ #include "FILE_POS.h"
++#include <cstdio>
++#include <cstring>
+ 
+ enum GCFileSystem
+ {
+@@ -186,9 +188,60 @@
+ 
+     void operator delete(void* ptr)
+     {
++        ForgetOpenName((DolphinFile*)ptr);
+         s_pAllocator->DeleteEntry((DolphinFile*)ptr);
+     }
+ 
++    // Which path holds each of the 32 pool slots. The pool running dry has
++    // ended several runs (crowd textures, cinematics, audio streams, FE
++    // packages), and every time the question was "who is holding them", which
++    // the pool itself cannot answer. Host-only bookkeeping, reported when an
++    // open fails for want of a slot.
++    struct OpenName
++    {
++        DolphinFile* file;
++        char path[80];
++    };
++    static inline OpenName s_openNames[32] = {};
++
++    static void RememberOpenName(DolphinFile* file, const char* path)
++    {
++        for (OpenName& slot : s_openNames)
++        {
++            if (slot.file == NULL)
++            {
++                slot.file = file;
++                strncpy(slot.path, path, sizeof(slot.path) - 1);
++                slot.path[sizeof(slot.path) - 1] = 0;
++                return;
++            }
++        }
++    }
++
++    static void ForgetOpenName(DolphinFile* file)
++    {
++        for (OpenName& slot : s_openNames)
++        {
++            if (slot.file == file)
++            {
++                slot.file = NULL;
++                return;
++            }
++        }
++    }
++
++    static void ReportExhausted(const char* path)
++    {
++        fprintf(stderr, "openstrikers: DolphinFile pool exhausted opening %s; open files:\n", path);
++        for (const OpenName& slot : s_openNames)
++        {
++            if (slot.file != NULL)
++            {
++                fprintf(stderr, "openstrikers:   %s\n", slot.path);
++            }
++        }
++    }
++
+     static GCFile* Open(const char* FileName)
+     {
+         long FileEntrynum = DVDConvertPathToEntrynum(FileName);
+@@ -201,8 +254,10 @@
+         DolphinFile* storage = s_pAllocator->Allocate();
+         if (storage == NULL)
+         {
++            ReportExhausted(FileName);
+             return NULL;
+         }
++        RememberOpenName(storage, FileName);
+         return ::new ((void*)storage) DolphinFile(FileEntrynum);
+     }
+ 

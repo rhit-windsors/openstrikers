@@ -1,0 +1,36 @@
+# cGameSFX::Play returns Audio::GetSndIDError() (-1) on failure even when the
+# caller set mf_ReturnEmitterOnPlay. ChainChomp and the character movement loop
+# cast the result straight to SFXEmitter*, so a failed play stored
+# (SFXEmitter*)-1, passed every != NULL check, and ChainChomp::Update wrote the
+# emitter position to -1 + 0x80 = 0x7f. Map the error handle to NULL at both
+# casting sites. The powerup callers keep the voice id and compare against
+# GetSndIDError themselves.
+--- a/src/Game/Audio/CharacterAudio.cpp
++++ b/src/Game/Audio/CharacterAudio.cpp
+@@ -900,7 +900,10 @@
+     sndAtr.mf_ReturnEmitterOnPlay = true;
+     sndAtr.mb_NoPhasingFilter = false;
+ 
+-    mpMovementLoopSound = (SFXEmitter*)Play(sndAtr);
++    // A failed Play returns GetSndIDError() (-1), not NULL, even when an
++    // emitter was asked for; the != NULL checks downstream would take it.
++    const std::uintptr_t handle = Play(sndAtr);
++    mpMovementLoopSound = handle == (std::uintptr_t)GetSndIDError() ? NULL : (SFXEmitter*)handle;
+ }
+ 
+ /**
+--- a/src/Game/Render/ChainChomp.cpp
++++ b/src/Game/Render/ChainChomp.cpp
+@@ -192,7 +192,11 @@
+             sndAtr.SetSoundType(0x8E, true);
+             sndAtr.UseVectors(mv3Position, mv3Velocity);
+             sndAtr.mf_ReturnEmitterOnPlay = true;
+-            mpInEffectSFX = (SFXEmitter*)Audio::gPowerupSFX.Play(sndAtr);
++            // A failed Play returns Audio::GetSndIDError() even when an emitter
++            // was asked for. That is -1, which passed every != NULL check and
++            // wrote the emitter position to -1 + 0x80 = 0x7f.
++            const std::uintptr_t handle = Audio::gPowerupSFX.Play(sndAtr);
++            mpInEffectSFX = handle == (std::uintptr_t)Audio::GetSndIDError() ? NULL : (SFXEmitter*)handle;
+         }
+ 
+         {

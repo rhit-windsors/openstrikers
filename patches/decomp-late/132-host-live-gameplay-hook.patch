@@ -1,0 +1,30 @@
+# osHostLiveGameplay() for the host autoplay driver: nonzero only while the
+# ball is live (GS_GAMEPLAY or GS_OVERTIME, game not over).
+# OPENSTRIKERS_AUTOPLAY plays at random only then; outside live play it waits
+# and taps A, which steps through the summary and takes Rematch. Random input
+# in the menus wandered off -- quit to the main menu, into Strikers 101 --
+# instead of playing the next match.
+--- a/src/Game/Game.cpp
++++ b/src/Game/Game.cpp
+@@ -1,4 +1,5 @@
+ #include "Game/Game.h"
++#include "Game/FE/feManager.h"
+ #include "Game/Sys/clock.h"
+ #include "Game/Sys/eventman.h"
+ #include "Game/Team.h"
+@@ -34,6 +35,15 @@
+ 
+ cGame* g_pGame;
+ 
++// For the host autoplay driver (OPENSTRIKERS_AUTOPLAY): true only while the
++// ball is live -- not during the intro, kickoff, goal celebration, replay,
++// or anything after the final whistle. Autoplay plays at random only then;
++// everywhere else random input wanders off through the menus.
++extern "C" int osHostLiveGameplay()
++{
++    return g_pGame != NULL && g_pGame->IsGameplayOrOvertime() && !FrontEnd::m_bGameOver;
++}
++
+ static inline void ApplyDifficulty(eDifficultyID diff0, eDifficultyID diff1, eDifficultyID diff2)
+ {
+     if (diff0 != DIFF_DEFAULT)

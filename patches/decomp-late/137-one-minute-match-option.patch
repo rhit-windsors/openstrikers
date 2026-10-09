@@ -1,0 +1,95 @@
+--- a/src/Game/FE/feOptionsSubMenus.cpp
++++ b/src/Game/FE/feOptionsSubMenus.cpp
+@@ -1148,6 +1148,74 @@
+     memcpy(&mSettings, &mBackupSettings, sizeof(VisualSettings));
+ }
+ 
++// Port addition: a 1:00 match length. The menu art only has slides for 2, 3,
++// 4, 5, 10 and 15 minutes, so the extra entry (user enum 6, after 15:00; the
++// list wraps, so it is one press left of 2:00) shows the 2:00 slide with its
++// GAMETIME text replaced. Every entry's highlight goes through here so the
++// 2:00 slide gets its own text back.
++static const int kOneMinuteGameTimeIndex = 6;
++
++static void ShowGameTimeItem(SlideMenuList* list)
++{
++    list->SetSlide();
++
++    TLComponentInstance* comp = list->GetComponentInstance();
++    TLTextInstance* text = FEFinder<TLTextInstance, 3>::Find<TLSlide>(
++        comp->GetActiveSlide(),
++        InlineHasher(nlStringLowerHash("GAMETIME")));
++    if (text == NULL)
++    {
++        return;
++    }
++
++    if (list->GetMenuItem()->GetType()->GetUserEnumType() == kOneMinuteGameTimeIndex)
++    {
++        // The text instance keeps a 32-bit pointer, so the string has to live
++        // in the game heap (MEM1), not in the executable image.
++        static unsigned short* sOneMinute = NULL;
++        if (sOneMinute == NULL)
++        {
++            static const char kText[] = "1:00";
++            sOneMinute = (unsigned short*)nlMalloc(sizeof(kText) * sizeof(unsigned short), 8, false);
++            for (unsigned int i = 0; i < sizeof(kText); i++)
++            {
++                sOneMinute[i] = (unsigned short)kText[i];
++            }
++        }
++        text->SetString(sOneMinute);
++    }
++    else if (!(text->m_OverloadFlags & 0x8u))
++    {
++        // SetString cleared the "use m_LocStrId" flag; m_LocStrId itself is
++        // untouched, so setting the flag restores the slide's own text.
++        text->m_OverloadFlags |= 0x8u;
++        text->m_pFontString = NULL;
++    }
++}
++
++static void AddOneMinuteGameTime(SlideMenuList* list, bool selected)
++{
++    if (list == NULL || list->GetNumItemsAdded() == 0)
++    {
++        return;
++    }
++
++    list->AddItem(list->GetMenuItem(0)->GetType()->GetHashID(), kOneMinuteGameTimeIndex);
++
++    for (int i = 0; i < list->GetNumItemsAdded(); i++)
++    {
++        MenuItem<SlideMenuItem>::Callback callback(
++            Bind<void, void (*)(SlideMenuList*), SlideMenuList*>(ShowGameTimeItem, list));
++        list->GetMenuItem(i)->SetCallback(ON_HIGHLIGHT, callback);
++    }
++
++    if (selected)
++    {
++        list->SetItem(list->GetNumItemsAdded() - 1);
++    }
++    ShowGameTimeItem(list);
++}
++
+ /**
+  * Offset/Address/Size: 0xEE0 | 0x800B5F24 | size: 0x850
+  */
+@@ -1239,6 +1307,7 @@
+         break;
+     }
+     BuildSubMenuList(1, compinstance, true, gtindex);
++    AddOneMinuteGameTime((SlideMenuList*)mSlideMenuLists[1], settings.GameTime == 60);
+ 
+     compinstance = FEFinder<TLComponentInstance, 4>::Find<TLSlide>(
+         currentSlide,
+@@ -1368,6 +1437,9 @@
+     case 5:
+         localSettings.GameTime = 900;
+         break;
++    case kOneMinuteGameTimeIndex:
++        localSettings.GameTime = 60;
++        break;
+     default:
+         localSettings.GameTime = 120;
+         break;

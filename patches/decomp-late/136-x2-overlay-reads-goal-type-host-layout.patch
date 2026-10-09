@@ -1,0 +1,27 @@
+--- a/src/Game/FE/Overlay/OverlayHandlerSTSX2.cpp
++++ b/src/Game/FE/Overlay/OverlayHandlerSTSX2.cpp
+@@ -1,4 +1,5 @@
+ #include "Game/OverlayHandlerSTSX2.h"
++#include "Game/Goalie.h"
+ #include "Game/BaseSceneHandler.h"
+ #include "Game/FE/FEAudio.h"
+ #include "Game/Sys/eventman.h"
+@@ -103,13 +104,17 @@
+             }
+         }
+ 
+-        u32 val = (*(u16*)((u8*)data + 6) >> 1) & 0x7FFF;
++        // Retail read uGoalType as the low halfword of the GC bitfield word
++        // (offset 6, >> 1). On the host the 8-byte vtable pointer covers offset
++        // 6, so it never saw goal type 6 and the x2 never showed.
++        u32 val = ((GoalScoredData*)data)->uGoalType;
+         if (val == 6)
+         {
+             FEPresentation* pres = self->m_pFEPresentation;
+             pres->m_fadeDuration = pres->m_currentSlide->m_start;
+             self->m_pFEPresentation->Update(0.0f);
+             self->SetVisible(true);
++            fprintf(stderr, "openstrikers: x2 overlay shown\n");
+         }
+     }
+ }

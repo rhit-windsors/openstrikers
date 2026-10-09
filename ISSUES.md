@@ -6,15 +6,63 @@ issue is reproduced, narrowed down, or fixed.
 
 ## Active issues
 
-- [The match clock goes negative at the end of a game](#the-match-clock-goes-negative-at-the-end-of-a-game) - medium priority, confirmed during manual play.
-- [Super goals do not display the x2 indicator](#super-goals-do-not-display-the-x2-indicator) - medium priority, confirmed during manual play.
-- [The game crashes during the end-of-game recaps](#the-game-crashes-during-the-end-of-game-recaps) - high priority, reproducible after a completed match.
+None known as of 2026-10-08.
 
-- [The match crashes after a couple of minutes](#the-match-crashes-after-a-couple-of-minutes) — high priority, newly reported.
-- [The match crashes when A is held down through play](#the-match-crashes-when-a-is-held-down-through-play) — medium priority, intermittent stress-path failure.
-- [Lighting and some character materials look incorrect](#lighting-and-some-character-materials-look-incorrect) — medium priority, especially visible in intros and replays.
+## Fixed, keep an eye on
+
+These are fixed but were seen by the user in ordinary play, so reopen them with
+the new crash report (or a screenshot) if they come back.
+
+- [Lighting and some character materials look incorrect](#lighting-and-some-character-materials-look-incorrect) — fixed; the user judged it "pretty spot on" on 2026-10-08.
+- [The match crashes when A is held down through play](#the-match-crashes-when-a-is-held-down-through-play) — fixed; the user found it no longer happens on 2026-10-08.
+- [The game crashes during the end-of-game recaps](#the-game-crashes-during-the-end-of-game-recaps) — fixed 2026-10-08; several full games with recaps since, no crash.
+- [The match crashes after a couple of minutes](#the-match-crashes-after-a-couple-of-minutes) — fixed 2026-10-08; the last open fault was the heap overrun (decomp-late/133).
+- [Crashes that look like heap damage](#crashes-that-look-like-heap-damage) — fixed and verified 2026-10-08 (sideline fragment overrun).
+- [The match clock goes negative at the end of a game](#the-match-clock-goes-negative-at-the-end-of-a-game) — fixed 2026-10-08 (decomp-late/135).
+- [Super goals do not display the x2 indicator](#super-goals-do-not-display-the-x2-indicator) — fixed 2026-10-08 (decomp-late/136).
+
+## Added
+
+- **1:00 match length** (decomp-late/137, 2026-10-08). Options → Gameplay →
+  Game Time, one press left of 2:00. The menu art has no 1:00 slide, so the
+  entry reuses the 2:00 slide and replaces its `GAMETIME` text; moving back to
+  2:00 restores it. Confirmed in the menu by the user. Handy for checking
+  anything that happens at the final whistle.
 
 ## Issue details
+
+### Crashes that look like heap damage
+
+- **Fixed and verified 2026-10-08.** On the validator build, seeds 401, 402 and
+  404 each ran 20 minutes (196,800 frames, 5 full-length matches, 61-68 goals)
+  with every allocation and free checked and no findings; before the fix 401
+  and 402 crashed the normal build and 401 tripped the validator by frame
+  ~40,000.
+- **Root cause.** Every sideline
+  explosion overran the heap. `SidelineExplodable` allocated each fragment's
+  physics object as `sizeof(PhysicsBox)` and constructed the derived
+  `SidelineExplosionPhysicsObject` in it: 0x2C for an 0x30 object on the
+  GameCube, which the heap's rounding absorbed, but 64 for 72 here, so the
+  trailing `mpExplosionFragment` pointer landed on the allocator's bookkeeping
+  past the block. `patches/decomp-late/133`.
+- **Why it looked like five different bugs.** The damage surfaced minutes later
+  wherever the free ring was next walked: the render list's texture AVL tree
+  (`0x94000000a0`), abseil's `flat_hash_set::clear` in aurora's texture cache,
+  and -- twice, identically, on full-length soak seeds 401 and 402 --
+  `MemoryAllocator::Free` on aurora's render worker following a null ring link
+  while releasing imgui draw data. Probably also the free-ring corruption at
+  frame 7620 noted under "The match crashes after a couple of minutes".
+- **How it was found.** A `-DOPENSTRIKERS_MEMALLOC_VALIDATE=ON` build under
+  `soak.ps1 -ExePath build-validate\openstrikers.exe` first reported "handed
+  out a block still on the free ring", one allocation after a free had put a
+  ~2 GB bogus block on the ring. The validator's extent check works in 32 bits
+  and the wrapped extent overlapped nothing, so `patches/decomp-late/134` checks
+  each free directly (live allocation? header describes an extent inside the
+  heap?) and prints the freeing caller. The next run named
+  `ExplosionFragment::Deactivate` freeing a 64-byte block whose trailing word
+  had been overwritten.
+- **Swept for the pattern** (allocate one class, construct another; hard-coded
+  GameCube sizes): no other instances.
 
 ### The match clock goes negative at the end of a game
 
@@ -22,8 +70,16 @@ issue is reproduced, narrowed down, or fixed.
 - **Actual:** The displayed clock continues below zero at the end of the game.
 - **Priority:** Medium. It is visible in a completed match but does not by
   itself cause the recap crash.
-- **Status:** Active. Reported during manual play on 2026-09-09. Investigate
-  the end-of-regulation clock update and HUD formatting as a standalone issue.
+- **Cause:** The game clock keeps running past the match length while a
+  last-second shot is in the air (the buzzer-beater window), so the HUD's
+  remaining time goes negative. `OverlayHandlerHUD.cpp` converts it with
+  `(unsigned long)fRemainingTime`. CodeWarrior clamps a negative float to 0
+  there, so retail shows `0.0`; GCC on x64 converts through a signed 64-bit
+  integer, so the first second past zero printed negative tenths (`0.-3`)
+  and anything longer a garbage minute count.
+- **Status:** Fixed 2026-10-08 (decomp-late/135): the remaining time is
+  clamped at 0 before conversion. Checked against a host test of the
+  conversion; still to be seen in a close game.
 
 ### Super goals do not display the x2 indicator
 
@@ -32,9 +88,13 @@ issue is reproduced, narrowed down, or fixed.
 - **Actual:** The super goal is awarded without displaying the x2 indicator.
 - **Priority:** Medium. The scoring presentation is incomplete, but this does
   not by itself cause the recap crash.
-- **Status:** Active. Reported during manual play on 2026-09-09. Investigate
-  the super-goal overlay state and asset/component selection as a standalone
-  issue.
+- **Cause:** `STSX2Overlay` (`x2_sts.fen`) shows itself on a goal event whose
+  goal type is 6 (captain super strike). It read the goal type by raw GC
+  offset, `*(u16*)(data + 6) >> 1`. On the host the 8-byte vtable pointer
+  covers offset 6, so it never matched and the overlay never showed.
+- **Status:** Fixed 2026-10-08 (decomp-late/136): it reads
+  `GoalScoredData::uGoalType` like `GoalOverlay` does, and logs
+  `openstrikers: x2 overlay shown` to stderr so soak runs can count it.
 
 ### The game crashes during the end-of-game recaps
 
@@ -44,7 +104,14 @@ issue is reproduced, narrowed down, or fixed.
   match.
 - **Priority:** High. It prevents a normally completed match from reaching the
   post-game flow.
-- **Status:** Active and separate from the negative clock and missing x2
+- **2026-10-08:** `abort()`, `std::terminate` and CRT fast-fail now report a
+  stack through the same `FATAL EXCEPTION` path (README, "Soak testing"), so
+  the next reproduction of this will say where it is.
+- **Status:** Fixed. After the 2026-10-08 heap and file-pool fixes
+  (decomp-late/129 and /133) the user played several complete games, recaps
+  included, with no crash. The heap overrun is the likely cause, but this was
+  never caught with a stack, so reopen it with the new crash report if it recurs.
+- **History:** Separate from the negative clock and missing x2
   indicator. The 2026-09-09 reproduction exited through the Windows runtime
   fast-fail/abort path (`0xC0000409` in `ucrtbase.dll`) near host frame 24001,
   without reaching the game's in-process fatal exception logger. A subsequent
@@ -171,14 +238,32 @@ issue is reproduced, narrowed down, or fixed.
   called `nlSeek` through the null handle. Patch 123 makes stream opening
   report failure, avoids queueing failed streams, and leaves random crowd
   streams eligible for a later retry.
+- **Root cause of the pool exhaustion, found 2026-10-08.** Patches 120-123 each
+  made one consumer survive a full `DolphinFile` pool; none said why it was
+  full. `patches/decomp-late/126` makes an exhausted pool print the path in
+  every slot, and the first soak run answered it: all 32 were audio streams,
+  with duplicates -- the stadium intro music open three times, the generic goal
+  announcer four. `StreamTrack::StopQStream` read the queued stream's
+  `TrackOwnsStream` bit from raw GameCube offset `0xB`, which on the host is
+  inside the 8-byte `pStream` pointer, so ownership was an arbitrary address
+  bit, mostly 0, and a stopped stream was never put on the delete list. Every
+  stopped stream kept its file. `patches/decomp-late/129` uses the named
+  bitfield. Before it, every seed of a 60-second Legend soak reported
+  exhaustion (one 1293 times) and died within its first match; after it, seed
+  100 played three matches back to back (0-7, 0-3, 0-2) with no exhaustion at
+  all. The guards from 120-123 stay: a full pool is still possible, just no
+  longer inevitable.
 - **Verification:** The deterministic goal-replay hook now prints both
   `AUTO_REPLAY_TEST begin=...` and `completed time=...`, returns to gameplay,
   and passes the 45-second survival window. A five-minute patch-123 smoke run
   crossed the previous frame-15900 failure point without a fatal marker. A
-  later manual run found a separate free-ring corruption at frame 7620, so the
-  general normal-play report remains active. Keep it separate from both the
-  end-of-game recap abort and the `OPENSTRIKERS_AUTO_A` stress crash unless a
-  future capture produces the same stack.
+  later manual run found a separate free-ring corruption at frame 7620.
+- **Status:** Fixed 2026-10-08. The frame-7620 free-ring corruption was the
+  heap overrun described under
+  [Crashes that look like heap damage](#crashes-that-look-like-heap-damage)
+  (decomp-late/133). Validator soaks of 20 minutes per seed (five full matches
+  each) found nothing after it, and the user has played full games since
+  without a crash.
 
 ### The match crashes when A is held down through play
 
@@ -192,10 +277,11 @@ issue is reproduced, narrowed down, or fixed.
 - **Symptom shape:** The process dies with no `FATAL EXCEPTION` line, so the
   unhandled-exception filter never ran -- consistent with a stack overflow
   (`0xC00000FD`), which SEH cannot report without a reserved guard page.
-- **Priority:** Medium. It does not block play, but it makes every unattended
-  capture that uses auto-A unreliable, and it is probably a real bug in whatever
-  repeated A triggers.
-- **Status:** Reproducible but intermittent. Reproduce with
+- **Priority:** Low. It does not block play.
+- **Status:** Fixed, confirmed by the user in play 2026-10-08. Both of the 2026-10-08 root causes
+  (the sideline-fragment heap overrun and the leaking stream files that filled
+  the `DolphinFile` pool) fit a crash a minute in, and stack overflow is now
+  reported by name if that was it instead. If it does recur, reproduce with
   `OPENSTRIKERS_SKIP_FE=1 OPENSTRIKERS_AUTO_A=1` and no input script, and get a
   stack under gdb rather than from the crash handler.
 
@@ -218,14 +304,16 @@ issue is reproduced, narrowed down, or fixed.
   pre-match intro screens.
 - **Priority:** Medium. Gameplay remains functional, but the defect is highly
   visible during presentation cameras.
-- **Status:** Active. The 2026-09-08 fix corrected the consistently wrong base
-  shading by feeding `GX_TG_COLOR0/1` texgens from the completed lighting
-  channel. A separate temporal/state problem remains and must be captured at a
-  tighter frame cadence before narrowing it.
+- **Status:** Fixed. On 2026-10-08 the user judged the lighting "pretty spot
+  on" in play. The 2026-09-08 fix corrected the consistently wrong base shading
+  by feeding `GX_TG_COLOR0/1` texgens from the completed lighting channel; the
+  frame-to-frame glitches reported afterwards are no longer seen. The history
+  below is kept for reference: if a glitch comes back, capture it at a tight
+  frame cadence before narrowing it.
 
 The intro investigation fixed the texture-animation and base light-ramp bugs.
 The duplicated replay/intro background is now also fixed; intermittent lighting
-glitches remain a separate active report.
+glitches were the last open report, closed 2026-10-08.
 
 ### What the captures say so far
 
@@ -325,6 +413,52 @@ The screenshots are in `dolphinscreenshots/` (not committed -- they are retail
 game frames).
 
 ## Recently fixed
+
+### Unattended soak runs found and fixed four crashes (2026-10-08)
+
+`soak.ps1` plays seeded autoplay matches against a Legend AI and groups
+failures by stack (README, "Soak testing"). Its first runs found:
+
+- **A cinematic cleared flags across gigabytes.** `PlayRandomCharDialogue`'s
+  clearing loops end at `charDialogueSFX[baseIndex + numRandom]`; for the last
+  dialogue group that is one past the 29-entry table. Retail read
+  `charDialogueSFXInfo[0]` there (0, so the loop ran no times); GCC's layout puts
+  string data there instead (`"CHAR"`, ~1.4 billion), and the loop wrote until it
+  faulted. Reached through `Nis::Trigger::Fire`, so any celebration cinematic
+  that played that group. `patches/decomp-late/127`.
+- **Chain Chomp wrote to `0x7f`.** A failed `Play()` returns
+  `GetSndIDError()` (-1) even when the caller asked for an emitter; Chain Chomp
+  and the character movement loop cast that to `SFXEmitter*`, it passed every
+  `!= NULL` check, and the position write landed at `-1 + 0x80`.
+  `patches/decomp-late/128`.
+- **The FE package crash after the final whistle** (`FEScene::LoadPackage` ->
+  `nlRead(NULL)` on pushing `summary.fen`) and the **pool-exhaustion family**
+  behind patches 120-123: the stream ownership bug, see "The match crashes after
+  a couple of minutes". `patches/decomp-late/129`.
+- **The post-match summary soft-locked, and corrupted a pointer doing it.**
+  Seed 100 finished three matches, then sat on the summary screen for 20,000+
+  frames with A being pressed throughout. Backing out of the post-game menu
+  (B) re-pushes the summary and sets its button state through raw GameCube
+  offset `0xC3C`; on the host `mButtonState` is at `0xC54` and `0xC3C` is the
+  upper half of `mSlideMenu`. So the summary was left with no A button -- the
+  only way on from it -- and with a wild slide-menu pointer.
+- **A sweep for the same raw-offset pattern** found two more. Starting a cup
+  wrote `CupHubScene::mDoAutoSave` through offset `0x226`, which on the host is
+  inside the standings table (a stray 1 in the standings, and no autosave).
+  `PhysicsBanana::SetContactInfo` read `PhysicsNPC::mpAINPC` through `0x30`
+  (it is at `0x48`) and made a virtual call through whatever was there; retail's
+  call is slot `0x0C` of the NPC's vtable, `GetSkinAnimatedNPC_Type`, i.e.
+  "a banana with no thrower does not hit Bowser". The other hits of that sweep
+  are fine: the `0x4A` packet strides match the host's `sizeof(glModelPacket)`,
+  `ShotMeter` has no pointers, and the save-icon offsets are file format.
+  `patches/decomp-late/130`.
+- **Strikers 101 crashed on entry.** A soak run that had played five matches
+  quit to the main menu and wandered into the tutorial, which faulted reading
+  through `-1` in `NSNMessengerScene::EnableScrolling`. `FrontEnd::Update` and
+  the lesson-select scene converted the ticker overlay to `NSNMessengerScene` by
+  subtracting 4 bytes by hand -- the `BaseOverlayHandler` base follows
+  `FEIMessenger`, one vtable pointer, which is 8 bytes here. `static_cast`
+  instead. `patches/decomp-late/131`.
 
 ### Players sometimes floated above the pitch
 

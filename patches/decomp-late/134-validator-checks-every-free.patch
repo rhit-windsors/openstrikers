@@ -1,0 +1,92 @@
+# Validator builds only. nlRingCheckExtent works in 32 bits, so a free whose
+# overwritten header decoded to a ~2 GB block wrapped its upper bound below its
+# lower one, overlapped nothing, and went onto the ring; the next allocation
+# failed long after the culprit returned. Check the free itself: the pointer
+# must be a live allocation (patch 124's map) and its header must describe an
+# extent inside the heap. On failure print the header, the bytes around the
+# pointer, the freeing caller's backtrace and the neighbouring live
+# allocations. This is what named the fragment overrun fixed in 133.
+--- a/src/NL/MemAlloc.cpp
++++ b/src/NL/MemAlloc.cpp
+@@ -400,6 +400,57 @@
+     }
+ }
+ 
++// A free whose header is garbage. The extent check above works in 32 bits, so
++// a header that decodes to a ~2 GB block wraps its upper bound below its lower
++// one and overlaps nothing; the bogus block went onto the ring and the *next*
++// allocation was the one that failed, long after the culprit had returned.
++// Check the free itself: the pointer must be a live allocation, and its header
++// must describe it. On failure the backtrace names whoever is freeing, and the
++// bytes around the pointer show what was written over the header.
++bool nlActiveContains(void* userPtr)
++{
++    const u32 user = (u32)(uintptr_t)userPtr;
++    unsigned slot = nlActiveHash(user);
++    for (unsigned probes = 0; probes < NL_ACTIVE_ALLOC_COUNT; probes++)
++    {
++        const nlActiveAllocation& entry = s_nlActiveAllocations[slot];
++        if (entry.user == user)
++            return true;
++        if (entry.user == 0)
++            return false;
++        slot = (slot + 1) & (NL_ACTIVE_ALLOC_COUNT - 1);
++    }
++    return false;
++}
++
++void nlFreeCheck(MemoryAllocator* self, void* p, u32 header, FreeBlockList* block, s32 size)
++{
++    const u32 lo = (u32)(uintptr_t)block;
++    const u32 hi = lo + (u32)size;
++    u32 heapLo = 0;
++    u32 heapHi = 0;
++    const bool haveRange = nlLookupHeapRange(self, &heapLo, &heapHi);
++    const char* why = NULL;
++    if (!nlActiveContains(p))
++        why = "pointer is not a live allocation (double free, or never from this heap)";
++    else if (size <= 0 || hi <= lo || (haveRange && (lo < heapLo || hi > heapHi)))
++        why = "block header decodes to an impossible extent (header overwritten)";
++    if (why == NULL)
++        return;
++    fprintf(stderr, "\n*** bad free: %s\n  user=%08x header=%08x block=%08x size=%d\n", why,
++            (u32)(uintptr_t)p, header, lo, (int)size);
++    fprintf(stderr, "  bytes from user-32:");
++    const unsigned char* bytes = (const unsigned char*)p - 32;
++    for (int i = 0; i < 64; i++)
++        fprintf(stderr, "%s%02x", (i % 16) == 0 ? "\n    " : " ", bytes[i]);
++    fprintf(stderr, "\n");
++    osDumpBacktrace("bad free: freeing caller", 1);
++    nlActiveDumpAround((u32)(uintptr_t)p);
++    nlOpLogDump((u32)(uintptr_t)p);
++    fflush(stderr);
++    abort();
++}
++
+ void nlRingCheck(MemoryAllocator* self, const char* where)
+ {
+     FreeBlockList* head = self->m_free_block_list;
+@@ -465,6 +516,7 @@
+ #define NL_OP_LOG(op, lo, size, detail) nlOpLog(op, (u32)(uintptr_t)(lo), (u32)(size), (u32)(uintptr_t)(detail))
+ #define NL_ACTIVE_ADD(user, userSize, lo, hi) nlActiveAdd(user, userSize, lo, hi)
+ #define NL_ACTIVE_REMOVE(user) nlActiveRemove(user)
++#define NL_FREE_CHECK(p, header, block, size) nlFreeCheck(this, p, header, block, size)
+ #define NL_TRACE_ALLOC(p, size)                                                                        do                                                                                                 {                                                                                                      const u32 want_ = nlTraceAllocSize();                                                              if (want_ != 0 && (u32)(size) == want_)                                                            {                                                                                                      fprintf(stderr, "\n*** alloc %u bytes at %08x\n", (unsigned)(size),                                        (u32)(uintptr_t)(p));                                                                      osDumpBacktrace("caller", 1);                                                                  }                                                                                              } while (0)
+ #define NL_RING_EXTENT(where, why, lo, hi, ignore) \
+     nlRingCheckExtent(this, where, why, (u32)(uintptr_t)(lo), (u32)(uintptr_t)(hi), ignore)
+@@ -472,6 +524,7 @@
+ #define NL_RING_SCOPE(name) ((void)0)
+ #define NL_RING_RECORD(mem, size) ((void)0)
+ #define NL_RING_EXTENT(where, why, lo, hi, ignore) ((void)0)
++#define NL_FREE_CHECK(p, header, block, size) ((void)0)
+ #define NL_OP_LOG(op, lo, size, detail) ((void)0)
+ #define NL_ACTIVE_ADD(user, userSize, lo, hi) ((void)0)
+ #define NL_ACTIVE_REMOVE(user) ((void)0)
+@@ -524,6 +577,7 @@
+         size += offset;
+     }
+ 
++    NL_FREE_CHECK(p, (u32)header, block, size);
+     block->m_size = size;
+     NL_RING_EXTENT("Free", "double free or bogus header", block, (char*)block + size, NULL);
+     NL_ACTIVE_REMOVE(p);

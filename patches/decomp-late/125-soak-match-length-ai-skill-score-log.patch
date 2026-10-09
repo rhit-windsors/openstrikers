@@ -1,0 +1,98 @@
+# Switches for unattended soak runs (soak.ps1), all inert unless set.
+# OPENSTRIKERS_MATCH_SECONDS overrides the game duration so a run reaches the
+# final whistle and recaps quickly. OPENSTRIKERS_AI_SKILL (0 Training .. 4
+# Legend) is the host's soak_diff, so the AI scores often and drives the goal,
+# replay and celebration paths. The HUD logs one 'openstrikers: score L-R' line
+# per scoreline change so a run's log says how many goals it went through.
+--- a/src/Game/GameTweaks.cpp
++++ b/src/Game/GameTweaks.cpp
+@@ -8,6 +8,9 @@
+ 
+ #include "Game/GameInfo.h"
+ 
++#include <cstdio>
++#include <cstdlib>
++
+ SkillTweaks g_sSkillTweaks[2];
+ const char* g_sDifficultyFileNames[7] = {
+     "DifficultyBraindead.ini",
+@@ -49,6 +52,19 @@
+         fGameDuration = gameSettings.GameTime;
+     }
+ 
++    // OPENSTRIKERS_MATCH_SECONDS=<n> shortens (or lengthens) every match, so an
++    // unattended run reaches the final whistle and the end-of-game recaps in
++    // minutes instead of a full 300-second game. Inert unless set.
++    if (const char* v = getenv("OPENSTRIKERS_MATCH_SECONDS"))
++    {
++        const float seconds = (float)atof(v);
++        if (seconds > 0.0f)
++        {
++            fGameDuration = seconds;
++            fprintf(stderr, "openstrikers: OPENSTRIKERS_MATCH_SECONDS: game duration %.0f\n", seconds);
++        }
++    }
++
+     fBlockPassLightAttackSpeed = cfg.Get<float>("Block Ball with LAttack under this Speed", 5.0f);
+     fFielderAttributeWeight = cfg.Get<float>("Fielder Attributes Weight", 0.2f);
+     vGetInPositionKeyFielderDist.x = cfg.Get<float>("GetInPosition KeyFielder Min Distance", 2.0f);
+--- a/src/Game/GameInfo.cpp
++++ b/src/Game/GameInfo.cpp
+@@ -10,6 +10,9 @@
+ #include "Game/World/WorldLoader.h"
+ #include "Game/main.h"
+ 
++#include <cstdio>
++#include <cstdlib>
++
+ static bool isKongaUnlocked = false;
+ static bool isYoshiUnlocked = false;
+ static bool isForbiddenUnlocked = false;
+@@ -2240,6 +2243,20 @@
+         mCurGameGameplayOptions.SkillLevel = (GameplaySettings::eSkillLevel)GetConfigInt(Config::Global(), "soak_diff", 2);
+     }
+ 
++    // OPENSTRIKERS_AI_SKILL=<0-4> is the host's soak_diff: 0 Training through
++    // 4 Legend. Unattended runs set it to 4 so the AI scores often, which
++    // drives the goal, replay and celebration paths far harder per minute
++    // than a Rookie match does. Inert unless set.
++    if (const char* skill = getenv("OPENSTRIKERS_AI_SKILL"))
++    {
++        const int level = atoi(skill);
++        if (level >= GameplaySettings::TRAINING && level <= GameplaySettings::LEGEND)
++        {
++            mCurGameGameplayOptions.SkillLevel = (GameplaySettings::eSkillLevel)level;
++            fprintf(stderr, "openstrikers: OPENSTRIKERS_AI_SKILL: skill level %d\n", level);
++        }
++    }
++
+     if (Config::Global().Exists("sidekick1"))
+     {
+         BasicString<char, Detail::TempStringAllocator> sidekickString
+--- a/src/Game/FE/Overlay/OverlayHandlerHUD.cpp
++++ b/src/Game/FE/Overlay/OverlayHandlerHUD.cpp
+@@ -14,6 +14,7 @@
+ #include "NL/nlAlgorithm.h"
+ #include "NL/nlLocalization.h"
+ #include "NL/nlPrint.h"
++#include <cstdio>
+ 
+ static inline const unsigned short* LookupLocHash(unsigned long key)
+ {
+@@ -767,6 +768,16 @@
+ {
+     mNewScore[0] = g_pTeams[0]->m_nScore;
+     mNewScore[1] = g_pTeams[1]->m_nScore;
++
++    // One line per scoreline change, so an unattended run's log says how many
++    // goals -- and so replays and celebrations -- it actually went through.
++    static int sLogged[2] = { 0, 0 };
++    if (mNewScore[0] != sLogged[0] || mNewScore[1] != sLogged[1])
++    {
++        sLogged[0] = mNewScore[0];
++        sLogged[1] = mNewScore[1];
++        fprintf(stderr, "openstrikers: score %d-%d\n", (int)mNewScore[0], (int)mNewScore[1]);
++    }
+ }
+ 
+ /**

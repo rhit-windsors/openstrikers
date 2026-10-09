@@ -1,0 +1,176 @@
+# The allocator validator's op log is a short ring, but the block that damages
+# a free-ring node was usually allocated minutes earlier. Keep a separate map
+# of every live allocation's extents and dump the allocations either side of a
+# damaged node. Validator builds only (OPENSTRIKERS_MEMALLOC_VALIDATE). Written
+# during the 2026-09-09 free-ring investigation and recovered unsaved from the
+# working tree on 2026-10-08.
+--- a/src/NL/MemAlloc.cpp
++++ b/src/NL/MemAlloc.cpp
+@@ -113,6 +113,102 @@
+ nlOpLogEntry s_nlOpLog[8192];
+ unsigned s_nlOpLogNext = 0;
+ 
++// Keep the current allocation extents separately from the short circular
++// operation history. A free-ring node is usually damaged by the live block
++// immediately before it, which may have been allocated minutes earlier.
++struct nlActiveAllocation
++{
++    u32 user;
++    u32 userSize;
++    u32 blockLo;
++    u32 blockHi;
++};
++static const unsigned NL_ACTIVE_ALLOC_COUNT = 1 << 18;
++nlActiveAllocation s_nlActiveAllocations[NL_ACTIVE_ALLOC_COUNT];
++
++unsigned nlActiveHash(u32 user)
++{
++    return ((user >> 4) * 2654435761U) & (NL_ACTIVE_ALLOC_COUNT - 1);
++}
++
++void nlActiveAdd(void* userPtr, u32 userSize, void* blockLo, void* blockHi)
++{
++    const u32 user = (u32)(uintptr_t)userPtr;
++    unsigned firstTombstone = NL_ACTIVE_ALLOC_COUNT;
++    unsigned slot = nlActiveHash(user);
++    for (unsigned probes = 0; probes < NL_ACTIVE_ALLOC_COUNT; probes++)
++    {
++        nlActiveAllocation& entry = s_nlActiveAllocations[slot];
++        if (entry.user == user)
++        {
++            entry.userSize = userSize;
++            entry.blockLo = (u32)(uintptr_t)blockLo;
++            entry.blockHi = (u32)(uintptr_t)blockHi;
++            return;
++        }
++        if (entry.user == 1 && firstTombstone == NL_ACTIVE_ALLOC_COUNT)
++            firstTombstone = slot;
++        if (entry.user == 0)
++        {
++            if (firstTombstone != NL_ACTIVE_ALLOC_COUNT)
++                slot = firstTombstone;
++            s_nlActiveAllocations[slot].user = user;
++            s_nlActiveAllocations[slot].userSize = userSize;
++            s_nlActiveAllocations[slot].blockLo = (u32)(uintptr_t)blockLo;
++            s_nlActiveAllocations[slot].blockHi = (u32)(uintptr_t)blockHi;
++            return;
++        }
++        slot = (slot + 1) & (NL_ACTIVE_ALLOC_COUNT - 1);
++    }
++}
++
++void nlActiveRemove(void* userPtr)
++{
++    const u32 user = (u32)(uintptr_t)userPtr;
++    unsigned slot = nlActiveHash(user);
++    for (unsigned probes = 0; probes < NL_ACTIVE_ALLOC_COUNT; probes++)
++    {
++        nlActiveAllocation& entry = s_nlActiveAllocations[slot];
++        if (entry.user == user)
++        {
++            entry.user = 1;
++            return;
++        }
++        if (entry.user == 0)
++            return;
++        slot = (slot + 1) & (NL_ACTIVE_ALLOC_COUNT - 1);
++    }
++}
++
++void nlActiveDumpAround(u32 address)
++{
++    const nlActiveAllocation* before = NULL;
++    const nlActiveAllocation* after = NULL;
++    const nlActiveAllocation* containing = NULL;
++    for (unsigned i = 0; i < NL_ACTIVE_ALLOC_COUNT; i++)
++    {
++        const nlActiveAllocation& entry = s_nlActiveAllocations[i];
++        if (entry.user <= 1)
++            continue;
++        if (entry.blockLo <= address && address < entry.blockHi)
++            containing = &entry;
++        if (entry.blockHi <= address && (before == NULL || entry.blockHi > before->blockHi))
++            before = &entry;
++        if (entry.blockLo >= address && (after == NULL || entry.blockLo < after->blockLo))
++            after = &entry;
++    }
++    fprintf(stderr, "  active allocations around %08x:\n", address);
++    if (containing != NULL)
++        fprintf(stderr, "    CONTAINS block=%08x-%08x user=%08x size=%u\n", containing->blockLo,
++                containing->blockHi, containing->user, containing->userSize);
++    if (before != NULL)
++        fprintf(stderr, "    before   block=%08x-%08x user=%08x size=%u gap=%u\n", before->blockLo,
++                before->blockHi, before->user, before->userSize, address - before->blockHi);
++    if (after != NULL)
++        fprintf(stderr, "    after    block=%08x-%08x user=%08x size=%u gap=%u\n", after->blockLo,
++                after->blockHi, after->user, after->userSize, after->blockLo - address);
++}
++
+ // Set NL_TRACE_ALLOC_SIZE (decimal or 0x-prefixed) to have every allocation of
+ // exactly that user size print a backtrace. The op log says *where* a block is
+ // and what happened to it; this says *who asked for it*, which is what you need
+@@ -224,11 +320,18 @@
+     // loop that was running when it happened, which is usually enough to name
+     // the code at fault.
+     osDumpBacktrace("ring corrupt: current caller", 1);
++    u32 lo = 0;
++    u32 hi = 0;
++    const bool haveRange = nlLookupHeapRange(self, &lo, &hi);
++    const u32 naddr = (u32)(uintptr_t)node;
++    if (!haveRange || (naddr >= lo && naddr + 12 <= hi))
++    {
++        fprintf(stderr, "  rejected node %08x: size=%u next=%08x prev=%08x\n", naddr,
++                node->m_size, node->m_next.m_addr, node->m_prev.m_addr);
++        nlActiveDumpAround(naddr);
++    }
+     if (prev != NULL)
+     {
+-        u32 lo = 0;
+-        u32 hi = 0;
+-        const bool haveRange = nlLookupHeapRange(self, &lo, &hi);
+         const u32 paddr = (u32)(uintptr_t)prev;
+         if (!haveRange || (paddr >= lo && paddr + 12 <= hi))
+         {
+@@ -360,6 +463,8 @@
+ #define NL_RING_SCOPE(name) nlRingScope nlRingScope_(this, name " entry", name " exit")
+ #define NL_RING_RECORD(mem, size) nlRecordHeapRange(this, mem, size)
+ #define NL_OP_LOG(op, lo, size, detail) nlOpLog(op, (u32)(uintptr_t)(lo), (u32)(size), (u32)(uintptr_t)(detail))
++#define NL_ACTIVE_ADD(user, userSize, lo, hi) nlActiveAdd(user, userSize, lo, hi)
++#define NL_ACTIVE_REMOVE(user) nlActiveRemove(user)
+ #define NL_TRACE_ALLOC(p, size)                                                                        do                                                                                                 {                                                                                                      const u32 want_ = nlTraceAllocSize();                                                              if (want_ != 0 && (u32)(size) == want_)                                                            {                                                                                                      fprintf(stderr, "\n*** alloc %u bytes at %08x\n", (unsigned)(size),                                        (u32)(uintptr_t)(p));                                                                      osDumpBacktrace("caller", 1);                                                                  }                                                                                              } while (0)
+ #define NL_RING_EXTENT(where, why, lo, hi, ignore) \
+     nlRingCheckExtent(this, where, why, (u32)(uintptr_t)(lo), (u32)(uintptr_t)(hi), ignore)
+@@ -368,6 +473,8 @@
+ #define NL_RING_RECORD(mem, size) ((void)0)
+ #define NL_RING_EXTENT(where, why, lo, hi, ignore) ((void)0)
+ #define NL_OP_LOG(op, lo, size, detail) ((void)0)
++#define NL_ACTIVE_ADD(user, userSize, lo, hi) ((void)0)
++#define NL_ACTIVE_REMOVE(user) ((void)0)
+ #define NL_TRACE_ALLOC(p, size) ((void)0)
+ #endif
+ 
+@@ -419,6 +526,7 @@
+ 
+     block->m_size = size;
+     NL_RING_EXTENT("Free", "double free or bogus header", block, (char*)block + size, NULL);
++    NL_ACTIVE_REMOVE(p);
+     NL_OP_LOG("free", block, size, p);
+     start = nlDLRingGetStart<FreeBlockList>(self->m_free_block_list);
+     if ((start > block) || (start == NULL))
+@@ -550,6 +658,8 @@
+             NL_OP_LOG("alloc block (end)", (char*)allocPtr - alignment, requestSize + alignment - 4,
+                       allocPtr);
+             NL_OP_LOG("alloc user (end)", allocPtr, savedSize, (size << 8) | alignment);
++            NL_ACTIVE_ADD(allocPtr, savedSize, (char*)allocPtr - alignment,
++                          (char*)allocPtr - alignment + requestSize + alignment - 4);
+             result = allocPtr;
+         }
+     }
+@@ -630,6 +740,7 @@
+                            (char*)cur + currentBlockSize, NULL);
+             NL_OP_LOG("alloc block", cur, currentBlockSize, allocPtr);
+             NL_OP_LOG("alloc user", allocPtr, savedSize, (size << 8) | alignment);
++            NL_ACTIVE_ADD(allocPtr, savedSize, cur, (char*)cur + currentBlockSize);
+             NL_TRACE_ALLOC(allocPtr, savedSize);
+             result = allocPtr;
+         }

@@ -10,13 +10,19 @@
 #else
 #include <sys/mman.h>
 #endif
+#include <cmath>
+#include <csignal>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <string>
 #include <vector>
+#if defined(_WIN32)
+#include <process.h>
+#endif
 
 #include <aurora/event.h>
 #include <dolphin/pad.h>
@@ -37,6 +43,11 @@ extern AuroraConfig g_config;
 // The ELF runtime runs prioritized constructors before all default-priority
 // ones, so priority 101 restores the hardware's ordering. OSInit() is
 // idempotent, so aurora_initialize()'s later setup is unaffected.
+// Host frames since process start, advanced in osHostFrameBegin. Every crash
+// report quotes it, so an unattended run says how far it got without the log
+// having to be read for context.
+static volatile unsigned long sHostFrame = 0;
+
 #if defined(_WIN32)
 // The interesting crashes here only happen when no debugger is attached: a
 // pointer that has lost its top 32 bits lands on whatever the loader mapped at
@@ -77,6 +88,8 @@ static LONG WINAPI osCrashHandler(EXCEPTION_POINTERS* info) {
     const EXCEPTION_RECORD* rec = info->ExceptionRecord;
     std::fprintf(stderr, "%s", "openstrikers: FATAL EXCEPTION" "\n");
     std::fprintf(stderr, "  code    0x%08lx" "\n", (unsigned long)rec->ExceptionCode);
+    std::fprintf(stderr, "  frame   %lu  thread %lu" "\n", sHostFrame,
+                 (unsigned long)GetCurrentThreadId());
     std::fprintf(stderr, "  at      %p" "\n", rec->ExceptionAddress);
     if (rec->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && rec->NumberParameters >= 2) {
         std::fprintf(stderr, "  %s address 0x%llx" "\n",
@@ -135,11 +148,62 @@ extern "C" void osDumpBacktrace(const char* tag, unsigned skip) {
 #endif
 }
 
+#if defined(_WIN32)
+// The exception filter above only sees a fault that unwinds out as an SEH
+// exception. Three other ways out took the process down with no report at all:
+//
+// * abort() -- from std::terminate, a failed libstdc++ assertion, or
+//   anything else that gives up. The UCRT's default abort behaviour is
+//   __fastfail, which exits 0xC0000409 straight past every handler; that is
+//   exactly the shape of the end-of-game recap crash. A SIGABRT handler runs
+//   before that, and clearing _CALL_REPORTFAULT stops the fast-fail.
+// * CRT invalid-parameter and pure-call failures, which also fast-fail.
+// * Stack overflow. The filter is called, but on a stack with no room left to
+//   run it. SetThreadStackGuarantee reserves enough for it on the main thread.
+//
+// All of them print the same "FATAL EXCEPTION" header and link-time stack the
+// filter does, so the harness scripts symbolize them the same way.
+[[noreturn]] static void osReportFatal(const char* kind) {
+    std::fprintf(stderr, "%s", "openstrikers: FATAL EXCEPTION" "\n");
+    std::fprintf(stderr, "  kind    %s" "\n", kind);
+    std::fprintf(stderr, "  frame   %lu  thread %lu" "\n", sHostFrame,
+                 (unsigned long)GetCurrentThreadId());
+    osDumpBacktrace("stack", 1);
+    std::fflush(stderr);
+    std::fflush(stdout);
+    _exit(3);
+}
+
+static void osAbortSignal(int) {
+    osReportFatal("abort (SIGABRT)");
+}
+
+static void osTerminate() {
+    osReportFatal("std::terminate");
+}
+
+static void osInvalidParameter(const wchar_t*, const wchar_t*, const wchar_t*, unsigned int,
+                               uintptr_t) {
+    osReportFatal("CRT invalid parameter");
+}
+
+static void osPureCall() {
+    osReportFatal("pure virtual call");
+}
+#endif
+
 __attribute__((constructor(101))) static void openstrikers_early_os_init() {
     aurora::g_config.mem1Size = OPENSTRIKERS_MEM1_SIZE;
     aurora::g_config.mem2Size = OPENSTRIKERS_MEM2_SIZE;
 #if defined(_WIN32)
     SetUnhandledExceptionFilter(osCrashHandler);
+    ULONG stackGuarantee = 64 * 1024;
+    SetThreadStackGuarantee(&stackGuarantee);
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+    std::signal(SIGABRT, osAbortSignal);
+    std::set_terminate(osTerminate);
+    _set_invalid_parameter_handler(osInvalidParameter);
+    _set_purecall_handler(osPureCall);
 #endif
     OSInit();
 }
@@ -787,6 +851,121 @@ u32 scriptedInputControls(u32 frame) {
     }
     return controls;
 }
+
+// --- autoplay -----------------------------------------------------------------
+
+} // namespace
+
+// Defined in Game.cpp: nonzero while the ball is in live play.
+extern "C" int osHostLiveGameplay();
+
+namespace {
+
+// The crashes still open need minutes of real play to reach -- a whole match,
+// goals and replays, the final whistle and the recaps -- and a fixed
+// OPENSTRIKERS_INPUT script cannot play a match. OPENSTRIKERS_AUTOPLAY=<seed>
+// plays port 0 itself: it runs the stick in random directions and passes,
+// shoots, charges shots, lobs, uses items and turbos at random while the ball
+// is live, which is enough to keep the controlled player in the thick of it.
+// Outside live play it only taps A (see osHostFrameBegin). The seed fixes the sequence, and with
+// OPENSTRIKERS_FIXED_STEP fixing the game's delta a seed that crashed is worth
+// re-running to reproduce. A heartbeat line every 600 frames dates any failure.
+//
+// Scripted presses still apply on top, and it replaces auto-A outright.
+// 20 seconds of game time: long enough for a goal replay and celebration to play
+// out by themselves before autoplay starts tapping A at whatever is on screen.
+constexpr u32 kAutoplayMenuWaitFrames = 20 * 60;
+
+struct AutoplayControls {
+    u32 controls; // pad buttons in the low 16 bits, as scriptedInputControls
+    s8 stickX;
+    s8 stickY;
+};
+
+u64 autoplaySeed() {
+    static const u64 sSeed = [] {
+        const char* v = std::getenv("OPENSTRIKERS_AUTOPLAY");
+        if (v == nullptr || *v == '\0' || (v[0] == '0' && v[1] == '\0')) {
+            return (u64)0;
+        }
+        const u64 seed = std::strtoull(v, nullptr, 0);
+        const u64 effective = seed != 0 ? seed : 1;
+        std::fprintf(stderr, "openstrikers: autoplay seed %llu\n", (unsigned long long)effective);
+        return effective;
+    }();
+    return sSeed;
+}
+
+// splitmix64: tiny, well mixed, and needs no state beyond one word.
+u32 autoplayRandom(u64& state, u32 range) {
+    state += 0x9E3779B97F4A7C15ull;
+    u64 z = state;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    z ^= z >> 31;
+    return range == 0 ? 0 : (u32)(z % range);
+}
+
+AutoplayControls autoplayControls(u32 frame) {
+    static u64 sRng = autoplaySeed();
+    static u32 sStickUntil = 0;
+    static s8 sStickX = 0;
+    static s8 sStickY = 0;
+    static u32 sButtonsUntil = 0;
+    static u32 sButtons = 0;
+    static u32 sNextAction = 0;
+
+    if (frame >= sStickUntil) {
+        // Mostly running somewhere, sometimes standing still.
+        if (autoplayRandom(sRng, 100) < 15) {
+            sStickX = 0;
+            sStickY = 0;
+        } else {
+            const float angle = (float)autoplayRandom(sRng, 3600) * (6.2831853f / 3600.0f);
+            sStickX = (s8)std::lround(std::cos(angle) * kScriptStickFull);
+            sStickY = (s8)std::lround(std::sin(angle) * kScriptStickFull);
+        }
+        sStickUntil = frame + 10 + autoplayRandom(sRng, 80);
+    }
+
+    if (frame >= sButtonsUntil) {
+        sButtons = 0;
+    }
+    if (frame >= sNextAction) {
+        const u32 roll = autoplayRandom(sRng, 100);
+        u32 hold = 6;
+        if (roll < 35) {
+            sButtons = PAD_BUTTON_A; // pass, and every "press A" prompt
+        } else if (roll < 55) {
+            sButtons = PAD_BUTTON_B; // shoot
+        } else if (roll < 65) {
+            sButtons = PAD_BUTTON_B; // charged shot / super strike
+            hold = 30 + autoplayRandom(sRng, 60);
+        } else if (roll < 72) {
+            sButtons = PAD_BUTTON_X;
+        } else if (roll < 80) {
+            sButtons = PAD_BUTTON_Y; // item
+        } else if (roll < 92) {
+            sButtons = PAD_TRIGGER_R; // turbo, which wants the stick off centre
+            hold = 30 + autoplayRandom(sRng, 90);
+            if (sStickX == 0 && sStickY == 0) {
+                sStickY = kScriptStickFull;
+            }
+        } else if (roll < 96) {
+            sButtons = PAD_TRIGGER_L;
+        } else {
+            sButtons = PAD_TRIGGER_Z;
+        }
+        sButtonsUntil = frame + hold;
+        sNextAction = sButtonsUntil + 10 + autoplayRandom(sRng, 50);
+    }
+
+    AutoplayControls out{};
+    out.controls = frame < sButtonsUntil ? sButtons : 0;
+    out.stickX = sStickX;
+    out.stickY = sStickY;
+    return out;
+}
 } // namespace
 
 bool osHostFrameBegin() {
@@ -821,19 +1000,55 @@ bool osHostFrameBegin() {
             const char* v = std::getenv("OPENSTRIKERS_AUTO_A");
             return v != nullptr && *v != '0';
         }();
-        static u32 sFrame = 0;
-        const u32 frame = sFrame++;
+        const u32 frame = (u32)sHostFrame++;
+        const bool autoplay = autoplaySeed() != 0;
+        if (autoplay && frame % 600 == 0) {
+            std::fprintf(stderr, "openstrikers: heartbeat frame %u\n", frame);
+        }
 
         const u32 scripted = scriptedInputControls(frame);
         const u32 scriptStart = scriptedInputFirstFrame();
         // Auto-A stands down once the script is due, so it cannot mash A
-        // through the menus the script exists to navigate.
-        const bool autoAActive = sAutoA && (scriptStart == 0 || frame < scriptStart);
+        // through the menus the script exists to navigate. Autoplay presses A
+        // on its own, so it replaces auto-A entirely.
+        const bool autoAActive =
+            sAutoA && !autoplay && (scriptStart == 0 || frame < scriptStart);
 
-        if (sAutoA || scriptStart != 0) {
+        if (sAutoA || autoplay || scriptStart != 0) {
             PADStatus st{};
             st.err = PAD_ERR_NONE;
-            st.button = (u16)(scripted & ~SCRIPT_STICK_MASK);
+            // Random input only while the ball is live. Anywhere else -- intro,
+            // goal celebration, replay, summary, post-game menu -- it wandered
+            // off through the menus (quit to the main menu, into Strikers 101,
+            // round the options screens) instead of playing another match. So
+            // outside live play autoplay waits, letting replays and
+            // cinematics run in full, and then taps A once a second: that
+            // steps through every prompt and accepts the post-game menu's
+            // first item, Rematch.
+            static u32 sNotLiveSince = 0;
+            const bool live = autoplay && osHostLiveGameplay() != 0;
+            if (live) {
+                sNotLiveSince = frame + 1;
+            }
+            if (autoplay && !live) {
+                const u32 waited = frame - sNotLiveSince;
+                if (waited >= kAutoplayMenuWaitFrames && (waited % 60) < 6) {
+                    st.button |= PAD_BUTTON_A;
+                }
+            }
+            if (live) {
+                const AutoplayControls ap = autoplayControls(frame);
+                st.button = (u16)ap.controls;
+                st.stickX = ap.stickX;
+                st.stickY = ap.stickY;
+                if ((ap.controls & PAD_TRIGGER_L) != 0) {
+                    st.triggerLeft = kScriptTriggerFull;
+                }
+                if ((ap.controls & PAD_TRIGGER_R) != 0) {
+                    st.triggerRight = kScriptTriggerFull;
+                }
+            }
+            st.button |= (u16)(scripted & ~SCRIPT_STICK_MASK);
             applyScriptedAnalog(st, scripted);
             if (autoAActive && ((frame / 15) % 2) == 0) {
                 st.button |= PAD_BUTTON_A;

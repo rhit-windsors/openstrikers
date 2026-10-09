@@ -1,0 +1,31 @@
+# SidelineExplodable allocated each fragment's physics object as
+# sizeof(PhysicsBox) and constructed the derived SidelineExplosionPhysicsObject
+# in it. On the GameCube that is 0x2C for an 0x30 object, a 4-byte overhang the
+# heap's rounding absorbed; here it is 64 for 72, and the trailing
+# mpExplosionFragment pointer landed on the allocator's bookkeeping past the
+# block. Every sideline explosion corrupted the heap, and the damage surfaced
+# minutes later wherever the free ring was next walked: the render list's AVL
+# tree, aurora's texture cache, the render worker's frees
+# (MemoryAllocator::Free walking into a null link). Found by soak + validator
+# (134): the bad free named ExplosionFragment::Deactivate. Allocate the size of
+# what is constructed.
+--- a/src/Game/Render/SidelineExplodable.cpp
++++ b/src/Game/Render/SidelineExplodable.cpp
+@@ -371,7 +371,16 @@
+ 
+         if (!fragment.mbIsStationary)
+         {
+-            PhysicsBox* box = (PhysicsBox*)::operator new(sizeof(PhysicsBox), 8, false);
++            // Retail sized this for a PhysicsBox (0x2C) and then constructed the
++            // derived SidelineExplosionPhysicsObject (0x30) in it, so the
++            // trailing mpExplosionFragment overhung the block by 4 bytes, which
++            // the GameCube heap's rounding absorbed. Here the two are 64 and 72
++            // bytes: the 8-byte pointer landed on the allocator's bookkeeping
++            // past the block, and every sideline explosion corrupted the heap.
++            // The damage surfaced minutes later wherever the free ring was next
++            // walked -- the render list, aurora's texture cache, the render
++            // worker's frees. Allocate what is constructed.
++            PhysicsBox* box = (PhysicsBox*)::operator new(sizeof(SidelineExplosionPhysicsObject), 8, false);
+             box = new (box) SidelineExplosionPhysicsObject(g_CollisionSpace, g_PhysicsWorld, dim.mDim.x, dim.mDim.y, dim.mDim.z, &fragment);
+             box->SetDensity(5.0f);
+ 

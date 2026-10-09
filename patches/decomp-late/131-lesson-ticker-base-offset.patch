@@ -1,0 +1,48 @@
+# FrontEnd::Update and LessonSelectScene converted the OVERLAY_LESSON_TICKER
+# scene to NSNMessengerScene by subtracting 4 bytes by hand: the
+# BaseOverlayHandler base follows FEIMessenger, which is one vtable pointer.
+# That pointer is 8 bytes here, so 'this' landed 4 bytes inside the object and
+# EnableScrolling read m_pFEPresentation as garbage. Found by a soak run that
+# quit to the main menu and wandered into Strikers 101. Use static_cast so the
+# compiler applies the base offset.
+--- a/src/Game/FE/feManager.cpp
++++ b/src/Game/FE/feManager.cpp
+@@ -191,11 +191,12 @@
+             {
+                 EnterMenuState(MET_PAUSE);
+                 scene = nlSingleton<OverlayManager>::Instance()->GetScene(OVERLAY_LESSON_TICKER);
+-                if (scene != NULL)
+-                {
+-                    scene = (BaseSceneHandler*)((char*)scene - 4);
+-                }
+-                ((NSNMessengerScene*)(void*)scene)->EnableScrolling(true);
++                // Retail stepped back 4 bytes from the BaseOverlayHandler subobject to the
++                // NSNMessengerScene: FEIMessenger, the first base, is one vtable pointer.
++                // That pointer is 8 bytes here, so the hand adjustment left `this` 4 bytes
++                // inside the object and m_pFEPresentation read garbage. Let the compiler
++                // apply the base offset.
++                static_cast<NSNMessengerScene*>(scene)->EnableScrolling(true);
+                 SetTickerLesson(-1);
+                 m_lastTaskState = 2;
+                 m_feStatePrevious = eFE_INGAME;
+--- a/src/Game/SH/SHLessonSelect.cpp
++++ b/src/Game/SH/SHLessonSelect.cpp
+@@ -401,12 +401,12 @@
+     }
+ 
+     BaseSceneHandler* scene = OverlayManager::Instance()->GetScene(OVERLAY_LESSON_TICKER);
+-    if (scene != 0)
+-    {
+-        scene = (BaseSceneHandler*)((char*)scene - 4);
+-    }
+-
+-    ticker = (NSNMessengerScene*)(void*)scene;
++    // Retail stepped back 4 bytes from the BaseOverlayHandler subobject to the
++    // NSNMessengerScene: FEIMessenger, the first base, is one vtable pointer.
++    // That pointer is 8 bytes here, so the hand adjustment left `this` 4 bytes
++    // inside the object and m_pFEPresentation read garbage. Let the compiler
++    // apply the base offset.
++    ticker = static_cast<NSNMessengerScene*>(scene);
+     if (ticker == 0)
+     {
+         return;

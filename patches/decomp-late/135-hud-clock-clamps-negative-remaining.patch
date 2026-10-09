@@ -1,0 +1,17 @@
+--- a/src/Game/FE/Overlay/OverlayHandlerHUD.cpp
++++ b/src/Game/FE/Overlay/OverlayHandlerHUD.cpp
+@@ -200,6 +200,14 @@
+     float fTime = g_pGame->GetGameTime();
+     float overtimeTime = 59999.0f;
+     float fRemainingTime = g_pGame->m_pGameTweaks->fGameDuration - fTime;
++    // The game clock runs past the duration while a buzzer-beater is in the air.
++    // CodeWarrior's float->unsigned conversion clamps negatives to 0, so retail
++    // shows 0.0; on x64 the conversion goes through a signed integer and the HUD
++    // printed negative tenths, then a garbage minute count. Clamp it here.
++    if (fRemainingTime < 0.0f)
++    {
++        fRemainingTime = 0.0f;
++    }
+     fTime -= g_pGame->m_pGameTweaks->fGameDuration;
+ 
+     overtimeTime = (fTime > overtimeTime) ? overtimeTime : fTime;

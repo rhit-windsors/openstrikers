@@ -1,0 +1,28 @@
+# StopQStream read QUEUED_STREAM::TrackOwnsStream as bit 1 of the byte at raw
+# offset 0xB, its GameCube (MWCC, 4-byte pointer) position. On the host pStream
+# is 8 bytes and offset 0xB is inside it, so ownership was an arbitrary address
+# bit, mostly 0, and a stopped stream was never put on the delete list. Each
+# one kept its DolphinFile, and within a match the 32-slot pool filled with
+# stale music and announcer streams -- the root of the exhaustion that patches
+# 120-123 guarded symptom by symptom, and of the FE package crash after the
+# final whistle. Use the named bitfield.
+--- a/src/Game/Audio/StreamTrack.cpp
++++ b/src/Game/Audio/StreamTrack.cpp
+@@ -609,8 +609,15 @@
+  */
+ void AudioStreamTrack::StreamTrack::StopQStream(QUEUED_STREAM* pQueuedStream)
+ {
+-    unsigned char flags = *((unsigned char*)pQueuedStream + 0xB);
+-    StopStream(pQueuedStream->pStream, (flags >> 1) & 1);
++    // Retail read the ownership bit as `(*((u8*)pQueuedStream + 0xB) >> 1) & 1`,
++    // which is TrackOwnsStream in MWCC's GameCube layout. Here pStream is eight
++    // bytes, so offset 0xB is the top byte of the low word of that pointer:
++    // ownership came out as an arbitrary address bit, mostly 0, and a stopped
++    // stream was never handed to the delete list. Each one kept its file, and
++    // within a match the 32-slot DolphinFile pool was full of stale music and
++    // announcer streams -- the root of the pool exhaustion behind patches
++    // 120-123 and the FE package crash after the final whistle.
++    StopStream(pQueuedStream->pStream, pQueuedStream->TrackOwnsStream);
+ 
+     DLListEntry<QUEUED_STREAM>* entry = nlDLEntryFromValue(pQueuedStream);
+ 
