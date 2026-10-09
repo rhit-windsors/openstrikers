@@ -414,6 +414,36 @@ game frames).
 
 ## Recently fixed
 
+### Power-up sounds outlived their power-ups (2026-10-08, audio build)
+
+The first crash that only the audio build can reach: after 56 matches,
+`Audio::Update3DSFXEmitters` followed an emitter to a freed physics object
+(`PhysicsObject::GetLinearVelocity` reading `0xffffffffffffffff`). Power-ups
+ask `Play()` for the emitter of their in-effect sound and keep it in
+`m_uVoiceID`, to stop it when they go away. `Play()` returns a `uintptr_t`,
+but the result went through an `unsigned long` local (32 bits on Windows) into
+a `u32` member, and the emitter table is a static array in the executable,
+above 4 GB. `cGameSFX::StopEmitter` finds the emitter by comparing pointers,
+so the truncated one never matched, the emitter was never stopped, and it kept
+following the power-up's physics object after the power-up was destroyed.
+`patches/decomp-late/140` makes the handle pointer-wide. Invisible with audio
+off, where `Play()` returns 0.
+
+### Three more hand-written GameCube offsets (2026-10-08)
+
+A 10-minute soak of the audio build crashed after 14 matches (frame 127689,
+reading `0xffffffffffffffff`) in `SidelineExplosionPhysicsObject::Contact`,
+when a fast explosion fragment hit a player. The handler reached the player
+through stand-in structs padded to the GameCube offsets of
+`PhysicsCharacter::m_pAICharacter` (0x8C) and `cCharacter::m_v3Velocity`
+(0x30). Not an audio bug: it is rare, and the audio-off build has the same
+code. A sweep for padded stand-ins found two more: `AIEventHandler` read the
+ball's Magnus-effect flag at 0x3B, and `CupTickerManager` read
+`GameInfoManager` fields (knockout flag, game mode, tournament mode at
+0x4948) through an accessor struct, so the cup and tournament ticker chose
+its messages from garbage. All three use the real fields now
+(`patches/decomp-late/139`).
+
 ### Unattended soak runs found and fixed four crashes (2026-10-08)
 
 `soak.ps1` plays seeded autoplay matches against a Legend AI and groups

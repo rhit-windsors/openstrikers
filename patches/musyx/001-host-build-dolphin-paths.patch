@@ -1,0 +1,286 @@
+diff --git a/include/musyx/hardware.h b/include/musyx/hardware.h
+index aac9f81..e418011 100644
+--- a/include/musyx/hardware.h
++++ b/include/musyx/hardware.h
+@@ -162,6 +162,8 @@ u32 aramGetAvailableBytes(ARAMInfo* ai);
+ #endif
+ void aramSetUploadCallback(ARAMUploadCallback callback, u32 chunckSize);
+ void aramSyncTransferQueue();
++unsigned long aramGetFirstUserAddress();
++unsigned long aramGetUserBytes(unsigned long totalBytes);
+ #elif MUSY_TARGET == MUSY_TARGET_PC
+   void aramInit(unsigned long length);
+   void aramExit();
+diff --git a/include/musyx/musyx.h b/include/musyx/musyx.h
+index fa74cbb..0c2a05a 100644
+--- a/include/musyx/musyx.h
++++ b/include/musyx/musyx.h
+@@ -11,7 +11,20 @@
+ extern "C" {
+ #endif
+ 
+-#if MUSY_TARGET == MUSY_TARGET_DOLPHIN
++#if MUSY_TARGET == MUSY_TARGET_DOLPHIN && (defined(__x86_64__) || defined(_WIN64) || defined(__aarch64__))
++// A 64-bit host running the Dolphin code paths: use the fixed-width types
++// that the host's dolphin/types.h and the game's types.h also use, so the
++// typedefs agree (and u32 stays 32 bits where long is 64).
++#include <stdint.h>
++typedef int8_t s8;
++typedef int16_t s16;
++typedef int32_t s32;
++typedef int64_t s64;
++typedef uint8_t u8;
++typedef uint16_t u16;
++typedef uint32_t u32;
++typedef uint64_t u64;
++#elif MUSY_TARGET == MUSY_TARGET_DOLPHIN
+ typedef signed char s8;
+ typedef unsigned char u8;
+ typedef signed short s16;
+diff --git a/src/musyx/runtime/hardware.c b/src/musyx/runtime/hardware.c
+index 8251f3b..bb54d7c 100644
+--- a/src/musyx/runtime/hardware.c
++++ b/src/musyx/runtime/hardware.c
+@@ -520,7 +520,7 @@ void* hwGetStreamPlayBuffer(u8 hwStreamHandle) {
+ 
+ #if MUSY_VERSION >= MUSY_VERSION_CHECK(2, 0, 2)
+ u32 hwGetStreamARAMAddr(u8 hwStreamHandle) {
+-  u32 len; // r1+0xC
++  size_t len; // r1+0xC
+   return aramGetStreamBufferAddress(hwStreamHandle, &len);
+ }
+ #endif
+diff --git a/src/musyx/runtime/hw_aramdma.c b/src/musyx/runtime/hw_aramdma.c
+index 11e1534..f5626ec 100644
+--- a/src/musyx/runtime/hw_aramdma.c
++++ b/src/musyx/runtime/hw_aramdma.c
+@@ -17,14 +17,16 @@ typedef struct STREAM_BUFFER {
+ 
+ #if MUSY_TARGET == MUSY_TARGET_DOLPHIN
+ #include <dolphin/ar.h>
++#if __has_include(<dolphin/arq.h>)
+ #include <dolphin/arq.h>
++#endif
+ #include <dolphin/os.h>
+ 
+ typedef struct ARAMTransferJob {
+   // total size: 0x28
+   ARQRequest arq;        // offset 0x0, size 0x20
+-  void (*callback)(u32); // offset 0x20, size 0x4
+-  unsigned long user;    // offset 0x24, size 0x4
++  void (*callback)(size_t); // offset 0x20, size 0x4
++  size_t user;              // offset 0x24, size 0x4
+ } ARAMTransferJob;
+ 
+ typedef struct ARAMTransferQueue {
+@@ -60,7 +62,7 @@ static void aramQueueInit() {
+   aramQueueHi.write = aramQueueHi.valid = 0;
+ }
+ 
+-static void aramQueueCallback(unsigned long ptr) {
++static void aramQueueCallback(uintptr_t ptr) {
+   u32 i;                        // r31
+   ARQRequest* arq;              // r29
+   ARAMTransferQueue* aramQueue; // r30
+@@ -81,8 +83,8 @@ static void aramQueueCallback(unsigned long ptr) {
+   --aramQueue->valid;
+ }
+ 
+-void aramUploadData(void* mram, unsigned long aram, unsigned long len, unsigned long highPrio,
+-                    void (*callback)(size_t), unsigned long user) {
++void aramUploadData(void* mram, u32 aram, u32 len, u32 highPrio, void (*callback)(size_t),
++                    u32 user) {
+   ARAMTransferQueue* aramQueue; // r31
+   int old;                      // r30
+ 
+@@ -91,25 +93,27 @@ void aramUploadData(void* mram, unsigned long aram, unsigned long len, unsigned
+   for (;;) {
+     old = OSDisableInterrupts();
+     if (aramQueue->valid < 16) {
+-      aramQueue->queue[aramQueue->write].arq.owner = 42;
+-      aramQueue->queue[aramQueue->write].arq.type = 0;
+-      aramQueue->queue[aramQueue->write].arq.priority = highPrio != 0 ? 1 : 0;
+-      aramQueue->queue[aramQueue->write].arq.source = (u32)mram;
+-      aramQueue->queue[aramQueue->write].arq.dest = aram;
+-      aramQueue->queue[aramQueue->write].arq.length = len;
+-      aramQueue->queue[aramQueue->write].arq.callback = aramQueueCallback;
+-      aramQueue->queue[aramQueue->write].callback = callback;
+-      aramQueue->queue[aramQueue->write].user = user;
+-      ARQPostRequest(&aramQueue->queue[aramQueue->write].arq,
+-                     aramQueue->queue[aramQueue->write].arq.owner,
+-                     aramQueue->queue[aramQueue->write].arq.type,
+-                     aramQueue->queue[aramQueue->write].arq.priority,
+-                     aramQueue->queue[aramQueue->write].arq.source,
+-                     aramQueue->queue[aramQueue->write].arq.dest,
+-                     aramQueue->queue[aramQueue->write].arq.length,
+-                     aramQueue->queue[aramQueue->write].arq.callback);
++      // The host ARQ completes synchronously, running aramQueueCallback (which
++      // decrements valid) inside ARQPostRequest. Claim the slot first so the
++      // count never wraps and a nested upload from that callback sees a sane
++      // queue.
++      u8 slot = aramQueue->write;
+       ++aramQueue->valid;
+       aramQueue->write = (aramQueue->write + 1) % 16;
++      aramQueue->queue[slot].arq.owner = 42;
++      aramQueue->queue[slot].arq.type = 0;
++      aramQueue->queue[slot].arq.priority = highPrio != 0 ? 1 : 0;
++      // arq.source is 32 bits; the host pointer goes to ARQPostRequest whole.
++      aramQueue->queue[slot].arq.source = (u32)(uintptr_t)mram;
++      aramQueue->queue[slot].arq.dest = aram;
++      aramQueue->queue[slot].arq.length = len;
++      aramQueue->queue[slot].arq.callback = aramQueueCallback;
++      aramQueue->queue[slot].callback = callback;
++      aramQueue->queue[slot].user = user;
++      ARQPostRequest(&aramQueue->queue[slot].arq, aramQueue->queue[slot].arq.owner,
++                     aramQueue->queue[slot].arq.type, aramQueue->queue[slot].arq.priority,
++                     (uintptr_t)mram, aramQueue->queue[slot].arq.dest,
++                     aramQueue->queue[slot].arq.length, aramQueue->queue[slot].arq.callback);
+       OSRestoreInterrupts(old);
+       return;
+     }
+@@ -122,7 +126,7 @@ void aramSyncTransferQueue() {
+   }
+ }
+ 
+-void aramInit(unsigned long length) {
++void aramInit(u32 length) {
+   signed short* tmpMem;   // r30
+   unsigned long i;        // r29
+   unsigned long aramBase; // r28
+@@ -171,8 +175,7 @@ unsigned long aramGetFirstUserAddress() { return ARGetBaseAddress() + 0x500; }
+ unsigned long aramGetUserBytes(unsigned long totalBytes) { return totalBytes - 0x500; }
+ #endif
+ 
+-void aramSetUploadCallback(void* (*callback)(unsigned long, unsigned long),
+-                           unsigned long chunckSize) {
++void aramSetUploadCallback(ARAMUploadCallback callback, u32 chunckSize) {
+   unsigned long acs; // r30
+ 
+   if (callback != NULL) {
+@@ -193,7 +196,7 @@ u32 aramGetAvailableBytes(ARAMInfo* ai) {
+ }
+ #endif
+ 
+-void* aramStoreData(void* src, unsigned long len
++void* aramStoreData(void* src, u32 len
+ #if MUSY_VERSION >= MUSY_VERSION_CHECK(2, 0, 1)
+                     ,
+                     ARAMInfo* ai
+@@ -251,7 +254,7 @@ void* aramStoreData(void* src, unsigned long len
+   return (void*)addr;
+ }
+ 
+-void aramRemoveData(void* aram, unsigned long len
++void aramRemoveData(void* aram, u32 len
+ #if MUSY_VERSION >= MUSY_VERSION_CHECK(2, 0, 1)
+                     ,
+                     ARAMInfo* ai
+@@ -276,7 +279,7 @@ static void InitStreamBuffers() {
+   aramStream = aramTop;
+ }
+ 
+-unsigned char aramAllocateStreamBuffer(unsigned long len) {
++u8 aramAllocateStreamBuffer(u32 len) {
+   STREAM_BUFFER* sb;     // r30
+   STREAM_BUFFER* oSb;    // r31
+   STREAM_BUFFER* lastSb; // r28
+@@ -336,7 +339,7 @@ unsigned char aramAllocateStreamBuffer(unsigned long len) {
+   return (oSb - aramStreamBuffers);
+ }
+ 
+-unsigned long aramGetStreamBufferAddress(unsigned char id, unsigned long* len) {
++size_t aramGetStreamBufferAddress(u8 id, size_t* len) {
+ #line 467
+   MUSY_ASSERT_MSG(id != 0xFF, "Stream buffer ID is invalid");
+ 
+diff --git a/src/musyx/runtime/hw_dspctrl.c b/src/musyx/runtime/hw_dspctrl.c
+index 80424c8..6beae21 100644
+--- a/src/musyx/runtime/hw_dspctrl.c
++++ b/src/musyx/runtime/hw_dspctrl.c
+@@ -349,7 +349,7 @@ u16 dspCmdFirstSize = 0;
+ u16* dspCmdList = NULL;
+ 
+ #if MUSY_VERSION >= MUSY_VERSION_CHECK(2, 0, 1) // MUSYXTODO
+-u32 dspCompressorOn = 0;
++bool dspCompressorOn = 0;
+ #endif
+ 
+ u32 dspHRTFOn = FALSE;
+@@ -561,7 +561,7 @@ static const u16 dspMixerCyclesAux[32] = {
+ #endif
+ #endif
+ 
+-#if MUSY_VERSION <= MUSY_VERSION_CHECK(2, 0, 2) // dropped in the SMS 2.0.3 fork (unused; kept for upstream <= 2.0.2)
++#if MUSY_VERSION <= MUSY_VERSION_CHECK(2, 0, 2) || !defined(__MWERKS__) // dropped in the SMS 2.0.3 fork, but hardware.c still calls them, so a host link needs them
+ void salDeactivateStudio(u8 studio) { dspStudio[studio].state = 0; }
+ #endif
+ 
+@@ -640,7 +640,7 @@ static void AddDpop(s32* sum, s16 delta) {
+   *sum = (*sum > 0x7fffff) ? 0x7fffff : (*sum < -0x7fffff ? -0x7fffff : *sum);
+ }
+ 
+-static void DoDepopFade(long* dspStart, s16* dspDelta, long* hostSum) {
++static void DoDepopFade(s32* dspStart, s16* dspDelta, s32* hostSum) {
+   if (*hostSum <= -160) {
+     *dspDelta = (*hostSum <= -3200) ? 0x14 : (s16)(-*hostSum / 160);
+   } else if (*hostSum >= 160) {
+@@ -1889,15 +1889,15 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
+       dspCmdPtr[2] = (u32)stp->main[salFrame];
+       dspCmdPtr += 3;
+       spb = stp->spb;
+-      DoDepopFade((long*)&spb->dpopLHi, (s16*)&spb->dpopLDelta, &stp->hostDPopSum.l);
+-      DoDepopFade((long*)&spb->dpopRHi, (s16*)&spb->dpopRDelta, &stp->hostDPopSum.r);
+-      DoDepopFade((long*)&spb->dpopSHi, (s16*)&spb->dpopSDelta, &stp->hostDPopSum.s);
+-      DoDepopFade((long*)&spb->dpopALHi, (s16*)&spb->dpopALDelta, &stp->hostDPopSum.lA);
+-      DoDepopFade((long*)&spb->dpopARHi, (s16*)&spb->dpopARDelta, &stp->hostDPopSum.rA);
+-      DoDepopFade((long*)&spb->dpopASHi, (s16*)&spb->dpopASDelta, &stp->hostDPopSum.sA);
+-      DoDepopFade((long*)&spb->dpopBLHi, (s16*)&spb->dpopBLDelta, &stp->hostDPopSum.lB);
+-      DoDepopFade((long*)&spb->dpopBRHi, (s16*)&spb->dpopBRDelta, &stp->hostDPopSum.rB);
+-      DoDepopFade((long*)&spb->dpopBSHi, (s16*)&spb->dpopBSDelta, &stp->hostDPopSum.sB);
++      DoDepopFade((s32*)&spb->dpopLHi, (s16*)&spb->dpopLDelta, &stp->hostDPopSum.l);
++      DoDepopFade((s32*)&spb->dpopRHi, (s16*)&spb->dpopRDelta, &stp->hostDPopSum.r);
++      DoDepopFade((s32*)&spb->dpopSHi, (s16*)&spb->dpopSDelta, &stp->hostDPopSum.s);
++      DoDepopFade((s32*)&spb->dpopALHi, (s16*)&spb->dpopALDelta, &stp->hostDPopSum.lA);
++      DoDepopFade((s32*)&spb->dpopARHi, (s16*)&spb->dpopARDelta, &stp->hostDPopSum.rA);
++      DoDepopFade((s32*)&spb->dpopASHi, (s16*)&spb->dpopASDelta, &stp->hostDPopSum.sA);
++      DoDepopFade((s32*)&spb->dpopBLHi, (s16*)&spb->dpopBLDelta, &stp->hostDPopSum.lB);
++      DoDepopFade((s32*)&spb->dpopBRHi, (s16*)&spb->dpopBRDelta, &stp->hostDPopSum.rB);
++      DoDepopFade((s32*)&spb->dpopBSHi, (s16*)&spb->dpopBSDelta, &stp->hostDPopSum.sB);
+       DCFlushRangeNoSync(spb, sizeof(_SPB));
+     }
+   }
+@@ -2064,7 +2064,7 @@ void salDeactivateVoice(DSPvoice* dsp_vptr) {
+   dsp_vptr->state = 0;
+ }
+ 
+-#if MUSY_VERSION <= MUSY_VERSION_CHECK(2, 0, 2) // dropped in the SMS 2.0.3 fork (unused; kept for upstream <= 2.0.2)
++#if MUSY_VERSION <= MUSY_VERSION_CHECK(2, 0, 2) || !defined(__MWERKS__) // dropped in the SMS 2.0.3 fork, but hardware.c still calls them, so a host link needs them
+ void salReconnectVoice(DSPvoice* dsp_vptr, u8 studio) {
+   if (dsp_vptr->state != 0) {
+     if (dsp_vptr->prev != NULL) {
+diff --git a/src/musyx/runtime/synth.c b/src/musyx/runtime/synth.c
+index c1dcb96..48e19b7 100644
+--- a/src/musyx/runtime/synth.c
++++ b/src/musyx/runtime/synth.c
+@@ -1035,7 +1035,7 @@ u32 synthFXStart(u16 fid,
+ int synthCheckFXRealloc(unsigned short fid) {
+   struct FX_TAB* fx;            // r31
+   unsigned long allocId;        // r30
+-  unsigned long currentAllocId; // r1+0x8
++  u32 currentAllocId; // r1+0x8
+ 
+   fx = dataGetFX(fid);
+   if (fx == NULL) {
+diff --git a/src/musyx/runtime/synthvoice.c b/src/musyx/runtime/synthvoice.c
+index 1ec12ff..53d6529 100644
+--- a/src/musyx/runtime/synthvoice.c
++++ b/src/musyx/runtime/synthvoice.c
+@@ -405,7 +405,7 @@ static s32 voiceAllocateFind(u8 priority, u8 maxVoices, u32 allocId, u8 fxFlag)
+   return -1;
+ }
+ 
+-static u32 voiceAllocateDo(s32 voice, u8 fxFlag) {
++static void voiceAllocateDo(s32 voice, u8 fxFlag) {
+   s32 i;                // r30
+   SYNTH_VOICELIST* sfv; // r31
+ 

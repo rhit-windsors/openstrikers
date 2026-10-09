@@ -1,0 +1,79 @@
+--- a/src/NL/plat/plataudio.cpp
++++ b/src/NL/plat/plataudio.cpp
+@@ -657,7 +657,7 @@
+ /**
+  * Offset/Address/Size: 0xBE0 | 0x801C53DC | size: 0x68
+  */
+-bool SetSFXReverbVol(SND_VOICEID uVoiceID, float fVol)
++bool SetSFXReverbVol(unsigned long uVoiceID, float fVol)
+ {
+     int roundedVol;
+ 
+@@ -1155,6 +1155,16 @@
+ /**
+  * Offset/Address/Size: 0x1678 | 0x801C5E74 | size: 0x16C
+  */
++#ifdef __x86_64__
++// The sound data on the disc is big-endian and its sample directory holds
++// 4-byte pointers; src/musyx_host.c converts each file once, here, before
++// MusyX reads it.
++extern "C" void musyxHostSwapPool(void* data, u32 len);
++extern "C" void musyxHostSwapProject(void* data, u32 len);
++extern "C" void* musyxHostConvertSdir(void* data, u32 len, void* (*alloc)(u32 size));
++static void* HostSdirAlloc(u32 size) { return nlMalloc(size, 0x20, false); }
++#endif
++
+ void SetupSoundBuffers(AudioFileData& fileData, bool bStream)
+ {
+     u32 uPoolReadLength;
+@@ -1171,6 +1181,10 @@
+         pBuffer = (unsigned char*)nlLoadEntireFile(szFileName, &uPoolReadLength, 0x20, AllocateStart);
+         if (!pBuffer)
+             tDebugPrintManager::Print(DC_SOUND, "Failed to open file %s\n", szFileName);
++#ifdef __x86_64__
++        if (pBuffer)
++            musyxHostSwapPool(pBuffer, uPoolReadLength);
++#endif
+         fileData.pool_buffer = pBuffer;
+     }
+ 
+@@ -1180,6 +1194,10 @@
+         pBuffer = (unsigned char*)nlLoadEntireFile(szFileName, &uProjReadLength, 0x20, AllocateStart);
+         if (!pBuffer)
+             tDebugPrintManager::Print(DC_SOUND, "Failed to open file %s\n", szFileName);
++#ifdef __x86_64__
++        if (pBuffer)
++            musyxHostSwapProject(pBuffer, uProjReadLength);
++#endif
+         fileData.proj_buffer = pBuffer;
+     }
+ 
+@@ -1189,6 +1207,14 @@
+         pBuffer = (unsigned char*)nlLoadEntireFile(szFileName, &uSdirReadLength, 0x20, AllocateStart);
+         if (!pBuffer)
+             tDebugPrintManager::Print(DC_SOUND, "Failed to open file %s\n", szFileName);
++#ifdef __x86_64__
++        if (pBuffer)
++        {
++            unsigned char* converted = (unsigned char*)musyxHostConvertSdir(pBuffer, uSdirReadLength, HostSdirAlloc);
++            nlFree(pBuffer);
++            pBuffer = converted;
++        }
++#endif
+         fileData.sdir_buffer = pBuffer;
+     }
+ 
+--- a/src/Game/TransitionTask.cpp
++++ b/src/Game/TransitionTask.cpp
+@@ -98,7 +98,11 @@
+ 
+ extern unsigned char g_JaapAndJacksNastyHackBecauseWeDoNotKnowDifferenceBetweenPausePauseAndPostGamePause;
+ 
++#ifdef GOLDEN_DISABLE_AUDIO
+ void PrintAvailableARAMMemory() {}
++#else
++void PrintAvailableARAMMemory();
++#endif
+ void InitializeGameObjectLighting();
+ void AIEventHandler(Event*, void*);
+ void InitializeElectricFence();

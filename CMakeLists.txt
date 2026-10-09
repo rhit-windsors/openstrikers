@@ -122,7 +122,6 @@ if (MINGW)
 endif ()
 
 target_compile_definitions(openstrikers PRIVATE
-    MUSY_TARGET=MUSY_TARGET_PC
     TARGET_PC
     dSINGLE=1
     dIDESINGLE
@@ -135,8 +134,45 @@ target_compile_definitions(openstrikers PRIVATE
     MUSY_VERSION_PATCH=3
     NDEBUG=1
     __IEEE_LITTLE_ENDIAN
-    GOLDEN_DISABLE_AUDIO
 )
+
+# Audio. Off by default while it is brought up (docs/PLAN-audio.md): with it
+# off, GOLDEN_DISABLE_AUDIO stubs the whole PlatAudio layer and MusyX is not
+# built. With it on, MusyX's runtime is compiled on its GameCube code paths and
+# src/musyx_host.c stands in for the DSP and audio interface hardware.
+option(OPENSTRIKERS_AUDIO "Build MusyX and enable the game's audio" OFF)
+if (OPENSTRIKERS_AUDIO)
+    set(MUSYX_DIR ${EXTERN_DIR}/decomp/extern/musyx)
+    file(GLOB_RECURSE MUSYX_SOURCES CONFIGURE_DEPENDS ${MUSYX_DIR}/src/musyx/runtime/*.c)
+    # hw_dolphin.c drives the real DSP and AI; musyx_host.c replaces it. hw_pc.c
+    # is an unfinished PC layer, and dsp_import.c is the DSP microcode image,
+    # which only hw_dolphin.c loads. profile.c reads the PowerPC performance
+    # counters.
+    list(FILTER MUSYX_SOURCES EXCLUDE REGEX ".*/hw_(dolphin|pc)\.c$")
+    list(FILTER MUSYX_SOURCES EXCLUDE REGEX ".*/(dsp_import|profile)\.c$")
+    add_library(musyx STATIC ${MUSYX_SOURCES} ${SRC_DIR}/musyx_host.c)
+    target_include_directories(musyx PRIVATE
+        ${MUSYX_DIR}/include
+        ${EXTERN_DIR}/aurora/include
+    )
+    target_compile_definitions(musyx PRIVATE
+        MUSY_TARGET=MUSY_TARGET_DOLPHIN
+        MUSY_VERSION_MAJOR=2
+        MUSY_VERSION_MINOR=0
+        MUSY_VERSION_PATCH=3
+        NDEBUG=1
+    )
+    target_compile_options(musyx PRIVATE -fno-strict-aliasing -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast)
+    target_link_libraries(musyx PRIVATE aurora::core aurora::os)
+    target_include_directories(openstrikers PRIVATE ${MUSYX_DIR}/include)
+    target_compile_definitions(openstrikers PRIVATE MUSY_TARGET=MUSY_TARGET_DOLPHIN)
+    target_link_libraries(openstrikers PRIVATE musyx)
+else ()
+    target_compile_definitions(openstrikers PRIVATE
+        MUSY_TARGET=MUSY_TARGET_PC
+        GOLDEN_DISABLE_AUDIO
+    )
+endif ()
 
 # The allocator's free-list nodes live inside the free memory they describe, so
 # a caller overrunning its block is indistinguishable from an allocator bug by

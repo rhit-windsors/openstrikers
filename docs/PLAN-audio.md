@@ -32,9 +32,47 @@ stream. Writing our own mixer (not copying Dolphin's AX HLE, which is GPL) keeps
 the licence clean. The alternative, replacing MusyX with a new engine, would
 throw away the game's sound data path and is far more work.
 
+## Building it
+
+`cmake -S . -B build-audio ... -DOPENSTRIKERS_AUDIO=ON` (same flags as `build/`
+otherwise). `build/` stays audio-off and playable throughout. MusyX's changes
+live in `patches/musyx/`, the game side in `patches/decomp-late/138`, the host
+layer in `src/musyx_host.c`. `OPENSTRIKERS_AUDIO_TRACE=1` logs the tick count
+and peak active voices every 600 frames.
+
+## Stage 1 notes (2026-10-08)
+
+- MusyX builds on its Dolphin code paths (`MUSY_TARGET_DOLPHIN`), the game
+  too; `musyx.h` takes stdint types on a 64-bit host so both agree. The game's
+  force-included `compat_shims/musyx_types.h` is only used with audio off.
+- `src/musyx_host.c` replaces `hw_dolphin.c`. MusyX's 5 ms tick runs on the
+  game thread from `osHostFrameBegin` (1/60 s of ticks per host frame), so its
+  interrupt masking is a no-op; `salCtrlDsp` still builds the command list and
+  then writes silence.
+- 64-bit fixes in MusyX: an out-parameter that is `size_t`, `long` depop
+  sums, the ARQ request pointer passed through `u32`, and the ARAM queue
+  count, which wrapped because aurora's ARQ completes inside the post.
+- **The sound data is big-endian and MusyX reads it in place.**
+  `SetupSoundBuffers` now hands each file to the host layer once: the project
+  (46 groups: ID lists, FX tables) and pool (883 macros; the curve, keymap and
+  layer sections are empty, offset 0) are swapped in place, and the sample
+  directory (787 samples) is rebuilt with host-width entries, because each
+  entry holds a pointer. Song pages are not swapped: the game never starts a
+  sequence.
+- Result: matches play, MusyX ticks at 200 Hz and starts voices (up to 7 at
+  once). MusyX ends one-shot voices itself, from a play position it tracks on
+  the CPU (`playInfo`), so voices finish even without a DSP; what the DSP's
+  write-back is still needed for is `hwGetPos` (streams, virtual samples),
+  which reads `currentAddr` -- stage 2/3 must advance it.
+- Soak gate: two crashes found and fixed on the way (ISSUES.md): stand-in
+  structs with GameCube offsets in the sideline-fragment contact, cup ticker
+  and ball handler (decomp-late/139, not audio), and power-up emitter handles
+  truncated to 32 bits (140, audio-only). Then seed 502 survived 15 minutes:
+  510000 frames, 59 matches, 143 goals.
+
 ## Stages (each ends with a soak run: audio must not cost stability)
 
-1. **Compile MusyX in, still silent.** Add the runtime sources to the build
+1. **Compile MusyX in, still silent.** (done 2026-10-08, see notes) Add the runtime sources to the build
    with `MUSY_TARGET_DOLPHIN` semantics, turn `GOLDEN_DISABLE_AUDIO` off, and
    satisfy the DSP/AI calls with a null device that just "completes" each
    frame. Expect the usual 64-bit traps in MusyX's data loading (pool/project/

@@ -1,0 +1,102 @@
+--- a/include/Game/AI/Powerups.h
++++ b/include/Game/AI/Powerups.h
+@@ -126,7 +126,10 @@
+     /* 0x50 */ const char* m_szStreakTexture;
+     /* 0x54 */ f32 m_fBlurWidth;
+     /* 0x58 */ f32 m_fBlurLength;
+-    /* 0x5C */ u32 m_uVoiceID;
++    // Holds the SFXEmitter* returned by Play() (mf_ReturnEmitterOnPlay), so it
++    // has to be pointer-wide on a 64-bit host; as a u32 the emitter could
++    // never be stopped and outlived the power-up's physics object.
++    /* 0x5C */ std::uintptr_t m_uVoiceID;
+     /* 0x60 */ BlurHandler* m_pBlurHandler;
+     /* 0x64 */ s32 m_nIndex;
+     /* 0x68 */ s32 m_nThrowerPadID;
+--- a/include/Game/Powerups.h
++++ b/include/Game/Powerups.h
+@@ -60,7 +60,10 @@
+     /* 0x50 */ const char* m_szStreakTexture;
+     /* 0x54 */ f32 m_fBlurWidth;
+     /* 0x58 */ f32 m_fBlurLength;
+-    /* 0x5C */ u32 m_uVoiceID;
++    // Holds the SFXEmitter* returned by Play() (mf_ReturnEmitterOnPlay), so it
++    // has to be pointer-wide on a 64-bit host; as a u32 the emitter could
++    // never be stopped and outlived the power-up's physics object.
++    /* 0x5C */ std::uintptr_t m_uVoiceID;
+     /* 0x60 */ BlurHandler* m_pBlurHandler;
+     /* 0x64 */ s32 m_nIndex;
+     /* 0x68 */ s32 m_nThrowerPadID;
+--- a/src/Game/AI/Powerups.cpp
++++ b/src/Game/AI/Powerups.cpp
+@@ -1018,7 +1018,7 @@
+  */
+ PowerupBase::~PowerupBase()
+ {
+-    u32 voiceID = m_uVoiceID;
++    std::uintptr_t voiceID = m_uVoiceID;
+ 
+     if (voiceID != 0)
+     {
+@@ -1600,7 +1600,7 @@
+     if (type2 == POWER_UP_CHAIN_CHOMP && !g_pGame->mbCaptainShotToScoreOn)
+     {
+         PhysicsObject* pPhysObj2 = m_pPhysicsObject;
+-        unsigned long errorCode;
++        std::uintptr_t errorCode;
+         if (type2 >= NUM_POWER_UPS)
+         {
+             errorCode = Audio::GetSndIDError();
+@@ -1616,7 +1616,7 @@
+             unsigned long soundID2 = powerupSounds[type2].sndInEffect;
+             if (soundID2 == 0xFFFFFFFF)
+             {
+-                errorCode = (unsigned long)-1;
++                errorCode = (u32)-1;
+             }
+             else
+             {
+@@ -2159,7 +2159,7 @@
+         }
+     }
+ 
+-    u32 voiceID = m_uVoiceID;
++    std::uintptr_t voiceID = m_uVoiceID;
+     if (voiceID != 0)
+     {
+         if (voiceID != (u32)Audio::GetSndIDError())
+@@ -3098,7 +3098,7 @@
+ 
+     if ((m_uVoiceID == 0) && (!g_pGame->mbCaptainShotToScoreOn))
+     {
+-        u32 errorCode;
++        std::uintptr_t errorCode;
+ 
+         type = m_eType;
+         pPhysObj = m_pPhysicsObject;
+@@ -3118,7 +3118,7 @@
+ 
+             if (soundID == 0xFFFFFFFF)
+             {
+-                errorCode = -1;
++                errorCode = (u32)-1;
+             }
+             else
+             {
+@@ -3204,7 +3204,7 @@
+         {
+             ePowerUpType type = m_eType;
+             PhysicsObject* pPhysObj = m_pPhysicsObject;
+-            unsigned long errorCode;
++            std::uintptr_t errorCode;
+ 
+             if (type >= NUM_POWER_UPS)
+             {
+@@ -3224,7 +3224,7 @@
+ 
+                 if (soundID == 0xFFFFFFFF)
+                 {
+-                    errorCode = -1;
++                    errorCode = (u32)-1;
+                 }
+                 else
+                 {

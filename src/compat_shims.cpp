@@ -487,10 +487,22 @@ BOOL OSRestoreInterrupts(BOOL state) {
     return state;
 }
 
-#ifdef GOLDEN_DISABLE_AUDIO
+// Movies are stage 5 of docs/PLAN-audio.md; until then neither decoder exists.
 u32 THPAudioDecode(void*, void*, long) { return 0; }
 s32 THPVideoDecode(void* file, void* tileY, void* tileU, void* tileV, void* work) { return 0; }
-#endif
+
+// The rest of the AI/ARAM SDK that MusyX and PlatAudio call. Aurora keeps ARAM
+// as a plain host buffer with synchronous transfers, so there is no DMA engine
+// to reset or chunk; the base address matches its ARAM_STACK_START.
+void AIInit(u8* stack) { (void)stack; }
+void AIReset(void) {}
+void AIStopDMA(void) {}
+void ARReset(void) {}
+u32 ARGetBaseAddress(void) { return 0x4000; }
+void ARQReset(void) {}
+static u32 sARQChunkSize = 4096;
+void ARQSetChunkSize(u32 size) { sARQChunkSize = size; }
+u32 ARQGetChunkSize(void) { return sARQChunkSize; }
 
 } // extern "C"
 
@@ -968,6 +980,28 @@ AutoplayControls autoplayControls(u32 frame) {
 }
 } // namespace
 
+#ifndef GOLDEN_DISABLE_AUDIO
+extern "C" int musyxHostPump(int ticks);
+extern "C" unsigned long musyxHostTicks();
+extern "C" int musyxHostTakePeakVoices();
+
+// MusyX runs on 5 ms ticks that the GameCube's audio interrupt drove. Here the
+// game thread runs them, a host frame's worth (1/60 s of game time) at a time,
+// so the synth never races the game. OPENSTRIKERS_AUDIO_TRACE=1 logs the tick
+// count every 600 frames.
+static void pumpAudio() {
+    static double sPendingMs = 0.0;
+    sPendingMs += 1000.0 / 60.0;
+    int ticks = (int)(sPendingMs / 5.0);
+    sPendingMs -= ticks * 5.0;
+    musyxHostPump(ticks);
+    static const bool sTrace = [] { const char* v = std::getenv("OPENSTRIKERS_AUDIO_TRACE"); return v && v[0] && v[0] != '0'; }();
+    if (sTrace && sHostFrame % 600 == 0) {
+        std::fprintf(stderr, "openstrikers: audio ticks %lu, peak voices %d, at frame %lu\n", musyxHostTicks(), musyxHostTakePeakVoices(), (unsigned long)sHostFrame);
+    }
+}
+#endif
+
 bool osHostFrameBegin() {
     // Hold the frame to the target rate before doing anything else, so a frame
     // skipped below (minimized, unfocused) is paced too rather than spinning.
@@ -983,6 +1017,10 @@ bool osHostFrameBegin() {
             std::exit(0);
         }
     }
+
+#ifndef GOLDEN_DISABLE_AUDIO
+    pumpAudio();
+#endif
 
     // The host frame is our sampling tick. Run it after the event pump so the
     // keyboard state PADRead samples is this frame's, and before begin_frame so

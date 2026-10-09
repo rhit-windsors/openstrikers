@@ -36,7 +36,7 @@ of the capture.
 | Replays | snapshot playback completes on the 64-bit host; pointer-width and highlight-layout faults fixed |
 | Input | keyboard on port 0, plus any SDL gamepad, paced to 60 Hz |
 | Memory card | creates, writes and reads its save file |
-| Audio | disabled (`GOLDEN_DISABLE_AUDIO`) |
+| Audio | off in `build/`; `-DOPENSTRIKERS_AUDIO=ON` builds MusyX (stage 1 of `docs/PLAN-audio.md`: runs, still silent) |
 
 The game boots, loads the front-end `.fen` scene package, runs its timeline
 animations, presents the health-and-safety screen, checks the memory card,

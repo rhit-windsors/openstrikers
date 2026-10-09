@@ -1,7 +1,13 @@
 #pragma once
 #include "compat_shims/runtime.h"
 #include "compat_shims/dolphin_stubs.h"
+// With audio off, the game only needs MusyX's types; with it on, the real
+// header (same include guard) brings the API with them.
+#ifdef GOLDEN_DISABLE_AUDIO
 #include "compat_shims/musyx_types.h"
+#else
+#include "musyx/musyx.h"
+#endif
 
 // GameCube memory sizes, shared between main.cpp's AuroraConfig and the
 // early OSInit() in compat_shims.cpp -- they must agree.
