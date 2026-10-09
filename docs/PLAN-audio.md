@@ -70,6 +70,32 @@ and peak active voices every 600 frames.
   truncated to 32 bits (140, audio-only). Then seed 502 survived 15 minutes:
   510000 frames, 59 matches, 143 goals.
 
+## Stage 2 notes (2026-10-08, in progress)
+
+- `salCtrlDsp` now mixes (`src/musyx_host.c`, "host DSP"): per 1 ms sub-frame
+  it applies the voice's queued patch pairs (`patchData`, `update.updNum`),
+  then for 32 samples steps the source at the 16.16 ratio (linear
+  interpolation; `srcSelect` 2 = none), decodes DSP-ADPCM / PCM16 / PCM8 from
+  ARAM (`ARGetStorageAddress`), applies the envelope (`ve`, per-sample delta)
+  and main L/R volume (`mix`, per-sample delta over the frame), and writes the
+  position back into the block. End of sample jumps to the loop address
+  (one-shots loop into ARAM's zero buffer; MusyX ends them itself).
+- Output: SDL3 audio stream at 32000 Hz stereo, opened in
+  `compat_shims.cpp:pumpAudio`; queue kept between ~15 and 150 ms.
+  `OPENSTRIKERS_AUDIO_MUTE=1` (soak.ps1 sets it), `OPENSTRIKERS_AUDIO_RAW=<file>`
+  dumps the mix (s16 LE stereo 32 kHz), `OPENSTRIKERS_AUDIO_TRACE=2` logs
+  every voice as it starts (format, addresses, ratio, coefficients).
+- Advancing positions woke up the stream callback, which exposed two
+  game-side bugs (decomp-late/141): MusyX's stream user value is a u32 and
+  the game passed a host pointer (now a small handle), and the stream
+  header's ADPCM coefficients were handed over still big-endian, which made
+  every stream full-scale noise.
+- Measured on a 40 s capture: varied levels, no clipping, ~3-4.5k zero
+  crossings/s. **Not yet confirmed by ear.**
+- Open: all voices stop ~30 s in (voices 0, output 0) -- likely streams not
+  restarting after a state change; aux A/B buses, surround, ITD, low-pass,
+  depop not mixed; volume curve (`mix.vL` scale) unverified.
+
 ## Stages (each ends with a soak run: audio must not cost stability)
 
 1. **Compile MusyX in, still silent.** (done 2026-10-08, see notes) Add the runtime sources to the build

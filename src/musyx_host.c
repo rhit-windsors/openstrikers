@@ -72,11 +72,190 @@ bool salExitDsp() { return TRUE; }
 
 u32 salGetStartDelay() { return 0; }
 
+// ---------------------------------------------------------------------------
+// The host "DSP": mixes what MusyX's parameter blocks describe.
+//
+// A 5 ms frame is five 1 ms sub-frames of 32 samples. For each sub-frame
+// MusyX queues (field index, value) pairs in the voice's patchData (pitch,
+// envelope, the running flag at field 7), counted by pb->update.updNum[s];
+// the DSP applied them before rendering that sub-frame. Then per output
+// sample: step through the sample at the 16.16 ratio in pb->src, decode
+// DSP-ADPCM / PCM16 / PCM8 from ARAM, apply the envelope (pb->ve, delta per
+// sample) and the main left/right volumes (pb->mix, deltas per sample over
+// the frame). Positions are written back to the block, which is where MusyX
+// reads them (dsp_vptr->currentAddr, hwGetPos) on the next frame. A sample
+// that ends "loops" to its loop address -- for one-shots, ARAM's zero buffer;
+// MusyX ends those voices itself from its own play-position count.
+//
+// Not yet: aux A/B (effects), surround, ITD, low-pass, depop.
+
+#include <dolphin/ar.h>
+
+#define SUBFRAMES 5
+#define SUBFRAME_SAMPLES 32
+#define FRAME_SAMPLES (SUBFRAMES * SUBFRAME_SAMPLES)
+
+static s16 sMixOut[FRAME_SAMPLES * 2];
+
+static s16 clamp16(s32 v) { return (s16)(v > 32767 ? 32767 : (v < -32768 ? -32768 : v)); }
+
+static u32 pbAddr(u16 hi, u16 lo) { return ((u32)hi << 16) | lo; }
+
+// Fetch the next source sample at the voice's current address and advance.
+static s16 fetchSample(_PB* pb, const u8* aram, u32 aramSize) {
+  u32 addr = pbAddr(pb->addr.currentAddressHi, pb->addr.currentAddressLo);
+  u32 end = pbAddr(pb->addr.endAddressHi, pb->addr.endAddressLo);
+  s16 out = 0;
+
+  switch (pb->addr.format) {
+  case 0x0A: // PCM16, address in samples, big-endian in ARAM
+    if (addr * 2 + 1 < aramSize) {
+      out = (s16)((aram[addr * 2] << 8) | aram[addr * 2 + 1]);
+    }
+    break;
+  case 0x19: // PCM8, address in bytes
+    if (addr < aramSize) {
+      out = (s16)((s8)aram[addr] << 8);
+    }
+    break;
+  default: { // DSP-ADPCM, address in nibbles; 8-byte frames of header + 14 samples
+    s32 nib, s, c1, c2;
+    u32 ps;
+    if ((addr & 15) == 0) {
+      if ((addr >> 1) < aramSize) {
+        pb->adpcm.pred_scale = aram[addr >> 1];
+      }
+      addr += 2;
+    }
+    if ((addr >> 1) >= aramSize) {
+      break;
+    }
+    nib = (addr & 1) ? (aram[addr >> 1] & 0xF) : (aram[addr >> 1] >> 4);
+    if (nib >= 8) {
+      nib -= 16;
+    }
+    ps = pb->adpcm.pred_scale;
+    c1 = (s16)pb->adpcm.a[(ps >> 4) & 7][0];
+    c2 = (s16)pb->adpcm.a[(ps >> 4) & 7][1];
+    s = ((nib << (ps & 0xF)) << 11) + c1 * (s16)pb->adpcm.yn1 + c2 * (s16)pb->adpcm.yn2;
+    out = clamp16((s + 1024) >> 11);
+    pb->adpcm.yn2 = pb->adpcm.yn1;
+    pb->adpcm.yn1 = (u16)out;
+  } break;
+  }
+
+  if (addr >= end) {
+    addr = pbAddr(pb->addr.loopAddressHi, pb->addr.loopAddressLo);
+    if (pb->addr.format == 0 && pb->loopType == 0) {
+      pb->adpcm.pred_scale = pb->adpcmLoop.loop_pred_scale;
+      pb->adpcm.yn1 = pb->adpcmLoop.loop_yn1;
+      pb->adpcm.yn2 = pb->adpcmLoop.loop_yn2;
+    }
+  } else {
+    ++addr;
+  }
+  pb->addr.currentAddressHi = (u16)(addr >> 16);
+  pb->addr.currentAddressLo = (u16)addr;
+  return out;
+}
+
+static u8 sVoiceSeen[256];
+
+static void mixVoice(DSPvoice* dv, s32* accL, s32* accR, const u8* aram, u32 aramSize) {
+  _PB* pb = dv->pb;
+  u16* fields = (u16*)pb;
+  const u16* patch = (const u16*)dv->patchData;
+  int sub, i;
+  static int sTrace = -1;
+
+  if (sTrace < 0) {
+    const char* t = getenv("OPENSTRIKERS_AUDIO_TRACE");
+    sTrace = t != NULL && t[0] >= '2';
+  }
+  if (sTrace && !sVoiceSeen[dv - dspVoice]) {
+    sVoiceSeen[dv - dspVoice] = 1;
+    fprintf(stderr,
+            "openstrikers: voice %d start: smp %u comp %u fmt 0x%x addr 0x%x loop 0x%x end 0x%x loopType %u "
+            "ratio 0x%x src %u ps 0x%x coef %d,%d vol %d/%d\n",
+            (int)(dv - dspVoice), dv->smp_id, dv->smp_info.compType, pb->addr.format,
+            pbAddr(pb->addr.currentAddressHi, pb->addr.currentAddressLo),
+            pbAddr(pb->addr.loopAddressHi, pb->addr.loopAddressLo),
+            pbAddr(pb->addr.endAddressHi, pb->addr.endAddressLo), pb->loopType,
+            pbAddr(pb->src.ratioHi, pb->src.ratioLo), pb->srcSelect, pb->adpcm.pred_scale,
+            (s16)pb->adpcm.a[0][0], (s16)pb->adpcm.a[0][1], (s16)pb->mix.vL, (s16)pb->mix.vR);
+  }
+
+  for (sub = 0; sub < SUBFRAMES; ++sub) {
+    u32 ratio;
+    for (i = 0; i < pb->update.updNum[sub]; ++i, patch += 2) {
+      if (patch[0] < sizeof(_PB) / 2) {
+        fields[patch[0]] = patch[1];
+      }
+    }
+    if (pb->state != 1) {
+      continue;
+    }
+    ratio = pb->srcSelect == 2 ? 0x10000 : pbAddr(pb->src.ratioHi, pb->src.ratioLo);
+    for (i = 0; i < SUBFRAME_SAMPLES; ++i) {
+      int n = sub * SUBFRAME_SAMPLES + i;
+      s32 s0 = (s16)pb->src.last_samples[2];
+      s32 s1 = (s16)pb->src.last_samples[3];
+      u32 frac = pb->src.currentAddressFrac;
+      s32 smp = pb->srcSelect == 2 ? s1 : s0 + (((s1 - s0) * (s32)frac) >> 16);
+      s32 env = pb->ve.currentVolume;
+      u32 steps;
+
+      smp = (smp * env) >> 15;
+      accL[n] += (smp * (s32)(s16)pb->mix.vL) >> 15;
+      accR[n] += (smp * (s32)(s16)pb->mix.vR) >> 15;
+
+      env += (s16)pb->ve.currentDelta;
+      pb->ve.currentVolume = (u16)(env < 0 ? 0 : (env > 0x7FFF ? 0x7FFF : env));
+      pb->mix.vL += pb->mix.vDeltaL;
+      pb->mix.vR += pb->mix.vDeltaR;
+
+      frac += ratio;
+      steps = frac >> 16;
+      pb->src.currentAddressFrac = (u16)frac;
+      while (steps--) {
+        pb->src.last_samples[0] = pb->src.last_samples[1];
+        pb->src.last_samples[1] = pb->src.last_samples[2];
+        pb->src.last_samples[2] = pb->src.last_samples[3];
+        pb->src.last_samples[3] = (u16)fetchSample(pb, aram, aramSize);
+      }
+    }
+  }
+}
+
+static void hostMixFrame(void) {
+  static s32 accL[FRAME_SAMPLES], accR[FRAME_SAMPLES];
+  const u8* aram = (const u8*)ARGetStorageAddress();
+  u32 aramSize = ARGetSize();
+  int v, n;
+
+  memset(accL, 0, sizeof(accL));
+  memset(accR, 0, sizeof(accR));
+  if (aram != NULL) {
+    for (v = 0; v < salNumVoices; ++v) {
+      DSPvoice* dv = &dspVoice[v];
+      if (dv->state != 0 && dv->pb != NULL && dv->patchData != NULL) {
+        mixVoice(dv, accL, accR, aram, aramSize);
+      } else {
+        sVoiceSeen[v] = 0;
+      }
+    }
+  }
+  for (n = 0; n < FRAME_SAMPLES; ++n) {
+    sMixOut[n * 2] = clamp16(accL[n]);
+    sMixOut[n * 2 + 1] = clamp16(accR[n]);
+  }
+}
+
 void salCtrlDsp(s16* dest) {
   // Keep MusyX's per-frame DSP bookkeeping exactly as on hardware; only the
   // execution of the list is replaced.
   salBuildCommandList(dest, salGetStartDelay());
-  memset(dest, 0, DMA_BUFFER_LEN);
+  hostMixFrame();
 }
 
 // Single-threaded: MusyX only ever runs inside musyxHostPump on the game
@@ -88,8 +267,10 @@ void hwDisableIrq() {}
 void hwIRQEnterCritical() {}
 void hwIRQLeaveCritical() {}
 
-// Run `ticks` 5 ms audio frames. Returns how many ran.
-int musyxHostPump(int ticks) {
+// Run `ticks` 5 ms audio frames, appending each frame's 160 stereo s16
+// samples to `out` (room for ticks * 320 values) when it is not NULL.
+// Returns how many ran.
+int musyxHostPump(int ticks, s16* out) {
   int n = 0;
   if (!salAiRunning || userCallback == NULL) {
     return 0;
@@ -98,6 +279,9 @@ int musyxHostPump(int ticks) {
     salAIBufferIndex = (salAIBufferIndex + 1) % 4;
     userCallback();
     ++salTicks;
+    if (out != NULL) {
+      memcpy(out + n * FRAME_SAMPLES * 2, sMixOut, sizeof(sMixOut));
+    }
     {
       int v, active = 0;
       for (v = 0; v < salNumVoices; ++v) {

@@ -81,6 +81,8 @@ $runEnv = [ordered]@{
     OPENSTRIKERS_FIXED_STEP = '16.6667'
     OPENSTRIKERS_UNCAPPED   = '1'
     OPENSTRIKERS_AI_SKILL   = "$AiSkill"
+    # Fast-forwarded audio is noise; the audio build still mixes, just silently.
+    OPENSTRIKERS_AUDIO_MUTE = '1'
 }
 if ($MatchSeconds -gt 0) {
     $runEnv['OPENSTRIKERS_MATCH_SECONDS'] = "$MatchSeconds"

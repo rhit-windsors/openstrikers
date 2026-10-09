@@ -1,0 +1,173 @@
+--- a/include/Game/Sys/GCStream.h
++++ b/include/Game/Sys/GCStream.h
+@@ -37,7 +37,7 @@
+     /* 0x18 */ beu32 ca;
+     // Handed to musyx as a raw SND_ADPCMSTREAM_INFO*, never read as numbers
+     // here, so it stays a byte image -- which is what musyx wanted on hardware.
+-    // Whoever turns GOLDEN_DISABLE_AUDIO off owns swapping it there.
++    // With audio on, GCStream.cpp converts it to native s16 at that call.
+     /* 0x1C */ beu16 coef[16];
+     /* 0x3C */ beu16 gain;
+     /* 0x3E */ beu16 ps;
+@@ -124,6 +124,12 @@
+     /* 0x1C */ unsigned short m_LPFFreq;      // offset 0x1C, size 0x2
+ }; // total size: 0x20
+ 
++#ifdef __x86_64__
++// MusyX's stream user value is a u32; these map a buffer to a small handle.
++unsigned long HostStreamUserRegister(AudioStreamBuffer* pBuffer);
++AudioStreamBuffer* HostStreamUserLookup(unsigned long handle);
++#endif
++
+ enum BUFFER_ALLOC_STATE
+ {
+     BAS_Busy = 0,
+@@ -584,7 +590,7 @@
+ {
+ public:
+     MonoAudioStream(AudioBufferMgr& mgr);
+-    bool Open(const char* filename)
++    bool Open(const char* filename)
+     {
+         m_StreamLength = 0;
+         m_OldLength = 0;
+@@ -596,15 +602,15 @@
+         m_Flags = 0;
+         m_Volume = 64;
+         m_LPFOn = 0;
+-        m_LPFFreq = 0x3FFF;
+-        m_pFile = nlOpen(filename);
+-        if (m_pFile == NULL)
+-        {
+-            m_State = SS_New;
+-            return false;
+-        }
+-        m_State = SS_Initd;
+-        return true;
++        m_LPFFreq = 0x3FFF;
++        m_pFile = nlOpen(filename);
++        if (m_pFile == NULL)
++        {
++            m_State = SS_New;
++            return false;
++        }
++        m_State = SS_Initd;
++        return true;
+     }
+     inline virtual ~MonoAudioStream();
+     virtual unsigned long DoUpdateRead(unsigned long MRAMOffsetA, unsigned long LengthA, unsigned long MRAMOffsetB, unsigned long LengthB, GCAudioStreaming::AudioStreamBuffer* pRequestingBuffer);
+@@ -640,7 +646,7 @@
+ public:
+     StereoAudioStream(AudioBufferMgr& mgr);
+     void ReadHeader(unsigned long buffer);
+-    bool Open(const char* filename)
++    bool Open(const char* filename)
+     {
+         m_StreamLength = 0;
+         m_OldLength = 0;
+@@ -652,15 +658,15 @@
+         m_Flags = 0;
+         m_Volume = 64;
+         m_LPFOn = 0;
+-        m_LPFFreq = 0x3FFF;
+-        m_pFile = nlOpen(filename);
+-        if (m_pFile == NULL)
+-        {
+-            m_State = SS_New;
+-            return false;
+-        }
+-        m_State = SS_Initd;
+-        return true;
++        m_LPFFreq = 0x3FFF;
++        m_pFile = nlOpen(filename);
++        if (m_pFile == NULL)
++        {
++            m_State = SS_New;
++            return false;
++        }
++        m_State = SS_Initd;
++        return true;
+     }
+     virtual ~StereoAudioStream()
+     {
+--- a/include/Game/Sys/GCStreamVirtuals.h
++++ b/include/Game/Sys/GCStreamVirtuals.h
+@@ -43,7 +43,17 @@
+     void*, unsigned long LengthA, void*, unsigned long LengthB,
+     unsigned long user)
+ {
++#ifdef __x86_64__
++    // MusyX hands the stream's user value back as a u32, too narrow for a host
++    // pointer; the buffer registered a small handle instead (GCStream.cpp).
++    AudioStreamBuffer* pBuffer = HostStreamUserLookup(user);
++    if (pBuffer == NULL)
++    {
++        return 0;
++    }
++#else
+     AudioStreamBuffer* pBuffer = (AudioStreamBuffer*)user;
++#endif
+     return pBuffer->UpdateHandler(LengthA, LengthB);
+ }
+ 
+--- a/src/Game/Sys/GCStream.cpp
++++ b/src/Game/Sys/GCStream.cpp
+@@ -51,6 +51,27 @@
+ 
+ namespace GCAudioStreaming
+ {
++#ifdef __x86_64__
++static AudioStreamBuffer* sHostStreamUsers[64];
++
++unsigned long HostStreamUserRegister(AudioStreamBuffer* pBuffer)
++{
++    for (int i = 0; i < 64; i++)
++    {
++        if (sHostStreamUsers[i] == pBuffer || sHostStreamUsers[i] == NULL)
++        {
++            sHostStreamUsers[i] = pBuffer;
++            return (unsigned long)(i + 1);
++        }
++    }
++    return 0;
++}
++
++AudioStreamBuffer* HostStreamUserLookup(unsigned long handle)
++{
++    return (handle >= 1 && handle <= 64) ? sHostStreamUsers[handle - 1] : NULL;
++}
++#endif
+ 
+ inline void AudioStreamBuffer::SetVolume(
+     unsigned long volume)
+@@ -138,7 +159,17 @@
+         pBuffer = pCBInfo->pBuffer;
+ #ifndef GOLDEN_DISABLE_AUDIO
+         sndStreamFrq(pBuffer->m_StreamId, pHdr->sample_rate);
+-        sndStreamADPCMParameter(pBuffer->m_StreamId, (SND_ADPCMSTREAM_INFO*)pHdr->coef);
++        {
++            // The header's coefficients are big-endian on disc; musyx wants
++            // native s16 pairs.
++            SND_ADPCMSTREAM_INFO adpcmInfo;
++            for (int c = 0; c < 8; c++)
++            {
++                adpcmInfo.coefTab[c][0] = (s16)(u16)pHdr->coef[c * 2];
++                adpcmInfo.coefTab[c][1] = (s16)(u16)pHdr->coef[c * 2 + 1];
++            }
++            sndStreamADPCMParameter(pBuffer->m_StreamId, &adpcmInfo);
++        }
+ #endif
+ 
+         READ_CB_INFO::s_AllocPool.DeleteEntry(pCBInfo);
+@@ -793,7 +824,11 @@
+             0,
+             0x30001,
+             AudioStreamBuffer::_UpdateHandler,
++#ifdef __x86_64__
++            HostStreamUserRegister(&m_Buffers[buffer]),
++#else
+             (unsigned long)&m_Buffers[buffer],
++#endif
+             NULL);
+ 
+         sndStreamMixParameterEx(

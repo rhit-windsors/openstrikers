@@ -28,6 +28,11 @@
 #include <dolphin/pad.h>
 #include <dolphin/card.h>
 #include <SDL3/SDL_scancode.h>
+#ifndef GOLDEN_DISABLE_AUDIO
+#include <SDL3/SDL_audio.h>
+#include <SDL3/SDL_init.h>
+#include <SDL3/SDL_error.h>
+#endif
 
 namespace aurora {
 extern AuroraConfig g_config;
@@ -981,7 +986,7 @@ AutoplayControls autoplayControls(u32 frame) {
 } // namespace
 
 #ifndef GOLDEN_DISABLE_AUDIO
-extern "C" int musyxHostPump(int ticks);
+extern "C" int musyxHostPump(int ticks, s16* out);
 extern "C" unsigned long musyxHostTicks();
 extern "C" int musyxHostTakePeakVoices();
 
@@ -990,14 +995,71 @@ extern "C" int musyxHostTakePeakVoices();
 // so the synth never races the game. OPENSTRIKERS_AUDIO_TRACE=1 logs the tick
 // count every 600 frames.
 static void pumpAudio() {
+    // 160 stereo samples per 5 ms tick at 32 kHz.
+    static constexpr int kTickFrames = 160;
+    static constexpr int kBytesPerMs = 32 * 2 * 2;
+    static SDL_AudioStream* sStream = [] () -> SDL_AudioStream* {
+        const char* mute = std::getenv("OPENSTRIKERS_AUDIO_MUTE");
+        if (mute && mute[0] && mute[0] != '0') {
+            std::fprintf(stderr, "openstrikers: audio muted (OPENSTRIKERS_AUDIO_MUTE)\n");
+            return nullptr;
+        }
+        if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+            std::fprintf(stderr, "openstrikers: audio: SDL audio init failed: %s\n", SDL_GetError());
+            return nullptr;
+        }
+        const SDL_AudioSpec spec = {SDL_AUDIO_S16, 2, 32000};
+        SDL_AudioStream* stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
+        if (stream == nullptr) {
+            std::fprintf(stderr, "openstrikers: audio: no output device: %s\n", SDL_GetError());
+            return nullptr;
+        }
+        SDL_ResumeAudioStreamDevice(stream);
+        std::fprintf(stderr, "openstrikers: audio output open (32000 Hz stereo)\n");
+        return stream;
+    }();
+
+    // OPENSTRIKERS_AUDIO_RAW=<file> also writes the mix there: raw s16
+    // stereo, 32000 Hz, little-endian.
+    static std::FILE* sRaw = [] () -> std::FILE* {
+        const char* path = std::getenv("OPENSTRIKERS_AUDIO_RAW");
+        return path && path[0] ? std::fopen(path, "wb") : nullptr;
+    }();
+    static int sPeakLevel = 0;
     static double sPendingMs = 0.0;
     sPendingMs += 1000.0 / 60.0;
     int ticks = (int)(sPendingMs / 5.0);
     sPendingMs -= ticks * 5.0;
-    musyxHostPump(ticks);
+    if (sStream != nullptr && SDL_GetAudioStreamQueued(sStream) < 15 * kBytesPerMs) {
+        ++ticks; // about to underrun: run a little ahead of game time
+    }
+    static s16 sBuf[8 * kTickFrames * 2];
+    while (ticks > 0) {
+        const int n = ticks > 8 ? 8 : ticks;
+        musyxHostPump(n, sBuf);
+        for (int k = 0; k < n * kTickFrames * 2; ++k) {
+            const int a = sBuf[k] < 0 ? -sBuf[k] : sBuf[k];
+            if (a > sPeakLevel) {
+                sPeakLevel = a;
+            }
+        }
+        if (sRaw != nullptr) {
+            std::fwrite(sBuf, sizeof(s16), n * kTickFrames * 2, sRaw);
+        }
+        // Fast-forward (soak runs) makes ticks faster than real time; drop
+        // what the device cannot keep up with rather than build up latency.
+        if (sStream != nullptr && SDL_GetAudioStreamQueued(sStream) < 150 * kBytesPerMs) {
+            SDL_PutAudioStreamData(sStream, sBuf, n * kTickFrames * 2 * (int)sizeof(s16));
+        }
+        ticks -= n;
+    }
     static const bool sTrace = [] { const char* v = std::getenv("OPENSTRIKERS_AUDIO_TRACE"); return v && v[0] && v[0] != '0'; }();
     if (sTrace && sHostFrame % 600 == 0) {
-        std::fprintf(stderr, "openstrikers: audio ticks %lu, peak voices %d, at frame %lu\n", musyxHostTicks(), musyxHostTakePeakVoices(), (unsigned long)sHostFrame);
+        std::fprintf(stderr, "openstrikers: audio ticks %lu, peak voices %d, peak level %d, at frame %lu\n", musyxHostTicks(), musyxHostTakePeakVoices(), sPeakLevel, (unsigned long)sHostFrame);
+        sPeakLevel = 0;
+        if (sRaw != nullptr) {
+            std::fflush(sRaw);
+        }
     }
 }
 #endif
