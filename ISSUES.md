@@ -6,16 +6,28 @@ issue is reproduced, narrowed down, or fixed.
 
 ## Active issues
 
-None known as of 2026-10-10. Audio is being brought up separately in `build-audio/` (`docs/PLAN-audio.md`); report what sounds wrong there.
+None open as of 2026-10-10. Audio lives in `build-audio/` (`docs/PLAN-audio.md`); report what sounds wrong there.
 
+## Fixed, keep an eye on
+
+- **Players a little too dark in replays** (reported 2026-10-10, no code
+  change). Measured, not fixed: a real goal replay runs in task state 0x10,
+  where -- as in the original -- characters keep the fixed in-game key/fill
+  lights (camera-relative lighting is only for 0x100 cutscenes,
+  `TransitionTask::StateTransition`). Logged in the drawing camera's space
+  the key light sits where it does in live play (replay -0.32,0.68,0.66 vs
+  live -0.29,0.53,0.80), and ambient is black in both (authentic: the
+  game's `world_ambient` is a static zero). Players darken only in shots
+  facing into the key light, along with the stadium. The user found replays
+  looking fine afterwards. Trap: `OPENSTRIKERS_TEST_AUTO_REPLAY` leaves state
+  0x10 within a frame and plays the replay camera in gameplay state, which
+  renders players near-black -- do not judge replay lighting with it.
 - **Probably fixed (2026-10-10): access violation at startup in aurora's
   pipeline-cache loader** (`pipeline_cache.cpp:1043`, `pipeline_worker`
   thread, reading 0x44c000), seen once in `build-audio/`. 0x44C000 is the
   second MusyX sound stack's ARAM base, which MusyX was writing past its
   undersized work block (`patches/musyx/003`, see `docs/PLAN-audio.md`).
   Report it if it comes back.
-
-## Fixed, keep an eye on
 
 These are fixed but were seen by the user in ordinary play, so reopen them with
 the new crash report (or a screenshot) if they come back.
