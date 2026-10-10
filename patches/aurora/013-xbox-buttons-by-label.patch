@@ -1,0 +1,32 @@
+# Map an Xbox controller's B and X to the GameCube's B and X.
+#
+# Upstream 1d52d36 switched the Xbox defaults to a positional layout: the
+# GameCube's B sits left of A and X sits right, so Xbox West became B and
+# Xbox East became X. That swapped the two buttons for everyone used to
+# the earlier label-for-label mapping, so restore it for Xbox 360 and Xbox
+# One/Series controllers. Saved per-controller mappings still take
+# precedence, and the GameCube adapter tables are unchanged.
+--- a/lib/dolphin/pad/pad.cpp
++++ b/lib/dolphin/pad/pad.cpp
+@@ -36,8 +36,8 @@
+ 
+ std::array<PADButtonMapping, PAD_BUTTON_COUNT> g_defaultButtonsXBox360{{
+     {SDL_GAMEPAD_BUTTON_SOUTH, PAD_BUTTON_A},
+-    {SDL_GAMEPAD_BUTTON_EAST, PAD_BUTTON_X},
+-    {SDL_GAMEPAD_BUTTON_WEST, PAD_BUTTON_B},
++    {SDL_GAMEPAD_BUTTON_EAST, PAD_BUTTON_B},
++    {SDL_GAMEPAD_BUTTON_WEST, PAD_BUTTON_X},
+     {SDL_GAMEPAD_BUTTON_NORTH, PAD_BUTTON_Y},
+     {SDL_GAMEPAD_BUTTON_START, PAD_BUTTON_START},
+     {SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, PAD_TRIGGER_Z},
+@@ -51,8 +51,8 @@
+ 
+ std::array<PADButtonMapping, PAD_BUTTON_COUNT> g_defaultButtonsXBoxOne{{
+     {SDL_GAMEPAD_BUTTON_SOUTH, PAD_BUTTON_A},
+-    {SDL_GAMEPAD_BUTTON_EAST, PAD_BUTTON_X},
+-    {SDL_GAMEPAD_BUTTON_WEST, PAD_BUTTON_B},
++    {SDL_GAMEPAD_BUTTON_EAST, PAD_BUTTON_B},
++    {SDL_GAMEPAD_BUTTON_WEST, PAD_BUTTON_X},
+     {SDL_GAMEPAD_BUTTON_NORTH, PAD_BUTTON_Y},
+     {SDL_GAMEPAD_BUTTON_START, PAD_BUTTON_START},
+     {SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, PAD_TRIGGER_Z},
