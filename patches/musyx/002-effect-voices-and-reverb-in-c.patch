@@ -1,0 +1,208 @@
+--- a/src/musyx/runtime/synthvoice.c
++++ b/src/musyx/runtime/synthvoice.c
+@@ -405,7 +405,9 @@
+   return -1;
+ }
+ 
+-static void voiceAllocateDo(s32 voice, u8 fxFlag) {
++// Returns the voice: voiceAllocate passes it on. The decompiled source had no
++// return statement; CodeWarrior left the voice in r3, x64 returns garbage.
++static s32 voiceAllocateDo(s32 voice, u8 fxFlag) {
+   s32 i;                // r30
+   SYNTH_VOICELIST* sfv; // r31
+ 
+@@ -433,10 +435,11 @@
+     }
+     if (fxFlag != 0) {
+       voiceFxRunning++;
+-      return;
++      return voice;
+     }
+     voiceMusicRunning++;
+   }
++  return voice;
+ }
+ #endif
+ 
+@@ -448,7 +451,7 @@
+ #endif
+                   u8 fxFlag) {
+ #if MUSY_VERSION >= MUSY_VERSION_CHECK(2, 0, 1)
+-  voiceAllocateDo(voiceAllocateFind(priority, maxVoices, allocId, fxFlag), fxFlag);
++  return voiceAllocateDo(voiceAllocateFind(priority, maxVoices, allocId, fxFlag), fxFlag);
+ #else
+   s32 i;                // r31
+   s32 num;              // r26
+--- a/src/musyx/runtime/synthdata.c
++++ b/src/musyx/runtime/synthdata.c
+@@ -612,7 +612,7 @@
+     base = dataMacMainTab[main].subTabIndex;
+     key.id = mid;
+     if ((result = (MAC_SUBTAB*)sndBSearch(&key, &dataMacSubTabmem[base], dataMacMainTab[main].num,
+-                                          8, maccmp)) != NULL) {
++                                          sizeof(MAC_SUBTAB), maccmp)) != NULL) {
+       return result->data;
+     }
+   }
+--- a/src/musyx/runtime/StdReverb/reverb.c
++++ b/src/musyx/runtime/StdReverb/reverb.c
+@@ -233,8 +233,16 @@
+ }
+ #else
+ /* clang-format on */
++// C version of the paired-single loop above: each sample pair is mixed
++// across the two channels, a' = a * end + b * start, b' = a * start + b * end.
+ static void DoCrossTalk(s32* a, s32* b, f32 start, f32 end) {
+-  // TODO: Reimplement in C
++  int i;
++  for (i = 0; i < 160; ++i) {
++    f32 fa = (f32)a[i];
++    f32 fb = (f32)b[i];
++    a[i] = (s32)lrintf(fa * end + fb * start);
++    b[i] = (s32)lrintf(fa * start + fb * end);
++  }
+ }
+ #endif
+ 
+@@ -597,8 +605,68 @@
+ }
+ /* clang-format on */
+ #else
+-static void HandleReverb(s32* sptr, SND_AUX_REVERBHI* rv, s32 k) {
+-  // TODO: Reimplement in C
++// C version of the loop above, for one channel k of 160 samples: optional
++// pre-delay, three parallel combs, two all-passes, a one-pole low-pass, a
++// third all-pass, then wet * level * 0.6 + dry * (0.6 - level * 0.6).
++// Delay-line indexes are byte offsets, as in the assembly.
++#define DL_AT(dl, off) (*(f32*)((u8*)(dl)->inputs + (off)))
++static inline f32 DLstep(_SND_REVHI_DELAYLINE* dl, f32 in) {
++  f32 out;
++  DL_AT(dl, dl->inPoint) = in;
++  dl->inPoint += 4;
++  if (dl->inPoint == dl->length) {
++    dl->inPoint = 0;
++  }
++  out = DL_AT(dl, dl->outPoint);
++  dl->outPoint += 4;
++  if (dl->outPoint == dl->length) {
++    dl->outPoint = 0;
++  }
++  return out;
++}
++
++static void HandleReverb(s32* sptr, SND_AUX_REVERBHI* rev, s32 k) {
++  _SND_REVHI_WORK* rv = &rev->rv;
++  _SND_REVHI_DELAYLINE* C = &rv->C[k * 3];
++  _SND_REVHI_DELAYLINE* AP = &rv->AP[k * 3];
++  f32 ap = rv->allPassCoeff;
++  f32 wet = rv->level * 0.6f;
++  f32 dry = 0.6f - wet;
++  f32 lp = rv->lpLastout[k];
++  f32* pd = rv->preDelayPtr[k];
++  f32* pdEnd = rv->preDelayTime != 0 ? rv->preDelayLine[k] + (rv->preDelayTime - 1) : NULL;
++  int i, j;
++
++  for (i = 0; i < 160; ++i) {
++    f32 x = (f32)sptr[i];
++    f32 in = x;
++    f32 s, t;
++    if (pd != NULL) {
++      in = *pd;
++      *pd++ = x;
++      if (pd == pdEnd) {
++        pd = rv->preDelayLine[k];
++      }
++    }
++    s = 0.f;
++    for (j = 0; j < 3; ++j) {
++      C[j].lastOutput = DLstep(&C[j], rv->combCoef[k * 3 + j] * C[j].lastOutput + in);
++      s += C[j].lastOutput;
++    }
++    for (j = 0; j < 2; ++j) {
++      t = ap * AP[j].lastOutput + s;
++      s = AP[j].lastOutput - ap * t;
++      AP[j].lastOutput = DLstep(&AP[j], t);
++    }
++    s = rv->damping * lp + s * 0.3f;
++    lp = s;
++    t = ap * AP[2].lastOutput + s;
++    s = AP[2].lastOutput - ap * t;
++    AP[2].lastOutput = DLstep(&AP[2], t);
++    sptr[i] = (s32)(wet * s + dry * x);
++  }
++  rv->lpLastout[k] = lp;
++  rv->preDelayPtr[k] = pd;
+ }
+ #endif
+ 
+--- a/src/musyx/runtime/CheapReverb/creverb.c
++++ b/src/musyx/runtime/CheapReverb/creverb.c
+@@ -417,8 +417,67 @@
+ }
+ #else
+ /* clang-format on */
++// C version of the loop above. The three channels (left, right, surround)
++// are 160 samples each, back to back; per channel: optional pre-delay, two
++// parallel combs, an all-pass, a one-pole low-pass, a second all-pass, then
++// wet * level * 0.6 + dry * (0.6 - level * 0.6). Delay-line indexes are byte
++// offsets, as in the assembly.
++#define DL_AT(dl, off) (*(f32*)((u8*)(dl)->inputs + (off)))
++static inline f32 DLstep(_SND_REVSTD_DELAYLINE* dl, f32 in) {
++  f32 out;
++  DL_AT(dl, dl->inPoint) = in;
++  dl->inPoint += 4;
++  if (dl->inPoint == dl->length) {
++    dl->inPoint = 0;
++  }
++  out = DL_AT(dl, dl->outPoint);
++  dl->outPoint += 4;
++  if (dl->outPoint == dl->length) {
++    dl->outPoint = 0;
++  }
++  return out;
++}
++
+ static void HandleReverb(s32* sptr, struct _SND_REVSTD_WORK* rv) {
+-  // TODO: Reimplement this in C
++  f32 ap = rv->allPassCoeff;
++  f32 wet = rv->level * 0.6f;
++  f32 dry = 0.6f - wet;
++  int k, i;
++
++  for (k = 0; k < 3; ++k, sptr += 160) {
++    _SND_REVSTD_DELAYLINE* C = &rv->C[k * 2];
++    _SND_REVSTD_DELAYLINE* AP = &rv->AP[k * 2];
++    f32 lp = rv->lpLastout[k];
++    f32* pd = rv->preDelayPtr[k];
++    f32* pdEnd = rv->preDelayTime != 0 ? rv->preDelayLine[k] + (rv->preDelayTime - 1) : NULL;
++
++    for (i = 0; i < 160; ++i) {
++      f32 x = (f32)sptr[i];
++      f32 in = x;
++      f32 s, t;
++      if (pd != NULL) {
++        in = *pd;
++        *pd++ = x;
++        if (pd == pdEnd) {
++          pd = rv->preDelayLine[k];
++        }
++      }
++      C[0].lastOutput = DLstep(&C[0], rv->combCoef[k * 2] * C[0].lastOutput + in);
++      C[1].lastOutput = DLstep(&C[1], rv->combCoef[k * 2 + 1] * C[1].lastOutput + in);
++      s = C[0].lastOutput + C[1].lastOutput;
++      t = ap * AP[0].lastOutput + s;
++      s = AP[0].lastOutput - ap * t;
++      AP[0].lastOutput = DLstep(&AP[0], t);
++      s = rv->damping * lp + s * 0.3f;
++      lp = s;
++      t = ap * AP[1].lastOutput + s;
++      s = AP[1].lastOutput - ap * t;
++      AP[1].lastOutput = DLstep(&AP[1], t);
++      sptr[i] = (s32)(wet * s + dry * x);
++    }
++    rv->lpLastout[k] = lp;
++    rv->preDelayPtr[k] = pd;
++  }
+ }
+ #endif
+ 

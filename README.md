@@ -15,28 +15,38 @@ Current known problems are tracked in [`ISSUES.md`](ISSUES.md).
 
 ![A match in progress at Peach & Toad Stadium](docs/screenshots/gameplay-pitch.png)
 
-![Play near the penalty area](docs/screenshots/gameplay-action.png)
+![Play in midfield, a minute into the match](docs/screenshots/gameplay-action.png)
 
-Both captured from the current build with `capture.ps1`. The flat lime-green
-keeper in the second shot is the open material/lighting issue, not an artifact
-of the capture.
+![The keeper waits in the goalmouth](docs/screenshots/gameplay-goalmouth.png)
+
+All three captured from the current build with `capture.ps1` (2026-10-09).
+Lighting and character materials match the original now; the keeper in the
+last shot was once a flat lime green.
 
 ---
 
 ## Status
 
+Whole matches play from kickoff to the recaps and back to the menu, with
+goals, super strikes, replays and celebration cinematics. There are no known
+open issues (`ISSUES.md`); the work in progress is audio, which plays in the
+separate `build-audio/` build.
+
 | | |
 |---|---|
-| Windows (native, MSYS2 UCRT64) | front end complete; a match loads and runs -- `smoke-test.ps1` passes |
+| Windows (native, MSYS2 UCRT64) | front end complete; full matches play -- `smoke-test.ps1` passes |
+| Stability | unattended `soak.ps1` runs play match after match: 15 minutes of fast-forwarded play (59 matches, 143 goals) without a crash, and the allocator validator finds no heap damage |
 | Linux / WSL (GCC) | builds and boots (not re-verified since the render/input work) |
-| Rendering | 2D/front end, the in-match HUD, stadium and animated characters draw correctly; lighting and some background surfaces are still wrong -- see `ISSUES.md` |
+| Rendering | 2D/front end, the in-match HUD, stadium, lighting and animated characters draw correctly |
+| Match options | adds a 1:00 game time (Options → Gameplay → Game Time) alongside the original lengths |
 | Characters | stay planted on the pitch -- see [Characters floated because a mirrored blend read a dead stack slot](#characters-floated-because-a-mirrored-blend-read-a-dead-stack-slot) |
 | 3D models | `.bmd` loads (342 models for the palace) plus skin meshes; shared-array geometry corruption is fixed -- see [The match rendering fix](#the-match-rendering-fix) |
 | Leaving a match | quitting from the pause menu returns to the main menu and keeps running |
 | Replays | snapshot playback completes on the 64-bit host; pointer-width and highlight-layout faults fixed |
 | Input | keyboard on port 0, plus any SDL gamepad, paced to 60 Hz |
 | Memory card | creates, writes and reads its save file |
-| Audio | off in `build/`; `-DOPENSTRIKERS_AUDIO=ON` builds MusyX (stage 1 of `docs/PLAN-audio.md`: runs, still silent) |
+| Audio | off in `build/`; `-DOPENSTRIKERS_AUDIO=ON` (`build-audio/`) plays music, crowd, sound effects and stadium reverb through MusyX and a host stand-in for the DSP -- see [Building with audio](#building-with-audio) and `docs/PLAN-audio.md`. Not yet: Dolby Pro Logic II |
+| Movies | the intro, the NLG logo and the Strikers 101 lessons play in both builds (`src/thp_host.c` decodes THP video; their sound needs `build-audio/`) |
 
 The game boots, loads the front-end `.fen` scene package, runs its timeline
 animations, presents the health-and-safety screen, checks the memory card,
@@ -629,7 +639,7 @@ make sure it is covered.
 
 ### Patch stages, and why the order matters
 
-The patches are applied in four stages, in this order:
+The patches are applied in five stages, in this order:
 
 | Stage | Applied to | What lives there |
 |---|---|---|
@@ -749,6 +759,36 @@ just gen-dbg && just build-dbg   # -DCMAKE_BUILD_TYPE=Debug, build-dbg/
 
 `just show-err` re-runs the build and greps the output for `error:`, which is
 considerably more readable than scrolling a wall of template diagnostics.
+
+### Building with audio
+
+Audio is off by default: `build/` defines `GOLDEN_DISABLE_AUDIO`, which stubs
+the game's audio layer. Configure a second build directory with
+`-DOPENSTRIKERS_AUDIO=ON` (same flags otherwise):
+
+```bash
+cmake -S . -B build-audio -G Ninja \
+      -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+      -DOPENSTRIKERS_AUDIO=ON
+cmake --build build-audio
+```
+
+This compiles the game's sound engine, MusyX (`extern/decomp/extern/musyx`,
+patched by `patches/musyx/`), on its GameCube code paths. The one piece of
+GameCube hardware it needs that nothing provides is the DSP, which mixed the
+voices; `src/musyx_host.c` stands in for it, decoding DSP-ADPCM and PCM from
+emulated ARAM, resampling, applying volumes and envelopes, and mixing the main
+and effect buses, and MusyX's own reverb runs on the effect bus. Output goes to
+an SDL3 audio stream at 32 kHz stereo. Movies (THP) mix their sound into the
+same output. Environment switches:
+
+| Variable | Effect |
+|---|---|
+| `OPENSTRIKERS_AUDIO_MUTE=1` | mix but do not open an audio device (`soak.ps1` sets it) |
+| `OPENSTRIKERS_AUDIO_RAW=<file>` | also write the mix to a file (s16 little-endian, stereo, 32 kHz) |
+| `OPENSTRIKERS_AUDIO_TRACE=1` | log audio ticks, peak voices and peak level every 600 frames |
+| `OPENSTRIKERS_AUDIO_TRACE=2` | also log each voice as it starts |
 
 ---
 

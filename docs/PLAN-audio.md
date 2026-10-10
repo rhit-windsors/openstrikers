@@ -93,9 +93,144 @@ and peak active voices every 600 frames.
 - Measured on a 40 s capture: varied levels, no clipping, ~3-4.5k zero
   crossings/s. Confirmed by ear 2026-10-09: music and crowd play; "some of
   the audio works" -- next session, ask which sounds are missing or wrong.
-- Open: all voices stop ~30 s in (voices 0, output 0) -- likely streams not
-  restarting after a state change; aux A/B buses, surround, ITD, low-pass,
-  depop not mixed; volume curve (`mix.vL` scale) unverified.
+- The "all voices stop ~30 s in" seen once did not come back: a 4-minute
+  run kept voices and output going through three goals. Short quiet spells
+  (a second or two at level 0) do occur around goals and replays.
+
+## Stage 2 notes, part 2 (2026-10-09): sound effects
+
+"Some of the audio works" turned out to mean only the streams (music,
+crowd): 402 of 408 sound-effect starts in a 45 s match failed inside MusyX.
+Two 64-bit bugs in MusyX itself (`patches/musyx/002`):
+
+- `dataGetMacro` binary-searched the macro table with a literal element size
+  of 8; the entry holds a pointer and is 16 bytes on x64, so every lookup
+  missed and `macStart` gave up ("no macro"). Now `sizeof(MAC_SUBTAB)`.
+- `voiceAllocate` (2.0.1+ path) had no return statement; CodeWarrior left
+  the allocated voice in r3, GCC returns garbage. `voiceAllocateDo` now
+  returns the voice and `voiceAllocate` passes it on. (A `-Wreturn-type`
+  pass over all of MusyX found no other.)
+
+After: every plain effect start succeeds; 3D emitter starts return -1 by
+design (a caller-owned emitter is started later by the 3D update). Up to 57
+voices at once, one clipped sample in 40 s.
+
+## Stage 4 notes (2026-10-09): aux buses and reverb
+
+- The mixer now follows the DSP command list per studio: voices go into
+  MusyX's own buffers -- `main[salFrame]`, `auxA/auxB[salAuxFrame]`, each
+  left/right/surround x 160 s32 -- with all nine volumes and their per-sample
+  ramps; studio inputs mix another studio's previous frame; the aux return is
+  `aux[(salAuxFrame + 1) % 3]`, which MusyX's `salHandleAuxProcessing` ran
+  the effect callback on during the previous frame (two frames of latency,
+  as on the hardware); depop fades from the studio block are added; master
+  studios are summed, surround matrixed into L/R at -3 dB. Voices write their
+  last per-bus output to `pb->dpop` so stopped voices fade out. One-pole
+  low-pass (`pb->lpf`) is applied too. ITD is not.
+- The game puts one reverb on aux A per stadium (`InitializeReverb`,
+  standard or high quality from the audio config). MusyX's reverb inner loops
+  are PowerPC paired-single assembly with empty stubs elsewhere; `reverb.c`
+  (HI: crosstalk, 3 combs, 3 all-passes, low-pass, pre-delay) and
+  `creverb.c` (STD: 2 combs, 2 all-passes) now have C versions of
+  `HandleReverb` / `DoCrossTalk` transcribed from the assembly. Chorus is
+  still a stub (the game never selects it).
+- `PlatAudio::AddAuxEffect` stored the settings pointer through `void**`
+  into an `s32` global (overwriting its neighbour) and the shutdown path cast
+  the truncated value back to a pointer (decomp-late/142: `intptr_t`).
+- `OPENSTRIKERS_AUDIO_TRACE` logs when a studio's effects change
+  ("studio 0 effects: aux A on").
+- Soak gate (stages 2 and 4 together): seed 502, audio build, muted, 15
+  minutes -- survived, 436800 frames, 12 matches, 148 goals.
+- Open: volume curve unverified by ear; ITD; Dolby Pro Logic II studio
+  type; chorus.
+
+## Stage 3 notes (2026-10-09): streams, and the crowd piling up
+
+- Streams: menu music plays from the legal screens on, and stadium music and
+  crowd streams ran through two 15-minute soaks; the file pool stayed healthy.
+- "Slightly odd in places" (user, 2026-10-09) was mostly clipping: in a real
+  match the output hit full scale every few seconds, up to 2.3% of samples
+  clipped. `OPENSTRIKERS_AUDIO_TRACE=3` (lists what is playing when the
+  output clips) showed 6-7 copies of the same long crowd samples at once.
+  The cause was game-side: `AudioScriptEventMgr`'s settings were
+  `static const ... = { 0 }`, written by `Init()` through a cast. MWCC left
+  that object writable and `Poll()` read the config values; GCC folds reads
+  of a zero-initialised const to 0, so the minimum period between "good
+  position" crowd reactions and the bored timers were 0 and those events
+  fired every frame (560 in 35 s), each starting a 3.7 s crowd sample
+  (decomp-late/143; no other const object in the decomp is written this
+  way). After: peak voices ~24 instead of ~58, no clipping in 90 s.
+- Three audio calls were compiled out with `#ifndef TARGET_PC` (the heckle
+  stream's pan and `sndVolume`, which applies the SFX volume option); they
+  now key on `GOLDEN_DISABLE_AUDIO` (decomp-late/144).
+- Voice lifetimes were checked against sample length and pitch (trace 2
+  logs "voice N end"); they match exactly, so MusyX ends voices correctly.
+- Still linear interpolation where the DSP used a 4-tap polyphase filter;
+  if pitched-down effects sound dull or grainy, that is next. (Done in
+  stage 5's session.)
+
+## Stage 5 notes (2026-10-10): movies, and the polyphase resampler
+
+- Movies were silently skipped, not just silent: `THPSimpleOpen` read the
+  big-endian header raw, failed its version check, and `MovieStart` returned
+  false. `THPVideoDecode` and `THPAudioDecode` were stubs as well, so this
+  stage brings up the video too. Movies: `intromovie.thp` (after the legal
+  screens, 65 s), the NLG logos, and 12 Strikers 101 lessons; all 512x416,
+  29.97 fps, 32 kHz stereo audio (the lessons' audio track is silent -- their
+  narration is the Announcer stream).
+- `src/thp_host.c` (both builds): the SDK's video decoder is paired-single
+  assembly, so it is rewritten in C from the format -- baseline JPEG, 4:2:0,
+  written straight into the three GX I8 textures (8x4 tiles) that the FE
+  material combines. THP scans have **no 0xFF00 byte stuffing** (checked over
+  every frame of lesson1) and restarts are a byte realign with no RST marker.
+  About 2 ms a frame. The audio decoder follows `THPAudio.c`, reading its
+  header big-endian, and writes left first (the SDK wrote right first, the
+  AI's order; the host mixer is left first).
+- `decomp-late/145`: the header, component and info blocks and the per-frame
+  size words are swapped; `THPSimpleDecode` indexed `mIsValid` as
+  `int[i * 3]` (a 12-byte read buffer; 16 bytes with a 64-bit pointer); the
+  GameCube chained onto the AI DMA callback and cast buffers through `u32`, so
+  on the host `musyxHostSetPostMix` hands each finished 5 ms frame to the
+  player instead (AudioSystem 3: MusyX's frame plus the movie). Without audio
+  to pace it (`build/`, or a movie without sound) decoding follows the movie's
+  frame rate on `OSGetTime`.
+- Verified on the intro movie: the in-game mix correlates 1.0000 with the
+  offline decode at every point checked, zero samples of drift over 65 s, no
+  clipping, menu music resumes after. In `build/` it ran 3900 host frames
+  (65.0 s). The FE's YUV combine renders correctly on aurora unchanged. The
+  lesson movies are the same path but were not played in a test.
+- The mixer's SRC is now a 4-tap polyphase filter for `srcSelect` 0 (MusyX's
+  default), linear for 1, none for 2. Coefficients are our own (Hann-windowed
+  sinc, 128 phases, sets read as 8/12/16 kHz cutoffs; MusyX picks set 1).
+  Linear interpolation's response swung between 1.0 and 0.38 at 3/4 Nyquist
+  depending on phase; set 1 stays within 0.41-0.61.
+- Soak gate: seed 502, audio build, muted, 15 minutes -- survived, 447000
+  frames, 12 matches, 154 goals (gameplay only; movies are front-end).
+
+## Second sound stack (2026-10-10): logo voices, menu trumpets, silent character select
+
+User report: the Nintendo / Next Level Games logo voices were corrupted,
+"random trumpet sounds" played when clicking around the menus, and
+characters made no sound when selected. All one bug. `PlatAudio::Initialize`
+adds a second MusyX sound stack (ARAM 0x44C000-0x700000) for groups the
+front end loads and drops (the logo dialogue groups 44/45, the FE button
+group and others), with work memory sized by `sndStackGetSize()` -- a
+literal 0x618, `GSTACK_INST` on the GameCube. On x64 the struct is 0xC20
+(`gs[128]` holds three pointers each), so MusyX wrote the stack's ARAM
+range ~0x600 bytes past the block: the stack read back as base 0, top 0,
+every sample pushed onto it got ARAM address 0, and those voices played
+whatever sat at the bottom of ARAM. Found by logging each sample upload
+(`base 0x0 write 0x4 top 0x0` on stack 0). `patches/musyx/003` returns
+`sizeof(GSTACK_INST)`, and also stops `hwSaveSample` reading the sample
+header pointer and writing the sample address through `u32` casts (it only
+worked while those heap pointers were below 4 GB).
+
+The overrun also wrote 0x44C000 (that stack's ARAM base) into a neighbouring
+heap block -- the address the one-off startup crash in aurora's pipeline
+cache was reading (ISSUES.md).
+
+Soak gate: seed 503, audio build, muted, 15 minutes -- survived, 414000
+frames, 11 matches, 146 goals.
 
 ## Stages (each ends with a soak run: audio must not cost stability)
 
@@ -105,14 +240,14 @@ and peak active voices every 600 frames.
    frame. Expect the usual 64-bit traps in MusyX's data loading (pool/project/
    sample-directory structs read from disc, big-endian, 4-byte pointers).
    Pass: game plays matches as before; `sndFXStart` returns real voice IDs.
-2. **Mixer for sound effects.** ADPCM/PCM decode, SRC, volume ramps, main bus
+2. **Mixer for sound effects.** (done 2026-10-09) ADPCM/PCM decode, SRC, volume ramps, main bus
    to SDL3. Pass: menu clicks and kicks are audible and at the right pitch.
-3. **Streams.** Music and announcer/crowd streams (`sndStreamAllocEx`, ARAM
+3. **Streams.** (done 2026-10-09; soak pending at time of writing) Music and announcer/crowd streams (`sndStreamAllocEx`, ARAM
    ring buffers fed by `GCStream`). Pass: menu music and stadium music play,
    loop, and stop cleanly; the file pool stays healthy over a soak.
-4. **Aux buses and effects.** Reverb/chorus/delay callbacks, surround mixdown
+4. **Aux buses and effects.** (reverb done 2026-10-09; chorus, DPL2 not) Reverb/chorus/delay callbacks, surround mixdown
    (Dolby Pro Logic II off). Pass: stadium ambience sounds right.
-5. **Movies.** THP audio (`THPAudioDecode` is stubbed). Lowest priority.
+5. **Movies.** (done 2026-10-10, see notes) THP audio (`THPAudioDecode` is stubbed). Lowest priority.
 
 New log lines for soak: voices active per second, stream underruns, and
 mixer frames late, so a regression shows up without listening.

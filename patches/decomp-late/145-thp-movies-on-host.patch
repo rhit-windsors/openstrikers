@@ -1,0 +1,230 @@
+--- a/src/Game/Sys/THPSimple.cpp
++++ b/src/Game/Sys/THPSimple.cpp
+@@ -12,8 +12,44 @@
+ 
+ #include <string.h>
+ 
++#include "NL/nlEndian.h"
++
+ static void THPAudioMixCallback();
+ 
++// THP files are big-endian: the header and info blocks are swapped once when
++// read, and the per-frame size words are read through this.
++static inline u32 THPFileWord(const void* p)
++{
++    return *(const nlBE<u32>*)p;
++}
++
++#if !NL_HOST_BIG_ENDIAN
++static void THPSwapWords(void* p, int count)
++{
++    u32* w = (u32*)p;
++    for (int i = 0; i < count; i++)
++    {
++        w[i] = nlByteSwap(w[i]);
++    }
++}
++#else
++static inline void THPSwapWords(void*, int) { }
++#endif
++
++#ifndef GOLDEN_DISABLE_AUDIO
++// musyx_host.c: there is no audio interface DMA to chain onto; the host mixer
++// hands each finished 5 ms frame to this hook instead (see THPHostMix).
++extern "C" void musyxHostSetPostMix(void (*fn)(s16* frame, u32 samples));
++static void THPHostMix(s16* frame, u32 samples);
++#endif
++
++// With no audio to pace decoding (AudioSystem 1, or a movie without sound),
++// THPSimpleDecode is called once per game frame; on the host that would play
++// a 29.97 fps movie at the game's frame rate. Decode only when the movie's
++// clock has reached the next frame.
++static OSTime PacingStart;
++static s32 PacingFrames;
++
+ // glibc declares this with an exception specifier, so the decomp's local
+ // re-declaration conflicts with it. Use the libc header instead.
+ // extern "C" void* memcpy(void*, const void*, unsigned long);
+@@ -188,6 +224,17 @@
+     LastAudioBuffer = NULL;
+     CurAudioBuffer = NULL;
+ 
++#ifndef GOLDEN_DISABLE_AUDIO
++    // MusyX always owns the output on the host (AudioSystem 3); the movie's
++    // sound is mixed into its frames.
++    if (audioSystem != 1)
++    {
++        musyxHostSetPostMix(THPHostMix);
++        Initialized = 1;
++        return 1;
++    }
++#endif
++
+     if (audioSystem != 1)
+     {
+         int old = OSDisableInterrupts();
+@@ -221,6 +268,14 @@
+ extern "C" void THPSimpleQuit()
+ {
+     LCDisable();
++#ifndef GOLDEN_DISABLE_AUDIO
++    if (AudioSystem != 1)
++    {
++        musyxHostSetPostMix(NULL);
++        Initialized = 0;
++        return;
++    }
++#endif
+     if (AudioSystem != 1 && OldAIDCallback != NULL)
+     {
+         int old = OSDisableInterrupts();
+@@ -259,6 +314,8 @@
+ 
+     nlRead(SimpleControl.fileInfo, WorkBuffer, sizeof(WorkBuffer));
+     memcpy(SimpleControl.magic, WorkBuffer, sizeof(THPHeader));
++    // version .. finalFrameDataOffsets (frameRate is an f32, same width)
++    THPSwapWords(&SimpleControl.version, (sizeof(THPHeader) - 4) / 4);
+ 
+     if (strcmp(SimpleControl.magic, "THP") != 0)
+     {
+@@ -278,6 +335,7 @@
+     nlSeek(SimpleControl.fileInfo, offset, 0);
+     nlRead(SimpleControl.fileInfo, WorkBuffer, 0x20);
+     memcpy(&SimpleControl.compInfo, WorkBuffer, sizeof(THPFrameCompInfo));
++    THPSwapWords(&SimpleControl.compInfo.mNumComponents, 1);
+ 
+     offset += sizeof(THPFrameCompInfo);
+     SimpleControl.audioExist = 0;
+@@ -290,12 +348,14 @@
+             nlSeek(SimpleControl.fileInfo, offset, 0);
+             nlRead(SimpleControl.fileInfo, WorkBuffer, 0x20);
+             memcpy(&SimpleControl.videoInfo, WorkBuffer, sizeof(THPVideoInfo));
++            THPSwapWords(&SimpleControl.videoInfo, sizeof(THPVideoInfo) / 4);
+             offset += sizeof(THPVideoInfo);
+             break;
+         case 1:
+             nlSeek(SimpleControl.fileInfo, offset, 0);
+             nlRead(SimpleControl.fileInfo, WorkBuffer, 0x20);
+             memcpy(&SimpleControl.audioInfo, WorkBuffer, sizeof(THPAudioInfo));
++            THPSwapWords(&SimpleControl.audioInfo, sizeof(THPAudioInfo) / 4);
+             offset += sizeof(THPAudioInfo);
+             SimpleControl.audioExist = 1;
+             break;
+@@ -468,7 +528,7 @@
+     SimpleControl.readBuffer[SimpleControl.readIndex].mIsValid = TRUE;
+ 
+     SimpleControl.curOffset += SimpleControl.readSize;
+-    SimpleControl.readSize = *(u32*)SimpleControl.readBuffer[SimpleControl.readIndex].mPtr;
++    SimpleControl.readSize = THPFileWord(SimpleControl.readBuffer[SimpleControl.readIndex].mPtr);
+ 
+     update_read_idx();
+ 
+@@ -526,7 +586,7 @@
+ 
+             long idx = SimpleControl.readIndex;
+             SimpleControl.curOffset += SimpleControl.readSize;
+-            SimpleControl.readSize = *(long*)SimpleControl.readBuffer[idx].mPtr;
++            SimpleControl.readSize = THPFileWord(SimpleControl.readBuffer[idx].mPtr);
+             SimpleControl.readBuffer[idx].mIsValid = 1;
+             SimpleControl.readBuffer[SimpleControl.readIndex].mFrameNumber = SimpleControl.totalReadFrame;
+ 
+@@ -651,13 +711,31 @@
+ 
+     do
+     {
++        // The original indexed mIsValid as an int array with a stride of 3
++        // (a 12-byte THPReadBuffer); with a 64-bit mPtr the stride is not 3
++        // ints, so the macro below names the field.
+         validBuffer = &SimpleControl.readBuffer[0].mIsValid;
++#define validBuffer(i) SimpleControl.readBuffer[i].mIsValid
+ 
+-        if (validBuffer[SimpleControl.nextDecodeIndex * 3] == 0)
++        if (validBuffer(SimpleControl.nextDecodeIndex) == 0)
+         {
+             break;
+         }
+ 
++        if (SimpleControl.audioExist == 0 || AudioSystem == 1)
++        {
++            if (SimpleControl.textureSet.mFrameNumber < 0)
++            {
++                PacingStart = OSGetTime();
++                PacingFrames = 0;
++            }
++            else if ((f32)OSTicksToMilliseconds(OSGetTime() - PacingStart) * SimpleControl.frameRate < 1000.0f * PacingFrames)
++            {
++                return 0;
++            }
++            PacingFrames++;
++        }
++
+         readBuffer = SimpleControl.readBuffer;
+         compSizePtr = (unsigned long*)(readBuffer[SimpleControl.nextDecodeIndex].mPtr + 8);
+         ptr = readBuffer[SimpleControl.nextDecodeIndex].mPtr + SimpleControl.compInfo.mNumComponents * 4 + 8;
+@@ -684,7 +762,7 @@
+                     case 1:
+                         sample = THPAudioDecode(
+                             SimpleControl.audioBuffer[SimpleControl.audioDecodeIndex].mBuffer,
+-                            ptr + *compSizePtr * audioTrack,
++                            ptr + THPFileWord(compSizePtr) * audioTrack,
+                             0);
+                         old = OSDisableInterrupts();
+                         SimpleControl.audioBuffer[SimpleControl.audioDecodeIndex].mValidSample = sample;
+@@ -696,7 +774,7 @@
+                         }
+                         break;
+                     }
+-                    ptr += *compSizePtr;
++                    ptr += THPFileWord(compSizePtr);
+                     compSizePtr++;
+                 }
+             }
+@@ -718,19 +796,19 @@
+                     }
+                     break;
+                 }
+-                ptr += *compSizePtr;
++                ptr += THPFileWord(compSizePtr);
+                 compSizePtr++;
+             }
+         }
+ 
+-        validBuffer[SimpleControl.nextDecodeIndex * 3] = 0;
++        validBuffer(SimpleControl.nextDecodeIndex) = 0;
+         SimpleControl.nextDecodeIndex = (SimpleControl.nextDecodeIndex + 1 >= NumReadBuffers) ? 0 : SimpleControl.nextDecodeIndex + 1;
+ 
+         old = OSDisableInterrupts();
+ 
+         do
+         {
+-            if (validBuffer[SimpleControl.readIndex * 3] == 0 && SimpleControl.readProgress == 0 && SimpleControl.dvdError == 0 && SimpleControl.preFetchState == 1)
++            if (validBuffer(SimpleControl.readIndex) == 0 && SimpleControl.readProgress == 0 && SimpleControl.dvdError == 0 && SimpleControl.preFetchState == 1)
+             {
+                 if ((unsigned long)SimpleControl.totalReadFrame > SimpleControl.numFrames - 1)
+                 {
+@@ -755,6 +833,7 @@
+ 
+         OSRestoreInterrupts(old);
+         return 0;
++#undef validBuffer
+     } while (false);
+ 
+     return 2;
+@@ -1025,6 +1104,17 @@
+     }
+ }
+ 
++#ifndef GOLDEN_DISABLE_AUDIO
++// AudioSystem 3 above without the DMA: MusyX's finished frame is the source,
++// the movie's sound is added to it.
++static void THPHostMix(s16* frame, u32 samples)
++{
++    static s16 mixed[320];
++    MixAudio(mixed, frame, samples);
++    memcpy(frame, mixed, samples * 4);
++}
++#endif
++
+ /**
+  * Offset/Address/Size: 0x10 | 0x801CBF74 | size: 0x128
+  */

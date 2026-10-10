@@ -1,0 +1,35 @@
+--- a/src/NL/plat/plataudio.cpp
++++ b/src/NL/plat/plataudio.cpp
+@@ -83,10 +83,10 @@
+ } // namespace PlatAudio
+ 
+ static u32 aramMemArray[2];
+-static s32 gAuxAEffectSettings;
+-static s32 gAuxBEffectSettings;
+-static s32 gDPL2AuxAEffectSettings;
+-static s32 gDPL2AuxBEffectSettings;
++static intptr_t gAuxAEffectSettings;
++static intptr_t gAuxBEffectSettings;
++static intptr_t gDPL2AuxAEffectSettings;
++static intptr_t gDPL2AuxBEffectSettings;
+ static s32 gAuxAEffect;
+ static s32 gAuxBEffect;
+ static s32 gDPL2AuxAEffect;
+@@ -1735,7 +1735,7 @@
+     if (gUsingDolbyProLogic2)
+     {
+         s32 auxEffect = gDPL2AuxAEffect;
+-        s32 auxEffectSettings = gDPL2AuxAEffectSettings;
++        intptr_t auxEffectSettings = gDPL2AuxAEffectSettings;
+ 
+         if (auxEffect == 0)
+         {
+@@ -1773,7 +1773,7 @@
+     else
+     {
+         s32 auxEffect = gAuxAEffect;
+-        s32 auxEffectSettings = gAuxAEffectSettings;
++        intptr_t auxEffectSettings = gAuxAEffectSettings;
+ 
+         if (auxEffect == 0)
+         {

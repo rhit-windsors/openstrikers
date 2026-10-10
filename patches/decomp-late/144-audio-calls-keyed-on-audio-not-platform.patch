@@ -1,0 +1,30 @@
+--- a/src/Game/Audio/CrowdMood.cpp
++++ b/src/Game/Audio/CrowdMood.cpp
+@@ -405,14 +405,14 @@
+             pan = (unsigned char)nlRandom(0x7F, &nlDefaultSeed);
+             pBuf = g_CrowdAudio.pHeckleStream->m_Buffers[0];
+             pBuf->m_Pan = pan;
+-#ifndef TARGET_PC
++#ifndef GOLDEN_DISABLE_AUDIO
+             sndStreamMixParameterEx(pBuf->m_StreamId, pBuf->m_Volume, pBuf->m_Pan, pBuf->m_SurroundPan, 0, 0);
+ #endif
+ 
+             pan = (unsigned char)nlRandom(0x7F, &nlDefaultSeed);
+             pBuf = g_CrowdAudio.pHeckleStream->m_Buffers[0];
+             pBuf->m_SurroundPan = pan;
+-#ifndef TARGET_PC
++#ifndef GOLDEN_DISABLE_AUDIO
+             sndStreamMixParameterEx(pBuf->m_StreamId, pBuf->m_Volume, pBuf->m_Pan, pBuf->m_SurroundPan, 0, 0);
+ #endif
+         }
+--- a/src/Game/Audio/audio.cpp
++++ b/src/Game/Audio/audio.cpp
+@@ -2206,7 +2206,7 @@
+     g_fAudioTimer += fDeltaT;
+     if (uSFXVolume != uCurrentSFXVolume)
+     {
+-#ifndef TARGET_PC
++#ifndef GOLDEN_DISABLE_AUDIO
+         sndVolume((u8)uSFXVolume, 0x1F4, 0xFE);
+ #endif
+         uCurrentSFXVolume = uSFXVolume;

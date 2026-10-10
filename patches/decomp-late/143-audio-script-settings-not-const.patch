@@ -1,0 +1,15 @@
+--- a/src/Game/Audio/AudioScriptEventMgr.cpp
++++ b/src/Game/Audio/AudioScriptEventMgr.cpp
+@@ -51,7 +51,11 @@
+     /* 0x20 */ unsigned long MaxFreeBallTime;
+ };
+ 
+-static const AUDIO_SCRIPT_SETTINGS g_ScriptSettings = { 0 };
++// Not const: Init() fills it from the config through a cast. Under MWCC the
++// const object sat in writable memory and Poll() read the stored values; GCC
++// folds every read of a zero-initialised const to 0, which made the crowd's
++// "good position" and "bored" reactions fire every frame and pile up.
++static AUDIO_SCRIPT_SETTINGS g_ScriptSettings = { 0 };
+ 
+ struct AUDIO_EVENT_RECORD
+ {

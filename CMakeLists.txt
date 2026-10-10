@@ -64,6 +64,7 @@ add_executable(openstrikers
     ${GAME_SOURCES}
     ${SRC_DIR}/compat_shims.cpp
     ${SRC_DIR}/main.cpp
+    ${SRC_DIR}/thp_host.c
 )
 
 target_include_directories(openstrikers PRIVATE
@@ -208,8 +209,10 @@ if (OPENSTRIKERS_FRAME_STATS)
         PROPERTIES COMPILE_DEFINITIONS OPENSTRIKERS_FRAME_STATS)
 endif ()
 
+# The game is C++ throughout; the few plain C files (thp_host.c) get neither
+# the C++-only flag nor the C++ shim header.
 target_compile_options(openstrikers PRIVATE
-    -fpermissive
-    -include ${INCLUDE_DIR}/compat_shims.h
+    $<$<COMPILE_LANGUAGE:CXX>:-fpermissive>
+    $<$<COMPILE_LANGUAGE:CXX>:-include ${INCLUDE_DIR}/compat_shims.h>
     -idirafter ${EXTERN_DIR}/decomp/include/PowerPC_EABI_Support/MSL_C/MSL_Common
 )

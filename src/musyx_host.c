@@ -9,14 +9,15 @@
 // musyxHostPump() once per host frame and runs as many 5 ms ticks as the
 // output needs, so MusyX and the game never run concurrently and its
 // interrupt-masking calls can be no-ops. The DSP's work -- mixing the voices
-// MusyX describes -- is done by the host mixer in salCtrlDsp (stage 2 of
-// docs/PLAN-audio.md); until then each tick produces silence.
+// MusyX describes -- is done by the host mixer in salCtrlDsp (see
+// docs/PLAN-audio.md).
 
 #include "musyx/musyx.h"
 #include "musyx/hardware.h"
 #include "musyx/sal.h"
 #include "musyx/dspvoice.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -63,8 +64,11 @@ void* salAiGetDest() {
   return (u8*)salAIBufferBase + index * DMA_BUFFER_LEN;
 }
 
+static void initSrcTaps(void);
+
 bool salInitDsp(u32 flags) {
   (void)flags;
+  initSrcTaps();
   return TRUE;
 }
 
@@ -87,7 +91,10 @@ u32 salGetStartDelay() { return 0; }
 // that ends "loops" to its loop address -- for one-shots, ARAM's zero buffer;
 // MusyX ends those voices itself from its own play-position count.
 //
-// Not yet: aux A/B (effects), surround, ITD, low-pass, depop.
+// Voices are mixed per studio into MusyX's own bus buffers (main, aux A,
+// aux B), so its effect callbacks run on them as on the hardware; see
+// hostMixFrame. Not done: ITD (the interaural delay of 3D voices) and the
+// Dolby Pro Logic II studio type.
 
 #include <dolphin/ar.h>
 
@@ -159,13 +166,91 @@ static s16 fetchSample(_PB* pb, const u8* aram, u32 aramSize) {
   return out;
 }
 
-static u8 sVoiceSeen[256];
+// Sample-rate conversion. pb->srcSelect picks the DSP's converter: 0 is a
+// 4-tap polyphase filter over the last four source samples, 1 linear
+// interpolation, 2 none. MusyX's default is 0 with coefficient set 1
+// (hwSetPolyPhaseFilter); the sets are read here as low-pass cutoffs of 8, 12
+// and 16 kHz on the 32 kHz output. The DSP's own tables are not used: these
+// are Hann-windowed sinc filters designed here, 128 phases, each phase
+// normalised to unity gain at DC (1.14 fixed point).
+#define SRC_PHASES 128
 
-static void mixVoice(DSPvoice* dv, s32* accL, s32* accR, const u8* aram, u32 aramSize) {
+static s16 sSrcTaps[3][SRC_PHASES][4];
+
+static void initSrcTaps(void) {
+  static const double cutoff[3] = {0.5, 0.75, 1.0}; // of the Nyquist frequency
+  const double pi = 3.14159265358979323846;
+  int set, p, k;
+
+  for (set = 0; set < 3; ++set) {
+    for (p = 0; p < SRC_PHASES; ++p) {
+      double t = (double)p / SRC_PHASES;
+      double h[4], sum = 0.0;
+      int acc = 0;
+      for (k = 0; k < 4; ++k) {
+        // Tap k sits at source position k; the output point is at 1 + t.
+        double d = k - 1 - t;
+        double x = pi * cutoff[set] * d;
+        double sinc = x == 0.0 ? 1.0 : sin(x) / x;
+        double w = 0.5 * (1.0 + cos(pi * d / 2.0));
+        h[k] = sinc * w;
+        sum += h[k];
+      }
+      for (k = 0; k < 4; ++k) {
+        sSrcTaps[set][p][k] = (s16)lrint(h[k] / sum * 16384.0);
+        acc += sSrcTaps[set][p][k];
+      }
+      // Put the rounding error on the largest tap so DC passes exactly.
+      sSrcTaps[set][p][t < 0.5 ? 1 : 2] += (s16)(16384 - acc);
+    }
+  }
+}
+
+static s32 resample(const _PB* pb, u32 frac) {
+  s32 s0 = (s16)pb->src.last_samples[0];
+  s32 s1 = (s16)pb->src.last_samples[1];
+  s32 s2 = (s16)pb->src.last_samples[2];
+  s32 s3 = (s16)pb->src.last_samples[3];
+  const s16* taps;
+
+  switch (pb->srcSelect) {
+  case 2:
+    return s3;
+  case 1:
+    return s2 + (((s3 - s2) * (s32)frac) >> 16);
+  default:
+    taps = sSrcTaps[pb->coefSelect < 3 ? pb->coefSelect : 1][(frac >> 9) & (SRC_PHASES - 1)];
+    return clamp16((s0 * taps[0] + s1 * taps[1] + s2 * taps[2] + s3 * taps[3]) >> 14);
+  }
+}
+
+static u8 sVoiceSeen[256];
+static unsigned long sVoiceStart[256];
+
+// hardware.c: which main buffer (of 2) and aux buffer (of 3) this frame uses.
+extern u8 salFrame;
+extern u8 salAuxFrame;
+
+// Bus layout of a studio buffer (main[], auxA[], auxB[]): left, right and
+// surround, 160 s32 samples each.
+#define BUS_L 0
+#define BUS_R FRAME_SAMPLES
+#define BUS_S (FRAME_SAMPLES * 2)
+
+typedef struct HostVoiceBuses {
+  s32* main;
+  s32* auxA;
+  s32* auxB;
+} HostVoiceBuses;
+
+// Mix a voice's 160 samples into the studio's main, aux A and aux B buses,
+// with the volumes in pb->mix (each ramped per sample by its delta).
+static void mixVoice(DSPvoice* dv, const HostVoiceBuses* bus, const u8* aram, u32 aramSize) {
   _PB* pb = dv->pb;
   u16* fields = (u16*)pb;
   const u16* patch = (const u16*)dv->patchData;
   int sub, i;
+  s32 last = 0;
   static int sTrace = -1;
 
   if (sTrace < 0) {
@@ -174,15 +259,18 @@ static void mixVoice(DSPvoice* dv, s32* accL, s32* accR, const u8* aram, u32 ara
   }
   if (sTrace && !sVoiceSeen[dv - dspVoice]) {
     sVoiceSeen[dv - dspVoice] = 1;
+    sVoiceStart[dv - dspVoice] = salTicks;
     fprintf(stderr,
-            "openstrikers: voice %d start: smp %u comp %u fmt 0x%x addr 0x%x loop 0x%x end 0x%x loopType %u "
-            "ratio 0x%x src %u ps 0x%x coef %d,%d vol %d/%d\n",
-            (int)(dv - dspVoice), dv->smp_id, dv->smp_info.compType, pb->addr.format,
+            "openstrikers: [%lu] voice %d start: smp %u comp %u fmt 0x%x addr 0x%x loop 0x%x end 0x%x loopType %u "
+            "ratio 0x%x src %u ps 0x%x coef %d,%d vol %d/%d/%d auxA %d/%d auxB %d/%d mixer 0x%x lpf %u\n",
+            salTicks, (int)(dv - dspVoice), dv->smp_id, dv->smp_info.compType, pb->addr.format,
             pbAddr(pb->addr.currentAddressHi, pb->addr.currentAddressLo),
             pbAddr(pb->addr.loopAddressHi, pb->addr.loopAddressLo),
             pbAddr(pb->addr.endAddressHi, pb->addr.endAddressLo), pb->loopType,
             pbAddr(pb->src.ratioHi, pb->src.ratioLo), pb->srcSelect, pb->adpcm.pred_scale,
-            (s16)pb->adpcm.a[0][0], (s16)pb->adpcm.a[0][1], (s16)pb->mix.vL, (s16)pb->mix.vR);
+            (s16)pb->adpcm.a[0][0], (s16)pb->adpcm.a[0][1], (s16)pb->mix.vL, (s16)pb->mix.vR,
+            (s16)pb->mix.vS, (s16)pb->mix.vAuxAL, (s16)pb->mix.vAuxAR, (s16)pb->mix.vAuxBL,
+            (s16)pb->mix.vAuxBR, pb->mixerCtrl, pb->lpf.flag);
   }
 
   for (sub = 0; sub < SUBFRAMES; ++sub) {
@@ -198,21 +286,39 @@ static void mixVoice(DSPvoice* dv, s32* accL, s32* accR, const u8* aram, u32 ara
     ratio = pb->srcSelect == 2 ? 0x10000 : pbAddr(pb->src.ratioHi, pb->src.ratioLo);
     for (i = 0; i < SUBFRAME_SAMPLES; ++i) {
       int n = sub * SUBFRAME_SAMPLES + i;
-      s32 s0 = (s16)pb->src.last_samples[2];
-      s32 s1 = (s16)pb->src.last_samples[3];
       u32 frac = pb->src.currentAddressFrac;
-      s32 smp = pb->srcSelect == 2 ? s1 : s0 + (((s1 - s0) * (s32)frac) >> 16);
+      s32 smp = resample(pb, frac);
       s32 env = pb->ve.currentVolume;
       u32 steps;
 
+      if (pb->lpf.flag) {
+        // One-pole low-pass, coefficients in 1.15.
+        smp = (smp * (s32)(s16)pb->lpf.a0 + (s32)(s16)pb->lpf.yn1 * (s32)(s16)pb->lpf.b0) >> 15;
+        pb->lpf.yn1 = (u16)clamp16(smp);
+      }
       smp = (smp * env) >> 15;
-      accL[n] += (smp * (s32)(s16)pb->mix.vL) >> 15;
-      accR[n] += (smp * (s32)(s16)pb->mix.vR) >> 15;
+      last = smp;
+      bus->main[BUS_L + n] += (smp * (s32)(s16)pb->mix.vL) >> 15;
+      bus->main[BUS_R + n] += (smp * (s32)(s16)pb->mix.vR) >> 15;
+      bus->main[BUS_S + n] += (smp * (s32)(s16)pb->mix.vS) >> 15;
+      bus->auxA[BUS_L + n] += (smp * (s32)(s16)pb->mix.vAuxAL) >> 15;
+      bus->auxA[BUS_R + n] += (smp * (s32)(s16)pb->mix.vAuxAR) >> 15;
+      bus->auxA[BUS_S + n] += (smp * (s32)(s16)pb->mix.vAuxAS) >> 15;
+      bus->auxB[BUS_L + n] += (smp * (s32)(s16)pb->mix.vAuxBL) >> 15;
+      bus->auxB[BUS_R + n] += (smp * (s32)(s16)pb->mix.vAuxBR) >> 15;
+      bus->auxB[BUS_S + n] += (smp * (s32)(s16)pb->mix.vAuxBS) >> 15;
 
       env += (s16)pb->ve.currentDelta;
       pb->ve.currentVolume = (u16)(env < 0 ? 0 : (env > 0x7FFF ? 0x7FFF : env));
       pb->mix.vL += pb->mix.vDeltaL;
       pb->mix.vR += pb->mix.vDeltaR;
+      pb->mix.vS += pb->mix.vDeltaS;
+      pb->mix.vAuxAL += pb->mix.vDeltaAuxAL;
+      pb->mix.vAuxAR += pb->mix.vDeltaAuxAR;
+      pb->mix.vAuxAS += pb->mix.vDeltaAuxAS;
+      pb->mix.vAuxBL += pb->mix.vDeltaAuxBL;
+      pb->mix.vAuxBR += pb->mix.vDeltaAuxBR;
+      pb->mix.vAuxBS += pb->mix.vDeltaAuxBS;
 
       frac += ratio;
       steps = frac >> 16;
@@ -225,29 +331,179 @@ static void mixVoice(DSPvoice* dv, s32* accL, s32* accR, const u8* aram, u32 ara
       }
     }
   }
+
+  // What the voice last contributed to each bus. When MusyX stops a voice
+  // (HandleDepopVoice) it adds these to the studio's depop sums, which fade
+  // out over the following frames instead of the voice cutting to zero.
+  pb->dpop.aL = (u16)clamp16((last * (s32)(s16)pb->mix.vL) >> 15);
+  pb->dpop.aR = (u16)clamp16((last * (s32)(s16)pb->mix.vR) >> 15);
+  pb->dpop.aS = (u16)clamp16((last * (s32)(s16)pb->mix.vS) >> 15);
+  pb->dpop.aAuxAL = (u16)clamp16((last * (s32)(s16)pb->mix.vAuxAL) >> 15);
+  pb->dpop.aAuxAR = (u16)clamp16((last * (s32)(s16)pb->mix.vAuxAR) >> 15);
+  pb->dpop.aAuxAS = (u16)clamp16((last * (s32)(s16)pb->mix.vAuxAS) >> 15);
+  pb->dpop.aAuxBL = (u16)clamp16((last * (s32)(s16)pb->mix.vAuxBL) >> 15);
+  pb->dpop.aAuxBR = (u16)clamp16((last * (s32)(s16)pb->mix.vAuxBR) >> 15);
+  pb->dpop.aAuxBS = (u16)clamp16((last * (s32)(s16)pb->mix.vAuxBS) >> 15);
 }
 
+// Add a fading depop value: the studio parameter block holds, per bus, a
+// native s32 start (written over the Hi/Lo pair by DoDepopFade) and an s16
+// per-sample delta.
+static void addDepop(s32* dst, const u16* triple) {
+  s32 v;
+  s16 delta;
+  int n;
+  memcpy(&v, triple, sizeof(v));
+  delta = (s16)triple[2];
+  if (v == 0 && delta == 0) {
+    return;
+  }
+  for (n = 0; n < FRAME_SAMPLES; ++n, v += delta) {
+    dst[n] += v;
+  }
+}
+
+static void addScaled(s32* dst, const s32* src, u16 vol) {
+  int n;
+  if (vol == 0) {
+    return;
+  }
+  for (n = 0; n < FRAME_SAMPLES * 3; ++n) {
+    dst[n] += (s32)(((s64)src[n] * vol) >> 15);
+  }
+}
+
+static void addBus(s32* dst, const s32* src) {
+  int n;
+  for (n = 0; n < FRAME_SAMPLES * 3; ++n) {
+    dst[n] += src[n];
+  }
+}
+
+// One 5 ms frame, following the command list salBuildCommandList built for
+// the DSP: per active studio, clear its main bus for this frame (main[salFrame])
+// and its aux send buffers (auxA/auxB[salAuxFrame]); mix in other studios'
+// previous frame (studio inputs); mix its voices; add the aux returns that
+// the CPU effect callbacks processed (auxA/auxB[(salAuxFrame + 1) % 3]: the
+// callbacks in salHandleAuxProcessing run after this on buffer
+// (salAuxFrame + 2) % 3, so a send comes back two frames later, as on the
+// hardware); add the depop fades. Then the master studios are summed to the
+// output, the surround channel matrixed into left and right.
 static void hostMixFrame(void) {
-  static s32 accL[FRAME_SAMPLES], accR[FRAME_SAMPLES];
+  static s32 out[FRAME_SAMPLES * 3];
   const u8* aram = (const u8*)ARGetStorageAddress();
   u32 aramSize = ARGetSize();
-  int v, n;
+  u8 aIn = (u8)((salAuxFrame + 1) % 3);
+  int st, v, n;
 
-  memset(accL, 0, sizeof(accL));
-  memset(accR, 0, sizeof(accR));
-  if (aram != NULL) {
-    for (v = 0; v < salNumVoices; ++v) {
-      DSPvoice* dv = &dspVoice[v];
-      if (dv->state != 0 && dv->pb != NULL && dv->patchData != NULL) {
-        mixVoice(dv, accL, accR, aram, aramSize);
-      } else {
-        sVoiceSeen[v] = 0;
+  for (v = 0; v < salNumVoices; ++v) {
+    if (dspVoice[v].state == 0) {
+      if (sVoiceSeen[v]) {
+        DSPvoice* dv = &dspVoice[v];
+        fprintf(stderr,
+                "openstrikers: [%lu] voice %d end: smp %u after %lu ticks, len %u loopLen %u posHi %u pitch 0x%x\n",
+                salTicks, v, dv->smp_id, salTicks - sVoiceStart[v], dv->smp_info.length, dv->smp_info.loopLength,
+                dv->playInfo.posHi, dv->playInfo.pitch);
       }
+      sVoiceSeen[v] = 0;
+    }
+  }
+  memset(out, 0, sizeof(out));
+  for (st = 0; st < salMaxStudioNum; ++st) {
+    DSPstudioinfo* stp = &dspStudio[st];
+    HostVoiceBuses bus;
+    DSPvoice* dv;
+    const u16* spb;
+    u32 in;
+
+    if (stp->state != 1) {
+      continue;
+    }
+    {
+      static SND_AUX_CALLBACK sLastA[8], sLastB[8];
+      if (st < 8 && (stp->auxAHandler != sLastA[st] || stp->auxBHandler != sLastB[st])) {
+        sLastA[st] = stp->auxAHandler;
+        sLastB[st] = stp->auxBHandler;
+        fprintf(stderr, "openstrikers: musyx: studio %d effects: aux A %s, aux B %s\n", st,
+                stp->auxAHandler != NULL ? "on" : "off", stp->auxBHandler != NULL ? "on" : "off");
+      }
+    }
+    bus.main = stp->main[salFrame];
+    bus.auxA = stp->auxA[salAuxFrame];
+    bus.auxB = stp->auxB[salAuxFrame];
+    memset(bus.main, 0, FRAME_SAMPLES * 3 * sizeof(s32));
+    memset(bus.auxA, 0, FRAME_SAMPLES * 3 * sizeof(s32));
+    memset(bus.auxB, 0, FRAME_SAMPLES * 3 * sizeof(s32));
+
+    for (in = 0; in < stp->numInputs; ++in) {
+      const s32* src = dspStudio[stp->in[in].studio].main[salFrame ^ 1];
+      addScaled(bus.main, src, stp->in[in].vol);
+      addScaled(bus.auxA, src, stp->in[in].volA);
+      addScaled(bus.auxB, src, stp->in[in].volB);
+    }
+
+    if (aram != NULL) {
+      for (dv = stp->voiceRoot; dv != NULL; dv = dv->next) {
+        if (dv->state != 0 && dv->pb != NULL && dv->patchData != NULL) {
+          mixVoice(dv, &bus, aram, aramSize);
+        }
+      }
+    }
+
+    if (stp->auxAHandler != NULL) {
+      addBus(bus.main, stp->auxA[aIn]);
+    }
+    if (stp->type == SND_STUDIO_TYPE_STD && stp->auxBHandler != NULL) {
+      addBus(bus.main, stp->auxB[aIn]);
+    }
+
+    spb = (const u16*)stp->spb;
+    addDepop(bus.main + BUS_L, spb + 0);
+    addDepop(bus.main + BUS_R, spb + 3);
+    addDepop(bus.main + BUS_S, spb + 6);
+    addDepop(bus.auxA + BUS_L, spb + 9);
+    addDepop(bus.auxA + BUS_R, spb + 12);
+    addDepop(bus.auxA + BUS_S, spb + 15);
+    addDepop(bus.auxB + BUS_L, spb + 18);
+    addDepop(bus.auxB + BUS_R, spb + 21);
+    addDepop(bus.auxB + BUS_S, spb + 24);
+
+    if (stp->isMaster) {
+      addBus(out, bus.main);
     }
   }
   for (n = 0; n < FRAME_SAMPLES; ++n) {
-    sMixOut[n * 2] = clamp16(accL[n]);
-    sMixOut[n * 2 + 1] = clamp16(accR[n]);
+    // Dolby Surround matrix: surround goes to both sides, out of phase, at
+    // -3 dB. In stereo output mode MusyX leaves it empty.
+    s32 s = (out[BUS_S + n] * 23170) >> 15;
+    sMixOut[n * 2] = clamp16(out[BUS_L + n] - s);
+    sMixOut[n * 2 + 1] = clamp16(out[BUS_R + n] + s);
+  }
+  {
+    // OPENSTRIKERS_AUDIO_TRACE=3: what is playing when the output saturates.
+    static int sClipTrace = -1;
+    static unsigned long sLastClip;
+    s32 peak = 0;
+    if (sClipTrace < 0) {
+      const char* t = getenv("OPENSTRIKERS_AUDIO_TRACE");
+      sClipTrace = t != NULL && t[0] >= '3';
+    }
+    for (n = 0; sClipTrace && n < FRAME_SAMPLES * 3; ++n) {
+      s32 a = out[n] < 0 ? -out[n] : out[n];
+      if (a > peak) peak = a;
+    }
+    if (sClipTrace && peak > 32767 && salTicks - sLastClip >= 200) {
+      sLastClip = salTicks;
+      fprintf(stderr, "openstrikers: [%lu] output clips: bus peak %d\n", salTicks, peak);
+      for (v = 0; v < salNumVoices; ++v) {
+        DSPvoice* dv = &dspVoice[v];
+        _PB* pb = dv->pb;
+        if (dv->state == 0 || pb == NULL || pb->state != 1) continue;
+        fprintf(stderr, "openstrikers:   voice %d smp %u comp %u env %d vol %d/%d/%d auxA %d/%d last %d,%d\n", v, dv->smp_id,
+                dv->smp_info.compType, (s16)pb->ve.currentVolume, (s16)pb->mix.vL, (s16)pb->mix.vR, (s16)pb->mix.vS,
+                (s16)pb->mix.vAuxAL, (s16)pb->mix.vAuxAR, (s16)pb->src.last_samples[2], (s16)pb->src.last_samples[3]);
+      }
+    }
   }
 }
 
@@ -270,6 +526,14 @@ void hwIRQLeaveCritical() {}
 // Run `ticks` 5 ms audio frames, appending each frame's 160 stereo s16
 // samples to `out` (room for ticks * 320 values) when it is not NULL.
 // Returns how many ran.
+// On the GameCube, the THP movie player chains itself onto the audio
+// interface's DMA callback: after MusyX has mixed a buffer it adds the movie's
+// sound and points the DMA at the result. Here it registers a function that
+// gets each finished 5 ms frame (160 stereo samples, left first) to mix into.
+static void (*sPostMix)(s16* frame, u32 samples);
+
+void musyxHostSetPostMix(void (*fn)(s16* frame, u32 samples)) { sPostMix = fn; }
+
 int musyxHostPump(int ticks, s16* out) {
   int n = 0;
   if (!salAiRunning || userCallback == NULL) {
@@ -279,6 +543,9 @@ int musyxHostPump(int ticks, s16* out) {
     salAIBufferIndex = (salAIBufferIndex + 1) % 4;
     userCallback();
     ++salTicks;
+    if (sPostMix != NULL) {
+      sPostMix(sMixOut, FRAME_SAMPLES);
+    }
     if (out != NULL) {
       memcpy(out + n * FRAME_SAMPLES * 2, sMixOut, sizeof(sMixOut));
     }

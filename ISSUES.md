@@ -6,7 +6,14 @@ issue is reproduced, narrowed down, or fixed.
 
 ## Active issues
 
-None known as of 2026-10-08.
+None known as of 2026-10-10. Audio is being brought up separately in `build-audio/` (`docs/PLAN-audio.md`); report what sounds wrong there.
+
+- **Probably fixed (2026-10-10): access violation at startup in aurora's
+  pipeline-cache loader** (`pipeline_cache.cpp:1043`, `pipeline_worker`
+  thread, reading 0x44c000), seen once in `build-audio/`. 0x44C000 is the
+  second MusyX sound stack's ARAM base, which MusyX was writing past its
+  undersized work block (`patches/musyx/003`, see `docs/PLAN-audio.md`).
+  Report it if it comes back.
 
 ## Fixed, keep an eye on
 
@@ -28,6 +35,12 @@ the new crash report (or a screenshot) if they come back.
   entry reuses the 2:00 slide and replaces its `GAMETIME` text; moving back to
   2:00 restores it. Confirmed in the menu by the user. Handy for checking
   anything that happens at the final whistle.
+- **Audio** (`build-audio/`, 2026-10-08 to 10-09). Music, crowd, sound
+  effects and stadium reverb. Sound effects were silent until two 64-bit bugs
+  in MusyX were fixed (`patches/musyx/002`): see `docs/PLAN-audio.md`.
+- **Movies** (2026-10-10). The intro movie, NLG logos and Strikers 101
+  lessons were being skipped (big-endian THP header); they now play, with
+  sound in `build-audio/`. The lessons were not tested by hand yet.
 
 ## Issue details
 

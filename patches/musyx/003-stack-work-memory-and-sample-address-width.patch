@@ -1,0 +1,32 @@
+--- a/src/musyx/runtime/hardware.c
++++ b/src/musyx/runtime/hardware.c
+@@ -564,10 +564,12 @@
+ #endif
+ ) {
+ #if MUSY_TARGET == MUSY_TARGET_DOLPHIN
+-  u32 len = ((u32*)*((u32*)header))[1] & 0xFFFFFF;
+-  u8 type = ((u32*)*((u32*)header))[1] >> 0x18;
++  // header points at a SAMPLE_HEADER*, data at the sample's void* address;
++  // both are host pointers, not u32 slots.
++  u32 len = ((u32*)*((void**)header))[1] & 0xFFFFFF;
++  u8 type = ((u32*)*((void**)header))[1] >> 0x18;
+   len = convert_length(len, type);
+-  *((u32*)data) = (u32)aramStoreData((void*)*((u32*)data), len
++  *((void**)data) = aramStoreData(*((void**)data), len
+ #if MUSY_VERSION >= MUSY_VERSION_CHECK(2, 0, 1)
+                                      ,
+                                      aramInfo
+--- a/src/musyx/runtime/s_data.c
++++ b/src/musyx/runtime/s_data.c
+@@ -342,7 +342,10 @@
+ */
+ 
+ #if MUSY_VERSION >= MUSY_VERSION_CHECK(2, 0, 2)
+-u32 sndStackGetSize() { return 0x618; }
++// The caller allocates this much for sndStackAdd's work memory. 0x618 is
++// GSTACK_INST on the GameCube; with 64-bit pointers it is 0xC20, and the
++// literal had MusyX write the stack's ARAM range past the end of the block.
++u32 sndStackGetSize() { return sizeof(GSTACK_INST); }
+ 
+ u32 sndStackAdd(void* stackWorkMem, u32 aramBase, u32 aramSize) {
+   GSTACK_INST* gs; // r31

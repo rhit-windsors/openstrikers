@@ -492,9 +492,7 @@ BOOL OSRestoreInterrupts(BOOL state) {
     return state;
 }
 
-// Movies are stage 5 of docs/PLAN-audio.md; until then neither decoder exists.
-u32 THPAudioDecode(void*, void*, long) { return 0; }
-s32 THPVideoDecode(void* file, void* tileY, void* tileU, void* tileV, void* work) { return 0; }
+// THPVideoDecode and THPAudioDecode are in thp_host.c.
 
 // The rest of the AI/ARAM SDK that MusyX and PlatAudio call. Aurora keeps ARAM
 // as a plain host buffer with synchronous transfers, so there is no DMA engine
