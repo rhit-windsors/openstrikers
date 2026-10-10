@@ -16,16 +16,16 @@
  
 --- a/lib/dolphin/card.cpp
 +++ b/lib/dolphin/card.cpp
-@@ -1,6 +1,8 @@
- #include "dolphin/card.h"
+@@ -2,6 +2,8 @@
  
+ #include <cstring>
  #include <filesystem>
 +#include <mutex>
 +#include <vector>
  
+ #include "aurora/card.h"
  #include "../internal.hpp"
- #include "dolphin/types.h"
-@@ -39,6 +41,30 @@
+@@ -44,6 +46,30 @@
  CARDFileType SelectedFileType = CARD_GCIFOLDER;
  bool UseFastMode = false;
  
@@ -56,72 +56,82 @@
  void CopyKabuFileHandleToDolphin(const s32 chan, const aurora::card::FileHandle& handle, CARDFileInfo* fileInfo) {
    fileInfo->chan = chan;
    fileInfo->fileNo = handle.getFileNo();
-@@ -246,9 +272,7 @@
-     return CARD_RESULT_NOCARD;
+@@ -386,10 +412,7 @@
  
    const auto& card = GET_CARD(chan);
--  const auto res = static_cast<s32>(card->getError());
--  callback(chan, res);
+   const auto res = static_cast<s32>(card->getError());
+-  if (callback) {
+-    callback(chan, res);
+-  }
 -  return static_cast<s32>(card->getError());
-+  return QueueCardCallback(callback, chan, static_cast<s32>(card->getError()));
++  return QueueCardCallback(callback, chan, res);
  }
  
  s32 CARDCheckEx(const s32 chan, s32* xferBytes [[maybe_unused]]) {
-@@ -268,9 +292,7 @@
-     return CARD_RESULT_FATAL_ERROR;
+@@ -410,10 +433,7 @@
    }
    const auto& card = GET_CARD(chan);
--  const auto res = static_cast<s32>(card->getError());
--  callback(chan, res);
+   const auto res = static_cast<s32>(card->getError());
+-  if (callback) {
+-    callback(chan, res);
+-  }
 -  return static_cast<s32>(card->getError());
-+  return QueueCardCallback(callback, chan, static_cast<s32>(card->getError()));
++  return QueueCardCallback(callback, chan, res);
  }
  
  s32 CARDCreate(const s32 chan, const char* fileName, const u32 size, CARDFileInfo* fileInfo) {
-@@ -298,8 +320,7 @@
+@@ -441,10 +461,7 @@
      return CARD_RESULT_FATAL_ERROR;
    }
    const auto res = CARDCreate(chan, fileName, size, fileInfo);
--  callback(chan, res);
+-  if (callback) {
+-    callback(chan, res);
+-  }
 -  return res;
 +  return QueueCardCallback(callback, chan, res);
  }
  
  s32 CARDDelete(const s32 chan, const char* fileName) {
-@@ -326,8 +347,7 @@
+@@ -471,10 +488,7 @@
      return CARD_RESULT_FATAL_ERROR;
    }
    const auto res = CARDDelete(chan, fileName);
--  callback(chan, res);
+-  if (callback) {
+-    callback(chan, res);
+-  }
 -  return res;
 +  return QueueCardCallback(callback, chan, res);
  }
  
  s32 CARDFastDelete(const s32 chan, const s32 fileNo) {
-@@ -353,8 +373,7 @@
+@@ -500,10 +514,7 @@
      return CARD_RESULT_FATAL_ERROR;
    }
    const auto res = CARDFastDelete(chan, fileNo);
--  callback(chan, res);
+-  if (callback) {
+-    callback(chan, res);
+-  }
 -  return res;
 +  return QueueCardCallback(callback, chan, res);
  }
  
  s32 CARDFastOpen(const s32 chan, const s32 fileNo, CARDFileInfo* fileInfo) {
-@@ -394,8 +413,7 @@
+@@ -541,10 +552,7 @@
      return CARD_RESULT_FATAL_ERROR;
    }
    const auto res = CARDFormat(chan);
--  callback(chan, res);
+-  if (callback) {
+-    callback(chan, res);
+-  }
 -  return res;
 +  return QueueCardCallback(callback, chan, res);
  }
  
  s32 CARDFreeBlocks(const s32 chan, s32* byteNotUsed, s32* filesNotUsed) {
-@@ -512,6 +530,20 @@
+@@ -660,6 +668,20 @@
+   CARD_STUB
    return CARD_RESULT_READY;
  }
- // these two funcs are out of scope for aurora::card. stubbed for now
 +void CARDServicePendingCallbacks(void) {
 +  // Swap the queue out before running anything: a callback is free to start
 +  // another card operation, and that one belongs to the next frame, not this
@@ -136,38 +146,33 @@
 +  }
 +}
 +
+ // these two funcs are out of scope for aurora::card. stubbed for now
  s32 CARDMount(const s32 chan, void* workArea [[maybe_unused]], CARDCallback detachCallback [[maybe_unused]]) {
    if (chan < 0 || chan >= 2) {
-     return CARD_RESULT_FATAL_ERROR;
-@@ -520,11 +552,21 @@
-   return CARD_RESULT_READY;
- }
- s32 CARDMountAsync(const s32 chan, void* workArea [[maybe_unused]], const CARDCallback detachCallback [[maybe_unused]],
--                   const CARDCallback attachCallback [[maybe_unused]]) {
-+                   const CARDCallback attachCallback) {
+@@ -673,9 +695,14 @@
    if (chan < 0 || chan >= 2) {
      return CARD_RESULT_FATAL_ERROR;
    }
--  return CARD_RESULT_READY;
-+  // The card image is already open by the time anyone mounts it, so there is
-+  // nothing to wait for -- but the caller learns the mount finished only from
-+  // attachCallback, and dropping it leaves a game parked on its "checking the
-+  // memory card" screen forever.
-+  //
-+  // It cannot be called inline either: on hardware it arrives off the EXI
-+  // interrupt after CARDMountAsync has returned, and callers rely on that. The
-+  // save/load path starts a mount from inside a scene update and only then
-+  // finishes wiring itself up, so an inline completion re-enters it half built.
-+  // Queue it for CARDServicePendingCallbacks instead.
-+  return QueueCardCallback(attachCallback, chan, CARD_RESULT_READY);
++  // On hardware the attach callback arrives off the EXI interrupt after
++  // CARDMountAsync has returned, and callers rely on that. The save/load path
++  // starts a mount from inside a scene update and only then finishes wiring
++  // itself up, so an inline completion re-enters it half built. Queue it for
++  // CARDServicePendingCallbacks instead.
+   const auto& card = GET_CARD(chan);
+-  if (card && attachCallback) {
+-    attachCallback(chan, static_cast<s32>(card->getError()));
++  if (card) {
++    QueueCardCallback(attachCallback, chan, static_cast<s32>(card->getError()));
+   }
+   return CARD_RESULT_READY;
  }
- 
- s32 CARDOpen(const s32 chan, const char* fileName, CARDFileInfo* fileInfo) {
-@@ -585,18 +627,18 @@
+@@ -743,20 +770,18 @@
      return CARD_RESULT_FATAL_ERROR;
    }
    const auto res = CARDRename(chan, oldName, newName);
--  callback(chan, res);
+-  if (callback) {
+-    callback(chan, res);
+-  }
 -  return res;
 +  return QueueCardCallback(callback, chan, res);
  }
@@ -187,31 +192,37 @@
  }
  
  s32 CARDSetAttributes(const s32 chan, s32 fileNo [[maybe_unused]], u8 attr [[maybe_unused]]) {
-@@ -642,8 +684,7 @@
+@@ -802,10 +827,7 @@
      return CARD_RESULT_FATAL_ERROR;
    }
    const auto res = CARDSetStatus(chan, fileNo, stat);
--  callback(chan, res);
+-  if (callback) {
+-    callback(chan, res);
+-  }
 -  return res;
 +  return QueueCardCallback(callback, chan, res);
  }
  
  s32 CARDUnmount(const s32 chan) {
-@@ -706,8 +747,7 @@
+@@ -868,10 +890,7 @@
  s32 CARDReadAsync(const CARDFileInfo* fileInfo, void* addr, const s32 length, const s32 offset,
                    const CARDCallback callback) {
    const auto res = CARDRead(fileInfo, addr, length, offset);
--  callback(fileInfo->chan, res);
+-  if (callback) {
+-    callback(fileInfo->chan, res);
+-  }
 -  return res;
 +  return QueueCardCallback(callback, fileInfo->chan, res);
  }
  
  s32 CARDWrite(const CARDFileInfo* fileInfo, const void* addr, const s32 length, const s32 offset) {
-@@ -735,7 +775,6 @@
+@@ -899,9 +918,6 @@
  s32 CARDWriteAsync(const CARDFileInfo* fileInfo, const void* addr, const s32 length, const s32 offset,
                     const CARDCallback callback) {
    const auto res = CARDWrite(fileInfo, addr, length, offset);
--  callback(fileInfo->chan, res);
+-  if (callback) {
+-    callback(fileInfo->chan, res);
+-  }
 -  return res;
 +  return QueueCardCallback(callback, fileInfo->chan, res);
  }

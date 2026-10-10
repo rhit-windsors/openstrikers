@@ -147,9 +147,10 @@ int main(int argc, char* argv[])   // <-- diventa aurora_main via macro
     }
     SDL_free(displays);
     VISetWindowFullscreen(options.fullscreen);
-    // GXAdjustForOverscan sizes the game's EFB from the render target, so lock
-    // a TV aspect before the game starts. osHostSyncWidescreen() re-locks it
-    // once the game's own Aspect option is known.
+    // The game draws into a GameCube-sized EFB that Aurora scales onto the
+    // render target, so the target's aspect is the TV's: lock one before the
+    // first frame. osHostSyncWidescreen() re-locks it once the game's own
+    // Aspect option is known.
     const bool stretch = options.aspect == AspectMode::Stretch;
     if (!stretch) {
         const bool widescreen = options.aspect == AspectMode::Widescreen;

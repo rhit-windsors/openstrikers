@@ -1,8 +1,6 @@
-diff --git a/include/dolphin/card.h b/include/dolphin/card.h
-index 4d39d1e..e992544 100644
 --- a/include/dolphin/card.h
 +++ b/include/dolphin/card.h
-@@ -288,6 +288,7 @@ s32 CARDErase(CARDFileInfo* fileInfo, s32 length, s32 offset);
+@@ -288,6 +288,7 @@
  
  // CARDFormat
  s32 CARDFormat(s32 chan);

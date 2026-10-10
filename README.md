@@ -57,8 +57,8 @@ picture follows the in-game Aspect option unless `--aspect 4:3|16:9|stretch`
 Run `openstrikers.exe --help` for all options. The supporting changes are
 `patches/aurora/011-launcher-render-resolution-and-fullscreen.patch` (render
 resolution, aspect lock, F11), `patches/aurora/012-full-precision-scissor.patch`
-(without it, any render target over 1706 pixels on a side comes out black: GX's
-scissor registers are 11 bits wide) and
+(GX's scissor registers are 11 bits wide; while Aurora sized the game's EFB from
+the window, any render target over 1706 pixels on a side came out black) and
 `patches/decomp-late/147-widescreen-follows-game-aspect-option.patch`.
 
 Launcher validation: build the `openstrikers-launch-options-test` target and run
@@ -1622,12 +1622,14 @@ A few smaller traps that have each cost a debugging session:
   starts (`patches/decomp/084`).
 * A packed colour word read through `((u8*)&word)[0..3]` spells `r,g,b,a` only
   on a big-endian host. Extract channels with shifts.
-* Aurora's `GXAdjustForOverscan` rewrites the render mode to the *host*
-  framebuffer size, so viewports the game derives from its render mode are
-  already in render pixels. Anywhere the game hard-codes the GameCube's 640x448
-  EFB extents instead, the frame gets clipped to the top-left corner. This also
-  applies to `GXSetTexCopySrc`: a fullscreen post-process capture must use
-  `AuroraGetRenderSize` (`patches/decomp-late/118`).
+* The game draws in *logical* EFB coordinates: since Aurora 40cf48f,
+  `GXAdjustForOverscan` leaves the GameCube's 640x448 EFB alone, and Aurora
+  scales viewports, scissors, copy rects and the copies themselves onto its
+  render target, whose size and aspect are the host's. "Whole frame" rects must
+  therefore use the configured EFB (`glplatGetEFBSize`), never
+  `AuroraGetRenderSize`. Before 40cf48f the EFB itself was host-sized, which
+  is why `patches/decomp-late/118` exists and why `patches/aurora/012` widens
+  the scissor past GX's 11-bit fields.
 * `GXSetArray` takes an `le` flag that aurora does not have on hardware. Vertex
   arrays filled by the game at runtime are host little-endian, so it must be
   `true`; passing `false` byte-swaps every position and the geometry vanishes.

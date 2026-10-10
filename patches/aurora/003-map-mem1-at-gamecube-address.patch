@@ -1,4 +1,3 @@
-diff --git a/lib/dolphin/os/OSMemory.cpp b/lib/dolphin/os/OSMemory.cpp
 --- a/lib/dolphin/os/OSMemory.cpp
 +++ b/lib/dolphin/os/OSMemory.cpp
 @@ -7,6 +7,9 @@

@@ -25,16 +25,6 @@
   * Draw primitives with the vertex count derived from a byte length, as written by
   * GXBegin(prim, fmt, GX_AUTO). Must be followed by a u8 draw opcode (vtxfmt|prim),
   * a u32 vertex data byte length, then that many bytes of vertex data. The byte length
---- a/lib/dolphin/gx/__gx.h
-+++ b/lib/dolphin/gx/__gx.h
-@@ -109,6 +109,7 @@
-   u8 tcsManEnab;    // bitmask: manual tex coord scale enabled per coord
-   u32 suScis0;      // scissor top-left
-   u32 suScis1;      // scissor bottom-right
-+  u32 scissor[4];   // left, top, width, height at full precision (GX_AURORA_SET_SCISSOR)
- 
-   u32 tref[8];      // TEV texture/color reference (2 stages per register)
-   u32 iref;         // indirect texture reference
 --- a/lib/dolphin/gx/GXCull.cpp
 +++ b/lib/dolphin/gx/GXCull.cpp
 @@ -16,6 +16,17 @@
@@ -77,9 +67,19 @@
  }
  
  void GXGetCullMode(GXCullMode* mode) {
+--- a/lib/dolphin/gx/__gx.h
++++ b/lib/dolphin/gx/__gx.h
+@@ -109,6 +109,7 @@
+   u8 tcsManEnab;    // bitmask: manual tex coord scale enabled per coord
+   u32 suScis0;      // scissor top-left
+   u32 suScis1;      // scissor bottom-right
++  u32 scissor[4];   // left, top, width, height at full precision (GX_AURORA_SET_SCISSOR)
+ 
+   u32 tref[8];      // TEV texture/color reference (2 stages per register)
+   u32 iref;         // indirect texture reference
 --- a/lib/gx/command_processor.cpp
 +++ b/lib/gx/command_processor.cpp
-@@ -733,6 +733,12 @@
+@@ -697,6 +697,12 @@
      g_gxState.texCopyDstWide = true;
    } else if (subCmd == GX_AURORA_LOAD_COPY_DEST) {
      g_gxState.texCopyDest = reinterpret_cast<const void*>(reader.read<u64>());

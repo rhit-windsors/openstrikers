@@ -1,6 +1,6 @@
 --- a/lib/gx/shader.cpp
 +++ b/lib/gx/shader.cpp
-@@ -1235,9 +1235,12 @@
+@@ -1250,9 +1250,12 @@
      } else if (tcg.src == GX_TG_NRM) {
        vtxXfrAttrs += fmt::format("\n    var tc{} = vec4f({}, 1.0);", i, vtx_attr(config, GX_VA_NRM));
      } else if (tcg.src == GX_TG_COLOR0) {

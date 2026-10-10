@@ -1,8 +1,30 @@
-diff --git a/lib/window.cpp b/lib/window.cpp
-index 037a5fd..fa3f742 100644
+--- a/include/dolphin/vi.h
++++ b/include/dolphin/vi.h
+@@ -45,6 +45,9 @@
+  */
+ void VISetFrameBufferScale(float scale);
+ 
++/** Set the internal render target independently of window size; 0,0 uses native pixels. */
++void VISetRenderResolution(uint32_t width, uint32_t height);
++
+ /**
+  * \brief Lock the GX framebuffer to a specific aspect ratio, without changing the native framebuffer.
+  *
+--- a/lib/dolphin/vi/vi.cpp
++++ b/lib/dolphin/vi/vi.cpp
+@@ -52,4 +52,9 @@
+ void VISetWindowPosition(uint32_t x, uint32_t y) { aurora::window::set_window_position(x, y); }
+ void VICenterWindow() { aurora::window::center_window(); }
+ void VISetFrameBufferScale(float scale) { aurora::window::set_frame_buffer_scale(scale); }
++void VISetRenderResolution(uint32_t width, uint32_t height) {
++  aurora::window::set_render_resolution(width, height);
++}
++void VILockAspectRatio(int width, int height) { aurora::window::set_frame_buffer_aspect_ratio(width, height); }
++void VIUnlockAspectRatio() { aurora::window::set_frame_buffer_aspect_ratio(0, 0); }
+ }
 --- a/lib/window.cpp
 +++ b/lib/window.cpp
-@@ -43,6 +43,9 @@ SDL_Window* g_window;
+@@ -47,6 +47,9 @@
  SDL_Renderer* g_renderer;
  float g_frameBufferScale = 0.f;
  bool g_frameBufferAspectFit = false;
@@ -11,8 +33,8 @@ index 037a5fd..fa3f742 100644
 +uint32_t g_renderHeight = 0;
  AuroraWindowSize g_windowSize;
  std::vector<AuroraEvent> g_events;
- std::atomic_bool g_backgrounded = false;
-@@ -93,6 +96,8 @@ void resize_swapchain() noexcept {
+ std::deque<std::string> g_eventStrings;
+@@ -119,6 +122,8 @@
      }
    }
    g_windowSize = size;
@@ -21,7 +43,7 @@ index 037a5fd..fa3f742 100644
    if (g_renderer != nullptr) {
      SDL_SetRenderLogicalPresentation(g_renderer, static_cast<int>(size.native_fb_width),
                                       static_cast<int>(size.native_fb_height), SDL_LOGICAL_PRESENTATION_DISABLED);
-@@ -165,6 +170,13 @@ void process_event(SDL_Event& event) {
+@@ -192,6 +197,13 @@
    }
  
    switch (event.type) {
@@ -35,7 +57,7 @@ index 037a5fd..fa3f742 100644
    case SDL_EVENT_WINDOW_MOVED: {
      if (!primaryWindow) {
        break;
-@@ -436,11 +448,18 @@ AuroraWindowSize get_window_size() {
+@@ -487,11 +499,18 @@
      fb_w = scaledW;
      fb_h = scaledH;
    }
@@ -57,7 +79,7 @@ index 037a5fd..fa3f742 100644
        fb_w = fitW;
        fb_h = fitH;
      }
-@@ -552,6 +571,17 @@ void set_frame_buffer_scale(float scale) {
+@@ -603,6 +622,17 @@
    request_frame_buffer_resize();
  }
  
@@ -75,11 +97,9 @@ index 037a5fd..fa3f742 100644
  void set_frame_buffer_aspect_fit(bool fit) {
    if (g_frameBufferAspectFit == fit) {
      return;
-diff --git a/lib/window.hpp b/lib/window.hpp
-index 51257ea..b253bfe 100644
 --- a/lib/window.hpp
 +++ b/lib/window.hpp
-@@ -49,6 +49,8 @@ void set_window_position(uint32_t x, uint32_t y);
+@@ -49,6 +49,8 @@
  void center_window();
  void request_frame_buffer_resize();
  void set_frame_buffer_scale(float scale);
@@ -88,31 +108,3 @@ index 51257ea..b253bfe 100644
  void set_frame_buffer_aspect_fit(bool fit);
  void set_background_input(bool value);
  }; // namespace aurora::window
-diff --git a/lib/dolphin/vi/vi.cpp b/lib/dolphin/vi/vi.cpp
-index 4c8dddc..48a9f3c 100644
---- a/lib/dolphin/vi/vi.cpp
-+++ b/lib/dolphin/vi/vi.cpp
-@@ -52,4 +52,9 @@ void VISetWindowSize(uint32_t width, uint32_t height) { aurora::window::set_wind
- void VISetWindowPosition(uint32_t x, uint32_t y) { aurora::window::set_window_position(x, y); }
- void VICenterWindow() { aurora::window::center_window(); }
- void VISetFrameBufferScale(float scale) { aurora::window::set_frame_buffer_scale(scale); }
-+void VISetRenderResolution(uint32_t width, uint32_t height) {
-+  aurora::window::set_render_resolution(width, height);
-+}
-+void VILockAspectRatio(int width, int height) { aurora::window::set_frame_buffer_aspect_ratio(width, height); }
-+void VIUnlockAspectRatio() { aurora::window::set_frame_buffer_aspect_ratio(0, 0); }
- }
-diff --git a/include/dolphin/vi.h b/include/dolphin/vi.h
-index 377d952..e31b239 100644
---- a/include/dolphin/vi.h
-+++ b/include/dolphin/vi.h
-@@ -45,6 +45,9 @@ void VICenterWindow();
-  */
- void VISetFrameBufferScale(float scale);
- 
-+/** Set the internal render target independently of window size; 0,0 uses native pixels. */
-+void VISetRenderResolution(uint32_t width, uint32_t height);
-+
- /**
-  * \brief Lock the GX framebuffer to a specific aspect ratio, without changing the native framebuffer.
-  *

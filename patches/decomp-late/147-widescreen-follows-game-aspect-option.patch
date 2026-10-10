@@ -59,20 +59,19 @@
   */
 --- a/src/NL/glx/glxSend.cpp
 +++ b/src/NL/glx/glxSend.cpp
-@@ -22,24 +22,24 @@
+@@ -21,25 +21,22 @@
+ #include "dolphin/gx/GXDispList.h"
  #include "dolphin/gx/GXAurora.h"
  
- // aurora's GXAdjustForOverscan rewrites the render mode to the host framebuffer
+-// aurora's GXAdjustForOverscan rewrites the render mode to the host framebuffer
 -// size, so every viewport the game derives from glx_rmode is already in render
 -// pixels. These "whole EFB" scissor rects were written against the GameCube's
 -// fixed 640x448 EFB, and left as-is they clip the frame to the top-left corner
 -// of the real framebuffer.
-+// size, so the EFB the game configured is host-sized rather than 640x448. These
-+// "whole EFB" rects were written against the GameCube's fixed EFB, and left
-+// as-is they clip the frame to the top-left corner. They must use the
-+// configured (logical) size, not the current render size: aurora scales
-+// logical rects onto the render target, which changes aspect when the game's
-+// widescreen option is toggled.
++// "Whole EFB" rects, in the EFB the game configured. Aurora scales logical
++// rects onto its render target, whose size and aspect are the host's (and
++// change when the game's widescreen option is toggled), so these must use the
++// configured size and never the render size.
  static void glx_SetScissorFullScreen()
  {
 -    u32 renderWidth = 640;
@@ -106,13 +105,18 @@
  #include "NL/nlString.h"
  #include "Game/Sys/debug.h"
  
-@@ -25,13 +26,13 @@
- // while these copies were authored against the GameCube's fixed 640x448 EFB.
- // Use the actual EFB extent for operations that mean "copy the whole frame";
- // otherwise a 2x window copies only its upper-left quarter and stretches that
+@@ -21,17 +22,14 @@
+ static u32 glx_SharedSize = 0;
+ static bool glx_SharedLock = false;
+ 
+-// GXAdjustForOverscan maps the game's render mode to Aurora's host-sized EFB,
+-// while these copies were authored against the GameCube's fixed 640x448 EFB.
+-// Use the actual EFB extent for operations that mean "copy the whole frame";
+-// otherwise a 2x window copies only its upper-left quarter and stretches that
 -// partial image across the depth-of-field layer.
-+// partial image across the depth-of-field layer. Copy rects are logical, so
-+// this is the configured EFB size, not the (possibly re-aspected) render size.
++// "Copy the whole frame", in the EFB the game configured. Copy rects are
++// logical; Aurora scales them, and the copy itself, onto its render target,
++// whose size and aspect are the host's.
  static void glx_SetFullFrameTexCopySrc()
  {
 -    u32 renderWidth = 640;

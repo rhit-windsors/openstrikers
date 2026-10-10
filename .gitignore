@@ -28,3 +28,5 @@ texture_dumps/
 # Retail frames: keep them local, never commit them.
 dolphinscreenshots/
 build-audio/
+build-bump/
+build-audio-bump/
