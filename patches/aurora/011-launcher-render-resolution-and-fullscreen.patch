@@ -1,0 +1,118 @@
+diff --git a/lib/window.cpp b/lib/window.cpp
+index 037a5fd..fa3f742 100644
+--- a/lib/window.cpp
++++ b/lib/window.cpp
+@@ -43,6 +43,9 @@ SDL_Window* g_window;
+ SDL_Renderer* g_renderer;
+ float g_frameBufferScale = 0.f;
+ bool g_frameBufferAspectFit = false;
++float g_frameBufferAspect = 0.f;
++uint32_t g_renderWidth = 0;
++uint32_t g_renderHeight = 0;
+ AuroraWindowSize g_windowSize;
+ std::vector<AuroraEvent> g_events;
+ std::atomic_bool g_backgrounded = false;
+@@ -93,6 +96,8 @@ void resize_swapchain() noexcept {
+     }
+   }
+   g_windowSize = size;
++  Log.info("Render framebuffer {}x{}, surface {}x{}", size.fb_width, size.fb_height,
++           size.native_fb_width, size.native_fb_height);
+   if (g_renderer != nullptr) {
+     SDL_SetRenderLogicalPresentation(g_renderer, static_cast<int>(size.native_fb_width),
+                                      static_cast<int>(size.native_fb_height), SDL_LOGICAL_PRESENTATION_DISABLED);
+@@ -165,6 +170,13 @@ void process_event(SDL_Event& event) {
+   }
+ 
+   switch (event.type) {
++  case SDL_EVENT_KEY_DOWN:
++    if (primaryWindow && !event.key.repeat &&
++        (event.key.key == SDLK_F11 ||
++         (event.key.key == SDLK_RETURN && (event.key.mod & SDL_KMOD_ALT) != 0))) {
++      set_fullscreen(!get_fullscreen());
++    }
++    break;
+   case SDL_EVENT_WINDOW_MOVED: {
+     if (!primaryWindow) {
+       break;
+@@ -436,11 +448,18 @@ AuroraWindowSize get_window_size() {
+     fb_w = scaledW;
+     fb_h = scaledH;
+   }
+-  if (g_frameBufferAspectFit) {
++  // A fixed render target is independent of desktop resolution and DPI.
++  // Aspect fitting below preserves the original game's proportions.
++  if (g_renderWidth > 0 && g_renderHeight > 0) {
++    fb_w = static_cast<int>(g_renderWidth);
++    fb_h = static_cast<int>(g_renderHeight);
++  }
++  if (g_frameBufferAspectFit || g_frameBufferAspect > 0.f) {
+     const auto [baseW, baseH] = vi::configured_fb_size();
+-    if (baseW > 0 && baseH > 0) {
++    if (g_frameBufferAspect > 0.f || (baseW > 0 && baseH > 0)) {
++      const float aspect = g_frameBufferAspect > 0.f ? g_frameBufferAspect : static_cast<float>(baseW) / baseH;
+       const auto [fitW, fitH] =
+-          fit_frame_buffer_to_aspect(fb_w, fb_h, static_cast<float>(baseW) / static_cast<float>(baseH));
++          fit_frame_buffer_to_aspect(fb_w, fb_h, aspect);
+       fb_w = fitW;
+       fb_h = fitH;
+     }
+@@ -552,6 +571,17 @@ void set_frame_buffer_scale(float scale) {
+   request_frame_buffer_resize();
+ }
+ 
++void set_render_resolution(uint32_t width, uint32_t height) {
++  g_renderWidth = width;
++  g_renderHeight = height;
++  request_frame_buffer_resize();
++}
++
++void set_frame_buffer_aspect_ratio(int width, int height) {
++  g_frameBufferAspect = width > 0 && height > 0 ? static_cast<float>(width) / height : 0.f;
++  request_frame_buffer_resize();
++}
++
+ void set_frame_buffer_aspect_fit(bool fit) {
+   if (g_frameBufferAspectFit == fit) {
+     return;
+diff --git a/lib/window.hpp b/lib/window.hpp
+index 51257ea..b253bfe 100644
+--- a/lib/window.hpp
++++ b/lib/window.hpp
+@@ -49,6 +49,8 @@ void set_window_position(uint32_t x, uint32_t y);
+ void center_window();
+ void request_frame_buffer_resize();
+ void set_frame_buffer_scale(float scale);
++void set_render_resolution(uint32_t width, uint32_t height);
++void set_frame_buffer_aspect_ratio(int width, int height);
+ void set_frame_buffer_aspect_fit(bool fit);
+ void set_background_input(bool value);
+ }; // namespace aurora::window
+diff --git a/lib/dolphin/vi/vi.cpp b/lib/dolphin/vi/vi.cpp
+index 4c8dddc..48a9f3c 100644
+--- a/lib/dolphin/vi/vi.cpp
++++ b/lib/dolphin/vi/vi.cpp
+@@ -52,4 +52,9 @@ void VISetWindowSize(uint32_t width, uint32_t height) { aurora::window::set_wind
+ void VISetWindowPosition(uint32_t x, uint32_t y) { aurora::window::set_window_position(x, y); }
+ void VICenterWindow() { aurora::window::center_window(); }
+ void VISetFrameBufferScale(float scale) { aurora::window::set_frame_buffer_scale(scale); }
++void VISetRenderResolution(uint32_t width, uint32_t height) {
++  aurora::window::set_render_resolution(width, height);
++}
++void VILockAspectRatio(int width, int height) { aurora::window::set_frame_buffer_aspect_ratio(width, height); }
++void VIUnlockAspectRatio() { aurora::window::set_frame_buffer_aspect_ratio(0, 0); }
+ }
+diff --git a/include/dolphin/vi.h b/include/dolphin/vi.h
+index 377d952..e31b239 100644
+--- a/include/dolphin/vi.h
++++ b/include/dolphin/vi.h
+@@ -45,6 +45,9 @@ void VICenterWindow();
+  */
+ void VISetFrameBufferScale(float scale);
+ 
++/** Set the internal render target independently of window size; 0,0 uses native pixels. */
++void VISetRenderResolution(uint32_t width, uint32_t height);
++
+ /**
+  * \brief Lock the GX framebuffer to a specific aspect ratio, without changing the native framebuffer.
+  *

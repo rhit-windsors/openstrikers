@@ -101,6 +101,25 @@ endif ()
 include(${EXTERN_DIR}/aurora/cmake/AuroraCopyRuntimeDLLs.cmake)
 aurora_copy_runtime_dlls(openstrikers)
 
+if (WIN32)
+    target_link_libraries(openstrikers PRIVATE shell32)
+    add_executable(openstrikers-launcher WIN32 ${SRC_DIR}/launcher_win32.cpp)
+    target_link_libraries(openstrikers-launcher PRIVATE
+        ${AURORA_SDL3_TARGET} comdlg32 shell32 ole32 dwmapi gdi32 user32)
+    if (MINGW)
+        target_link_options(openstrikers-launcher PRIVATE -municode -static)
+    endif ()
+    aurora_copy_runtime_dlls(openstrikers-launcher)
+endif ()
+
+enable_testing()
+add_executable(openstrikers-launch-options-test EXCLUDE_FROM_ALL tests/launch_options_test.cpp)
+target_include_directories(openstrikers-launch-options-test PRIVATE ${INCLUDE_DIR})
+if (MINGW)
+    target_link_options(openstrikers-launch-options-test PRIVATE -static)
+endif ()
+add_test(NAME openstrikers-launch-options COMMAND openstrikers-launch-options-test)
+
 # aurora_copy_runtime_dlls() only knows about imported targets, so the
 # toolchain's own DLLs (libwinpthread-1, zlib1, libbz2-1, libsqlite3-0) are left
 # behind. They resolve in an MSYS2 shell because ucrt64/bin is already on PATH,

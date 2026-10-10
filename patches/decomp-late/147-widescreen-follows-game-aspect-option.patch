@@ -1,0 +1,127 @@
+# 16:9 output that follows the game's own Options > Aspect setting.
+#
+# The game already has a widescreen mode (VisualSettings::mIsWidescreen): a
+# 1.666 projection instead of 1.25, widescreen camera zoom data, no letterbox
+# bars in cutscenes, and the *wide.thp movies. On hardware it rendered that
+# into the usual 4:3 EFB and left the TV to stretch it. BeginFrameTask now
+# hands the setting to the host once a frame (osHostSyncWidescreen), which
+# locks Aurora's output to 16:9 or 4:3 to match. Aurora scales the logical
+# EFB onto the render target, so the stretch happens there. A forced
+# --aspect on the command line comes back as the return value and is
+# written into the setting, so the camera and projection agree with it.
+#
+# The full-screen viewport, scissor and copy-source helpers used the render
+# size, which only matched the logical EFB while the two had the same shape.
+# They now use the EFB size the game configured (glplatGetEFBSize).
+--- a/include/NL/gl/glPlat.h
++++ b/include/NL/gl/glPlat.h
+@@ -46,6 +46,10 @@
+ void glplatFinish();
+ void glplatAbortFrame();
+ void glplatSendFrame();
++// The EFB size the game configured at startup. Aurora maps GX viewports,
++// scissors and copy rects from this logical size onto its render target, which
++// can change size or aspect afterwards.
++void glplatGetEFBSize(u32* width, u32* height);
+ void glx_Fog(bool enable);
+ bool glx_GetFog();
+ bool glplatPostStartup();
+--- a/src/Game/BeginFrameTask.cpp
++++ b/src/Game/BeginFrameTask.cpp
+@@ -657,6 +657,13 @@
+         DepthOfFieldManager::instance.TurnOff();
+     }
+ 
++    // The host shapes its output to the game's own Aspect option -- 16:9 when
++    // it is on, which on hardware meant an anamorphic picture for the TV to
++    // stretch. A launcher override is written back here so the projection,
++    // the widescreen camera data and the movie choice all agree with it.
++    bool& bWidescreen = GameInfoManager::Instance()->mUserInfo.mVisualOptions.mIsWidescreen;
++    bWidescreen = osHostSyncWidescreen(bWidescreen);
++
+     glBeginFrame();
+     SetupMatrices();
+     SetupRenderInfo();
+--- a/src/NL/gl/glPlat.cpp
++++ b/src/NL/gl/glPlat.cpp
+@@ -820,6 +820,12 @@
+     GXSetDispCopyYScale(glx_CopyDispScaleFactor);
+ }
+ 
++void glplatGetEFBSize(u32* width, u32* height)
++{
++    *width = glx_rmode.fbWidth;
++    *height = glx_rmode.efbHeight;
++}
++
+ /**
+  * Offset/Address/Size: 0x1194 | 0x801B5788 | size: 0x8
+  */
+--- a/src/NL/glx/glxSend.cpp
++++ b/src/NL/glx/glxSend.cpp
+@@ -22,24 +22,24 @@
+ #include "dolphin/gx/GXAurora.h"
+ 
+ // aurora's GXAdjustForOverscan rewrites the render mode to the host framebuffer
+-// size, so every viewport the game derives from glx_rmode is already in render
+-// pixels. These "whole EFB" scissor rects were written against the GameCube's
+-// fixed 640x448 EFB, and left as-is they clip the frame to the top-left corner
+-// of the real framebuffer.
++// size, so the EFB the game configured is host-sized rather than 640x448. These
++// "whole EFB" rects were written against the GameCube's fixed EFB, and left
++// as-is they clip the frame to the top-left corner. They must use the
++// configured (logical) size, not the current render size: aurora scales
++// logical rects onto the render target, which changes aspect when the game's
++// widescreen option is toggled.
+ static void glx_SetScissorFullScreen()
+ {
+-    u32 renderWidth = 640;
+-    u32 renderHeight = 448;
+-    AuroraGetRenderSize(&renderWidth, &renderHeight);
+-    GXSetScissor(0, 0, renderWidth, renderHeight);
++    u32 width, height;
++    glplatGetEFBSize(&width, &height);
++    GXSetScissor(0, 0, width, height);
+ }
+ 
+ static void glx_SetViewportFullScreen()
+ {
+-    u32 renderWidth = 640;
+-    u32 renderHeight = 448;
+-    AuroraGetRenderSize(&renderWidth, &renderHeight);
+-    GXSetViewport(0.0f, 0.0f, (f32)renderWidth, (f32)renderHeight, 0.0f, 1.0f);
++    u32 width, height;
++    glplatGetEFBSize(&width, &height);
++    GXSetViewport(0.0f, 0.0f, (f32)width, (f32)height, 0.0f, 1.0f);
+ }
+ 
+ #include "dolphin/gx/GXBump.h"
+--- a/src/NL/glx/glxTarget.cpp
++++ b/src/NL/glx/glxTarget.cpp
+@@ -11,6 +11,7 @@
+ #include "NL/gl/glMemory.h"
+ #include "NL/nlPrint.h"
+ #include "NL/gl/glState.h"
++#include "NL/gl/glPlat.h"
+ #include "NL/nlString.h"
+ #include "Game/Sys/debug.h"
+ 
+@@ -25,13 +26,13 @@
+ // while these copies were authored against the GameCube's fixed 640x448 EFB.
+ // Use the actual EFB extent for operations that mean "copy the whole frame";
+ // otherwise a 2x window copies only its upper-left quarter and stretches that
+-// partial image across the depth-of-field layer.
++// partial image across the depth-of-field layer. Copy rects are logical, so
++// this is the configured EFB size, not the (possibly re-aspected) render size.
+ static void glx_SetFullFrameTexCopySrc()
+ {
+-    u32 renderWidth = 640;
+-    u32 renderHeight = 448;
+-    AuroraGetRenderSize(&renderWidth, &renderHeight);
+-    GXSetTexCopySrc(0, 0, (u16)renderWidth, (u16)renderHeight);
++    u32 width, height;
++    glplatGetEFBSize(&width, &height);
++    GXSetTexCopySrc(0, 0, (u16)width, (u16)height);
+ }
+ 
+ /**

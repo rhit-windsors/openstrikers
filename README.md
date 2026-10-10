@@ -13,6 +13,68 @@ sources compile and run as a 64-bit little-endian host binary.
 
 Current known problems are tracked in [`ISSUES.md`](ISSUES.md).
 
+## Windows launcher
+
+Double-click **`OpenStrikers.vbs`** in the project folder, or
+**`openstrikers-launcher.exe`** next to the game in your build folder.
+Choose your ISO/GCM with **Browse**, then click **Play Game**. The launcher
+remembers the disc, executable, and display settings. The project shortcut
+prefers `build-audio/` when available; choose that build's `openstrikers.exe`
+for sound. The launcher is built alongside the game on Windows.
+
+- **Render resolution:** native, 720p, 1080p, 1440p, or 4K UHD (default).
+  Rendering is independent of desktop resolution; lower-resolution monitors
+  downsample the selected render target. A 4K monitor is needed for native 4K output.
+- **Window mode:** fullscreen (default) or a centered, resizable window.
+  Fullscreen uses the selected monitor's desktop mode without changing it.
+- **Display:** choose which monitor to play on.
+- **Picture:** Original 4:3 (default), **Widescreen 16:9**, stretch to fill, or
+  "Use in-game Aspect option". Widescreen is the game's own widescreen mode
+  (Options > Aspect): a wider projection, its widescreen camera zoom and
+  movies, at 3840 × 2160 when 4K is selected. As on a GameCube set to 16:9,
+  the HUD and menus are stretched horizontally. A 4:3 picture adds black bars
+  on wide displays; at 4K it renders at 2880 × 2160. Forcing 4:3 or 16:9
+  overrides the in-game option while you play, so saving options in game
+  saves the forced value. "Use in-game Aspect option" lets the menu switch the
+  picture live.
+- **VSync:** on by default in the launcher to reduce tearing.
+
+**F11** or **Alt+Enter** toggles fullscreen during play. The launcher minimizes
+while the game runs and returns when it exits. Closing the launcher leaves the
+game running. **Open logs** shows diagnostic logs if startup fails.
+Settings and launcher logs live in `%LOCALAPPDATA%\OpenStrikers\`; game saves
+remain in Aurora's usual per-user directory. The launcher can import
+`OPENSTRIKERS_ISO` from the environment or the project's `.env` on first use.
+
+Terminal startup remains supported, with its previous windowed defaults. The
+picture follows the in-game Aspect option unless `--aspect 4:3|16:9|stretch`
+(or `--original-aspect` / `--widescreen` / `--stretch`) says otherwise:
+
+```powershell
+.\build-audio\openstrikers.exe "D:\Games\Strikers.iso" --fullscreen --resolution 3840x2160 --vsync
+```
+
+Run `openstrikers.exe --help` for all options. The supporting changes are
+`patches/aurora/011-launcher-render-resolution-and-fullscreen.patch` (render
+resolution, aspect lock, F11), `patches/aurora/012-full-precision-scissor.patch`
+(without it, any render target over 1706 pixels on a side comes out black: GX's
+scissor registers are 11 bits wide) and
+`patches/decomp-late/147-widescreen-follows-game-aspect-option.patch`.
+
+Launcher validation: build the `openstrikers-launch-options-test` target and run
+`ctest --test-dir build -R openstrikers-launch-options --output-on-failure`.
+`tests/launcher-smoke.ps1 -IsoPath "D:\Games\Strikers.iso" -BuildDir build-audio`
+checks saved preferences, 4K match startup, fullscreen switching, and process
+lifecycle using an isolated settings folder inside the build directory. It does
+not look at the picture; `tests/render-smoke.ps1 -PictureMode Widescreen|Original|Stretch`
+reads back a 4K frame and fails if it is black.
+Add `-PictureMode Widescreen` to validate 16:9, or `-PictureMode Stretch` to
+validate the fill option. The `openstrikers-widescreen-test` target checks
+camera framing, HUD proportions, and player-indicator alignment mathematically.
+`tests/render-smoke.ps1 -IsoPath "D:\Games\Strikers.iso" -BuildDir build-audio`
+reads actual 4K gameplay pixels back from the GPU, checking resolution and
+catching blank frames. It also accepts `-PictureMode Original` or `Stretch`.
+
 ![A match in progress at Peach & Toad Stadium](docs/screenshots/gameplay-pitch.png)
 
 ![Play in midfield, a minute into the match](docs/screenshots/gameplay-action.png)

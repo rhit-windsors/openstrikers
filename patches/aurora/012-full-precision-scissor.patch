@@ -1,0 +1,94 @@
+# GXSetScissor packs its rectangle into the hardware's 11-bit SU scissor
+# fields, offset by 342, so any edge past 1706 pixels wraps. Aurora sizes the
+# game's EFB from the host framebuffer, so at 1800x1350 and above the
+# full-screen scissor collapsed to an empty or tiny rect and every frame came
+# out black (1700x1275 still rendered). The launcher's 4K default hit it on
+# every run.
+#
+# The register writes stay, so anything decoding them still works, and are
+# followed by GX_AURORA_SET_SCISSOR carrying the exact values. GXGetScissor
+# returns those values too.
+--- a/include/dolphin/gx/GXAurora.h
++++ b/include/dolphin/gx/GXAurora.h
+@@ -80,6 +80,14 @@
+ #define GX_AURORA_END_OFFSCREEN 0x003A
+ 
+ /**
++ * Sets the scissor rectangle at full precision. Must be followed by s32 left, top,
++ * width and height in logical framebuffer pixels. The hardware registers hold 11-bit
++ * coordinates offset by 342, which overflow beyond 1706 pixels; GXSetScissor emits this
++ * after the register writes so host-sized framebuffers keep the intended rectangle.
++ */
++#define GX_AURORA_SET_SCISSOR 0x003B
++
++/**
+  * Draw primitives with the vertex count derived from a byte length, as written by
+  * GXBegin(prim, fmt, GX_AUTO). Must be followed by a u8 draw opcode (vtxfmt|prim),
+  * a u32 vertex data byte length, then that many bytes of vertex data. The byte length
+--- a/lib/dolphin/gx/__gx.h
++++ b/lib/dolphin/gx/__gx.h
+@@ -109,6 +109,7 @@
+   u8 tcsManEnab;    // bitmask: manual tex coord scale enabled per coord
+   u32 suScis0;      // scissor top-left
+   u32 suScis1;      // scissor bottom-right
++  u32 scissor[4];   // left, top, width, height at full precision (GX_AURORA_SET_SCISSOR)
+ 
+   u32 tref[8];      // TEV texture/color reference (2 stages per register)
+   u32 iref;         // indirect texture reference
+--- a/lib/dolphin/gx/GXCull.cpp
++++ b/lib/dolphin/gx/GXCull.cpp
+@@ -16,6 +16,17 @@
+ 
+   GX_WRITE_RAS_REG(__gx->suScis0);
+   GX_WRITE_RAS_REG(__gx->suScis1);
++  // The 11-bit fields above wrap once a host-sized framebuffer exceeds 1706 pixels,
++  // collapsing the scissor to an empty rect. Follow them with the exact values.
++  __gx->scissor[0] = left;
++  __gx->scissor[1] = top;
++  __gx->scissor[2] = width;
++  __gx->scissor[3] = height;
++  GX_WRITE_AURORA(GX_AURORA_SET_SCISSOR);
++  GX_WRITE_U32(left);
++  GX_WRITE_U32(top);
++  GX_WRITE_U32(width);
++  GX_WRITE_U32(height);
+   __gx->bpSent = 1;
+ }
+ 
+--- a/lib/dolphin/gx/GXGet.cpp
++++ b/lib/dolphin/gx/GXGet.cpp
+@@ -237,15 +237,10 @@
+ void GXGetScissor(u32* left, u32* top, u32* wd, u32* ht) {
+   CHECK(left != nullptr && top != nullptr && wd != nullptr && ht != nullptr, "null scissor output");
+ 
+-  const u32 tp = GET_REG_FIELD(__gx->suScis0, 11, 0);
+-  const u32 lf = GET_REG_FIELD(__gx->suScis0, 11, 12);
+-  const u32 bm = GET_REG_FIELD(__gx->suScis1, 11, 0);
+-  const u32 rt = GET_REG_FIELD(__gx->suScis1, 11, 12);
+-
+-  *left = lf - 342;
+-  *top = tp - 342;
+-  *wd = rt - lf + 1;
+-  *ht = bm - tp + 1;
++  *left = __gx->scissor[0];
++  *top = __gx->scissor[1];
++  *wd = __gx->scissor[2];
++  *ht = __gx->scissor[3];
+ }
+ 
+ void GXGetCullMode(GXCullMode* mode) {
+--- a/lib/gx/command_processor.cpp
++++ b/lib/gx/command_processor.cpp
+@@ -733,6 +733,12 @@
+     g_gxState.texCopyDstWide = true;
+   } else if (subCmd == GX_AURORA_LOAD_COPY_DEST) {
+     g_gxState.texCopyDest = reinterpret_cast<const void*>(reader.read<u64>());
++  } else if (subCmd == GX_AURORA_SET_SCISSOR) {
++    const s32 left = reader.read<s32>();
++    const s32 top = reader.read<s32>();
++    const s32 width = reader.read<s32>();
++    const s32 height = reader.read<s32>();
++    set_logical_scissor({left, top, std::max(width, 0), std::max(height, 0)});
+   } else if (subCmd == GX_AURORA_REQUEST_DEPTH_SNAPSHOT) {
+     gfx::depth_peek::request_snapshot();
+   } else if (subCmd == GX_AURORA_BEGIN_OFFSCREEN) {

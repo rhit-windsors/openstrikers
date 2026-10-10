@@ -28,6 +28,12 @@
 bool osHostFrameBegin();
 void osHostFrameEnd();
 
+// Called once a frame with the game's Aspect option (VisualSettings::
+// mIsWidescreen). Locks the host output to 16:9 or 4:3 to match, and returns
+// the value the game should use -- the same one, unless the command line forced
+// an aspect, in which case the caller writes the forced value back.
+bool osHostSyncWidescreen(bool gameWidescreen);
+
 // --- host switches ----------------------------------------------------------
 // OPENSTRIKERS_SKIP_FE=1 starts an exhibition match directly instead of running
 // the front end. It is read in three places -- the initial task state, the
