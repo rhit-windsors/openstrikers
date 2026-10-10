@@ -1,0 +1,31 @@
+# Take PADInit out of nlInitMemory; the host's main() calls it instead.
+#
+# On the host nlInitMemory runs from the first operator new, during C++ static
+# initialisation. Since Aurora's input rewrite (aurora 40cf48f) PADInit
+# registers a layer with the input router. Called that early it first crashed
+# (the allocation walked an empty free list), and once it ran after the heap
+# it registered a layer that the router's own static constructor then wiped,
+# so no controller or keyboard input reached the game at all.
+--- a/src/NL/nlMemory.cpp
++++ b/src/NL/nlMemory.cpp
+@@ -125,7 +125,6 @@
+         VMAlloc(0x7E000000, 0x900000);
+         DVDInit();
+         VIInit();
+-        PADInit();
+ 
+         void* arenaLo = OSGetArenaLo();
+         void* arenaHi = OSGetArenaHi();
+@@ -149,6 +148,12 @@
+ 
+         StandardAllocator.Initialize(ptr, heapSize - 0x40000);
+         VirtualAllocator.Initialize((void*)0x7E000000, 0x900000);
++        // PADInit() used to be called here. On the host this function runs
++        // from the first operator new, which happens during C++ static
++        // initialisation -- before Aurora's input router exists, so the layer
++        // PADInit registers is wiped when the router is constructed and no
++        // controller input ever arrives. The host's main() calls PADInit once
++        // Aurora is up instead.
+         OSReport("After nlInitMemory\n");
+         OSReport("Free Memory: %u\n", StandardAllocator.TotalFreeMemory());
+         OSReport("Largest Free Block: %u\n", StandardAllocator.LargestFreeBlock());

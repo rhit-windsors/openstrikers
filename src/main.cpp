@@ -6,6 +6,7 @@
 #include <dolphin/gx/GXAurora.h>
 #include <aurora/dvd.h>
 #include <dolphin/vi.h>
+#include <dolphin/pad.h>
 #include <SDL3/SDL_video.h>
 #include <SDL3/SDL_iostream.h>
 #ifdef _WIN32
@@ -137,6 +138,10 @@ int main(int argc, char* argv[])   // <-- diventa aurora_main via macro
         .mem2Size = OPENSTRIKERS_MEM2_SIZE,
     };
     const AuroraInfo info = aurora_initialize(argc, argv, &config);
+    // The game called PADInit from nlInitMemory, but on the host that runs
+    // during static initialisation, before Aurora's input router exists, and
+    // the input layer PADInit registers would be lost (decomp-late/148).
+    PADInit();
     int displayCount = 0;
     SDL_DisplayID* displays = SDL_GetDisplays(&displayCount);
     if (displays && options.display < static_cast<unsigned>(displayCount)) {
