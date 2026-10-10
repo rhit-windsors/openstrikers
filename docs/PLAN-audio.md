@@ -141,8 +141,8 @@ voices at once, one clipped sample in 40 s.
   ("studio 0 effects: aux A on").
 - Soak gate (stages 2 and 4 together): seed 502, audio build, muted, 15
   minutes -- survived, 436800 frames, 12 matches, 148 goals.
-- Open: volume curve unverified by ear; ITD; Dolby Pro Logic II studio
-  type; chorus.
+- Open: volume curve unverified by ear; chorus. (ITD and Pro Logic II:
+  see "ITD and Dolby Pro Logic II" below.)
 
 ## Stage 3 notes (2026-10-09): streams, and the crowd piling up
 
@@ -198,7 +198,10 @@ voices at once, one clipped sample in 40 s.
   offline decode at every point checked, zero samples of drift over 65 s, no
   clipping, menu music resumes after. In `build/` it ran 3900 host frames
   (65.0 s). The FE's YUV combine renders correctly on aurora unchanged. The
-  lesson movies are the same path but were not played in a test.
+  lesson movies are the same path; lesson 1 was later played through
+  Strikers 101 with `OPENSTRIKERS_INPUT` (main menu: four D-pad downs, A,
+  then A through captain and team select; the 101 menu opens by itself in
+  the match, and A, A, A reaches the lesson and plays its movie).
 - The mixer's SRC is now a 4-tap polyphase filter for `srcSelect` 0 (MusyX's
   default), linear for 1, none for 2. Coefficients are our own (Hann-windowed
   sinc, 128 phases, sets read as 8/12/16 kHz cutoffs; MusyX picks set 1).
@@ -232,6 +235,34 @@ cache was reading (ISSUES.md).
 Soak gate: seed 503, audio build, muted, 15 minutes -- survived, 414000
 frames, 11 matches, 146 goals.
 
+## ITD and Dolby Pro Logic II (2026-10-10)
+
+- ITD: a voice with ITD on (`hwSetITDMode`) has its far ear delayed by
+  0-32 samples from the pan (`itdOffTab`). The mixer keeps the delay line in
+  MusyX's own per-voice `itdBuffer`, which MusyX clears when such a voice
+  starts -- through a pointer it had built via `(u32)` (`patches/musyx/004`).
+  Shifts move to their targets one sample per millisecond. **This game never
+  turns ITD on**: 0 of 464 voice starts in a 75 s match had it; the support
+  is there for completeness.
+- Pro Logic II (Options > sound > Dolby): switching restarts the whole sound
+  system (`ActivateDPL2`: streams, groups, `Audio::Shutdown`/`Initialize`,
+  `sndInit`, the stacks); that survived in the front end. In a DPL2 studio
+  MusyX zeroes the surround send and puts the rear left/right on aux B
+  (`CalcBusDPL2`), and runs no aux B effect. The mixer encodes front L/R and
+  the rears (plus aux A's surround as a centre rear) to Lt/Rt with the usual
+  coefficients (0.8718/0.4899) **and** a 90-degree shift between fronts and
+  rears (two 4-stage all-pass chains, Niemitalo's public-domain
+  coefficients, 90 +/- 1 degrees from 50 Hz to 14 kHz). Without the shift a
+  sound sent to front and rear at once cancelled on the left and doubled on
+  the right: a match measured L/R RMS 2094/3979; with it 2375/2448, no
+  clipping. The output stays stereo -- a Pro Logic II receiver decodes it,
+  plain stereo just plays it.
+- `OPENSTRIKERS_TEST_SOUND_MODE=DOLBY` (`decomp-late/146`) starts in that
+  mode without the menus; `soak.ps1 -Env @{ OPENSTRIKERS_TEST_SOUND_MODE =
+  'DOLBY' }` soaks it.
+- Soak: seed 504 in Pro Logic II, stopped by hand ~4 minutes in (67200
+  frames, no crash) so the user could test; not a full 15-minute gate.
+
 ## Stages (each ends with a soak run: audio must not cost stability)
 
 1. **Compile MusyX in, still silent.** (done 2026-10-08, see notes) Add the runtime sources to the build
@@ -245,7 +276,7 @@ frames, 11 matches, 146 goals.
 3. **Streams.** (done 2026-10-09; soak pending at time of writing) Music and announcer/crowd streams (`sndStreamAllocEx`, ARAM
    ring buffers fed by `GCStream`). Pass: menu music and stadium music play,
    loop, and stop cleanly; the file pool stays healthy over a soak.
-4. **Aux buses and effects.** (reverb done 2026-10-09; chorus, DPL2 not) Reverb/chorus/delay callbacks, surround mixdown
+4. **Aux buses and effects.** (reverb done 2026-10-09, ITD and DPL2 2026-10-10; chorus not -- unused) Reverb/chorus/delay callbacks, surround mixdown
    (Dolby Pro Logic II off). Pass: stadium ambience sounds right.
 5. **Movies.** (done 2026-10-10, see notes) THP audio (`THPAudioDecode` is stubbed). Lowest priority.
 

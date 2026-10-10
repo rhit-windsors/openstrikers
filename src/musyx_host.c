@@ -93,8 +93,8 @@ u32 salGetStartDelay() { return 0; }
 //
 // Voices are mixed per studio into MusyX's own bus buffers (main, aux A,
 // aux B), so its effect callbacks run on them as on the hardware; see
-// hostMixFrame. Not done: ITD (the interaural delay of 3D voices) and the
-// Dolby Pro Logic II studio type.
+// hostMixFrame, which also does ITD (the interaural delay of 3D voices) and
+// encodes a Dolby Pro Logic II studio's rear channels into the stereo pair.
 
 #include <dolphin/ar.h>
 
@@ -250,8 +250,13 @@ static void mixVoice(DSPvoice* dv, const HostVoiceBuses* bus, const u8* aram, u3
   u16* fields = (u16*)pb;
   const u16* patch = (const u16*)dv->patchData;
   int sub, i;
-  s32 last = 0;
+  s32 last = 0, smpL, smpR;
   static int sTrace = -1;
+  // ITD delay line: MusyX's own per-voice itdBuffer (32 s16, cleared when an
+  // ITD voice starts), with the write position kept here.
+  static u8 sItdPos[256];
+  s16* itd = NULL;
+  u8* itdPos = &sItdPos[(dv - dspVoice) & 255];
 
   if (sTrace < 0) {
     const char* t = getenv("OPENSTRIKERS_AUDIO_TRACE");
@@ -262,7 +267,7 @@ static void mixVoice(DSPvoice* dv, const HostVoiceBuses* bus, const u8* aram, u3
     sVoiceStart[dv - dspVoice] = salTicks;
     fprintf(stderr,
             "openstrikers: [%lu] voice %d start: smp %u comp %u fmt 0x%x addr 0x%x loop 0x%x end 0x%x loopType %u "
-            "ratio 0x%x src %u ps 0x%x coef %d,%d vol %d/%d/%d auxA %d/%d auxB %d/%d mixer 0x%x lpf %u\n",
+            "ratio 0x%x src %u ps 0x%x coef %d,%d vol %d/%d/%d auxA %d/%d auxB %d/%d mixer 0x%x lpf %u itd %u %u/%u\n",
             salTicks, (int)(dv - dspVoice), dv->smp_id, dv->smp_info.compType, pb->addr.format,
             pbAddr(pb->addr.currentAddressHi, pb->addr.currentAddressLo),
             pbAddr(pb->addr.loopAddressHi, pb->addr.loopAddressLo),
@@ -270,7 +275,7 @@ static void mixVoice(DSPvoice* dv, const HostVoiceBuses* bus, const u8* aram, u3
             pbAddr(pb->src.ratioHi, pb->src.ratioLo), pb->srcSelect, pb->adpcm.pred_scale,
             (s16)pb->adpcm.a[0][0], (s16)pb->adpcm.a[0][1], (s16)pb->mix.vL, (s16)pb->mix.vR,
             (s16)pb->mix.vS, (s16)pb->mix.vAuxAL, (s16)pb->mix.vAuxAR, (s16)pb->mix.vAuxBL,
-            (s16)pb->mix.vAuxBR, pb->mixerCtrl, pb->lpf.flag);
+            (s16)pb->mix.vAuxBR, pb->mixerCtrl, pb->lpf.flag, pb->itd.flag, pb->itd.shiftL, pb->itd.shiftR);
   }
 
   for (sub = 0; sub < SUBFRAMES; ++sub) {
@@ -280,10 +285,21 @@ static void mixVoice(DSPvoice* dv, const HostVoiceBuses* bus, const u8* aram, u3
         fields[patch[0]] = patch[1];
       }
     }
+    itd = pb->itd.flag && dv->itdBuffer != NULL ? (s16*)dv->itdBuffer : NULL;
     if (pb->state != 1) {
       continue;
     }
     ratio = pb->srcSelect == 2 ? 0x10000 : pbAddr(pb->src.ratioHi, pb->src.ratioLo);
+    if (itd != NULL) {
+      // Shifts move to their targets a sample per millisecond, so a moving
+      // source does not click.
+      if (pb->itd.shiftL != pb->itd.targetShiftL) {
+        pb->itd.shiftL += pb->itd.shiftL < pb->itd.targetShiftL ? 1 : -1;
+      }
+      if (pb->itd.shiftR != pb->itd.targetShiftR) {
+        pb->itd.shiftR += pb->itd.shiftR < pb->itd.targetShiftR ? 1 : -1;
+      }
+    }
     for (i = 0; i < SUBFRAME_SAMPLES; ++i) {
       int n = sub * SUBFRAME_SAMPLES + i;
       u32 frac = pb->src.currentAddressFrac;
@@ -298,14 +314,23 @@ static void mixVoice(DSPvoice* dv, const HostVoiceBuses* bus, const u8* aram, u3
       }
       smp = (smp * env) >> 15;
       last = smp;
-      bus->main[BUS_L + n] += (smp * (s32)(s16)pb->mix.vL) >> 15;
-      bus->main[BUS_R + n] += (smp * (s32)(s16)pb->mix.vR) >> 15;
+      smpL = smpR = smp;
+      if (itd != NULL) {
+        // Interaural delay: the far ear hears the voice up to 32 samples
+        // (1 ms) late. itd[] holds the last 32 samples, oldest at itdPos.
+        smpL = pb->itd.shiftL == 0 ? smp : itd[(*itdPos - pb->itd.shiftL) & 31];
+        smpR = pb->itd.shiftR == 0 ? smp : itd[(*itdPos - pb->itd.shiftR) & 31];
+        itd[*itdPos & 31] = (s16)clamp16(smp);
+        *itdPos = (*itdPos + 1) & 31;
+      }
+      bus->main[BUS_L + n] += (smpL * (s32)(s16)pb->mix.vL) >> 15;
+      bus->main[BUS_R + n] += (smpR * (s32)(s16)pb->mix.vR) >> 15;
       bus->main[BUS_S + n] += (smp * (s32)(s16)pb->mix.vS) >> 15;
-      bus->auxA[BUS_L + n] += (smp * (s32)(s16)pb->mix.vAuxAL) >> 15;
-      bus->auxA[BUS_R + n] += (smp * (s32)(s16)pb->mix.vAuxAR) >> 15;
+      bus->auxA[BUS_L + n] += (smpL * (s32)(s16)pb->mix.vAuxAL) >> 15;
+      bus->auxA[BUS_R + n] += (smpR * (s32)(s16)pb->mix.vAuxAR) >> 15;
       bus->auxA[BUS_S + n] += (smp * (s32)(s16)pb->mix.vAuxAS) >> 15;
-      bus->auxB[BUS_L + n] += (smp * (s32)(s16)pb->mix.vAuxBL) >> 15;
-      bus->auxB[BUS_R + n] += (smp * (s32)(s16)pb->mix.vAuxBR) >> 15;
+      bus->auxB[BUS_L + n] += (smpL * (s32)(s16)pb->mix.vAuxBL) >> 15;
+      bus->auxB[BUS_R + n] += (smpR * (s32)(s16)pb->mix.vAuxBR) >> 15;
       bus->auxB[BUS_S + n] += (smp * (s32)(s16)pb->mix.vAuxBS) >> 15;
 
       env += (s16)pb->ve.currentDelta;
@@ -389,8 +414,38 @@ static void addBus(s32* dst, const s32* src) {
 // (salAuxFrame + 2) % 3, so a send comes back two frames later, as on the
 // hardware); add the depop fades. Then the master studios are summed to the
 // output, the surround channel matrixed into left and right.
+// A 90-degree phase-difference pair for the Pro Logic II encode: two chains of
+// four second-order all-pass sections (Olli Niemitalo's public-domain
+// coefficients). With path A delayed by one sample, B leads it by 90 +/- 1
+// degrees from 50 Hz to 14 kHz at 32 kHz, both at unity gain.
+static const float kHilbertA[4] = {0.6923878f, 0.9360654322959f, 0.9882295226860f, 0.9987488452737f};
+static const float kHilbertB[4] = {0.4021921162426f, 0.8561710882420f, 0.9722909545651f, 0.9952884791278f};
+
+typedef struct HilbertPath {
+  float x1[4], x2[4], y1[4], y2[4];
+} HilbertPath;
+
+static float hilbertStep(HilbertPath* h, const float* coef, float x) {
+  int k;
+  for (k = 0; k < 4; ++k) {
+    float a2 = coef[k] * coef[k];
+    float y = a2 * (x + h->y2[k]) - h->x2[k];
+    if (y > -1e-10f && y < 1e-10f) {
+      y = 0.0f; // decaying into denormals in silence is slow on x86
+    }
+    h->x2[k] = h->x1[k];
+    h->x1[k] = x;
+    h->y2[k] = h->y1[k];
+    h->y1[k] = y;
+    x = y;
+  }
+  return x;
+}
+
 static void hostMixFrame(void) {
   static s32 out[FRAME_SAMPLES * 3];
+  static s32 rear[FRAME_SAMPLES * 2];
+  int anyRear = 0;
   const u8* aram = (const u8*)ARGetStorageAddress();
   u32 aramSize = ARGetSize();
   u8 aIn = (u8)((salAuxFrame + 1) % 3);
@@ -409,6 +464,7 @@ static void hostMixFrame(void) {
     }
   }
   memset(out, 0, sizeof(out));
+  memset(rear, 0, sizeof(rear));
   for (st = 0; st < salMaxStudioNum; ++st) {
     DSPstudioinfo* stp = &dspStudio[st];
     HostVoiceBuses bus;
@@ -421,10 +477,14 @@ static void hostMixFrame(void) {
     }
     {
       static SND_AUX_CALLBACK sLastA[8], sLastB[8];
-      if (st < 8 && (stp->auxAHandler != sLastA[st] || stp->auxBHandler != sLastB[st])) {
+      static int sLastType[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
+      if (st < 8 && (stp->auxAHandler != sLastA[st] || stp->auxBHandler != sLastB[st] ||
+                     (int)stp->type != sLastType[st])) {
         sLastA[st] = stp->auxAHandler;
         sLastB[st] = stp->auxBHandler;
-        fprintf(stderr, "openstrikers: musyx: studio %d effects: aux A %s, aux B %s\n", st,
+        sLastType[st] = (int)stp->type;
+        fprintf(stderr, "openstrikers: musyx: studio %d (%s) effects: aux A %s, aux B %s\n", st,
+                stp->type == SND_STUDIO_TYPE_DPL2 ? "Pro Logic II" : "standard",
                 stp->auxAHandler != NULL ? "on" : "off", stp->auxBHandler != NULL ? "on" : "off");
       }
     }
@@ -470,6 +530,41 @@ static void hostMixFrame(void) {
 
     if (stp->isMaster) {
       addBus(out, bus.main);
+      if (stp->type == SND_STUDIO_TYPE_DPL2) {
+        // In a Dolby Pro Logic II studio aux B is not an effect bus: its
+        // left/right are the rear speakers (salCalcVolume, CalcBusDPL2).
+        for (n = 0; n < FRAME_SAMPLES; ++n) {
+          rear[BUS_L + n] += bus.auxB[BUS_L + n];
+          rear[BUS_R + n] += bus.auxB[BUS_R + n];
+        }
+        anyRear = 1;
+      }
+    }
+  }
+  if (anyRear) {
+    // Pro Logic II encode to a stereo pair (Lt/Rt): each rear goes to both
+    // sides, mostly to its own and with opposite signs, so a decoder steers it
+    // behind. The rears are also shifted 90 degrees against the fronts (two
+    // all-pass chains, see hilbertStep); without that, a sound sent to front
+    // and rear at once -- anything panned mid-field -- cancels on the left and
+    // doubles on the right. The surround channel (aux A's, from the reverb)
+    // is a centre rear.
+    static HilbertPath sFrontL, sFrontR, sRearL, sRearR;
+    static float sDelayL, sDelayR;
+    for (n = 0; n < FRAME_SAMPLES; ++n) {
+      float s = 0.7071f * (float)out[BUS_S + n];
+      float rl = (float)rear[BUS_L + n] + s, rr = (float)rear[BUS_R + n] + s;
+      float fl = hilbertStep(&sFrontL, kHilbertA, (float)out[BUS_L + n]);
+      float fr = hilbertStep(&sFrontR, kHilbertA, (float)out[BUS_R + n]);
+      float bl = hilbertStep(&sRearL, kHilbertB, -0.8718f * rl - 0.4899f * rr);
+      float br = hilbertStep(&sRearR, kHilbertB, 0.4899f * rl + 0.8718f * rr);
+      // Path A runs one sample late, which is what puts the two paths 90
+      // degrees apart.
+      out[BUS_L + n] = (s32)(sDelayL + bl);
+      out[BUS_R + n] = (s32)(sDelayR + br);
+      out[BUS_S + n] = 0;
+      sDelayL = fl;
+      sDelayR = fr;
     }
   }
   for (n = 0; n < FRAME_SAMPLES; ++n) {

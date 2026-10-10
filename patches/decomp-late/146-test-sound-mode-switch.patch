@@ -1,0 +1,102 @@
+# OPENSTRIKERS_TEST_SOUND_MODE=DOLBY|STEREO|MONO: start in that sound mode.
+#
+# Dolby Pro Logic II is otherwise only reachable through the options menu,
+# and switching to it restarts the whole sound system. With this set, the
+# front end applies the mode when it applies the saved options (exercising
+# that restart), and a run that skips the front end starts the sound system
+# in Pro Logic II directly. Inert unless the variable is set.
+--- a/src/Game/Audio/AudioLoader.cpp
++++ b/src/Game/Audio/AudioLoader.cpp
+@@ -12,6 +12,11 @@
+ #include "NL/nlFileGC.h"
+ #include "dolphin/arq.h"
+ 
++#ifdef TARGET_PC
++#include <cstdlib>
++#include <cstring>
++#endif
++
+ int nlSNPrintf(char*, unsigned long, const char*, ...);
+ 
+ bool AudioLoader::gbStream = true;
+@@ -569,6 +574,22 @@
+     return dpl2Result;
+ }
+ 
++#ifdef TARGET_PC
++// OPENSTRIKERS_TEST_SOUND_MODE=DOLBY (see UserOptions.cpp) also starts the
++// sound system in Pro Logic II here, for runs that skip the front end and so
++// never apply the options.
++static bool StartInTestSoundMode()
++{
++    const char* testMode = std::getenv("OPENSTRIKERS_TEST_SOUND_MODE");
++    if (testMode == NULL || std::strcmp(testMode, "DOLBY") != 0)
++        return false;
++    PlatAudio::ActivateDPL2();
++    Audio::Initialize(true);
++    PlatAudio::SetOutputMode(MusyXOutputType_SURROUND);
++    return true;
++}
++#endif
++
+ /**
+  * Offset/Address/Size: 0x356C | 0x80147338 | size: 0x80
+  */
+@@ -601,6 +622,10 @@
+ 
+     FEAudio::BuildAnimAudioEventLookup();
+     g_FEStreamConfig.LoadFromFile("audio/data/streams/FEStreams.txt");
++#ifdef TARGET_PC
++    if (StartInTestSoundMode())
++        return true;
++#endif
+     Audio::Initialize(false);
+     return true;
+ }
+@@ -632,6 +657,10 @@
+ 
+     FEAudio::BuildAnimAudioEventLookup();
+     g_FEStreamConfig.LoadFromFile("audio/data/streams/FEStreams.txt");
++#ifdef TARGET_PC
++    if (StartInTestSoundMode())
++        return true;
++#endif
+     Audio::Initialize(false);
+     return true;
+ }
+--- a/src/Game/DB/UserOptions.cpp
++++ b/src/Game/DB/UserOptions.cpp
+@@ -11,6 +11,11 @@
+ #include "Game/Audio/AudioStream.h"
+ #include "Game/GameInfo.h"
+ 
++#ifdef TARGET_PC
++#include <cstdlib>
++#include <cstring>
++#endif
++
+ extern bool g_e3_Build;
+ 
+ const char* AUDIO_DEFAULT_CONFIG_FILE = "DefaultAudioOptions.ini";
+@@ -92,6 +97,21 @@
+             }
+         }
+ 
++#ifdef TARGET_PC
++        // OPENSTRIKERS_TEST_SOUND_MODE=DOLBY|STEREO|MONO: start in that mode, as
++        // if picked in the options. Reaches Dolby Pro Logic II (and the audio
++        // restart that switching to it does) without driving the menus.
++        if (const char* testMode = std::getenv("OPENSTRIKERS_TEST_SOUND_MODE"))
++        {
++            if (strcmp(testMode, "DOLBY") == 0)
++                Mode = DOLBY;
++            else if (strcmp(testMode, "STEREO") == 0)
++                Mode = STEREO;
++            else if (strcmp(testMode, "MONO") == 0)
++                Mode = MONO;
++        }
++#endif
++
+         DefaultMusicVolume = -1;
+         DefaultSFXVolume = -1;
+         DefaultVoiceVolume = -1;

@@ -40,7 +40,8 @@ the new crash report (or a screenshot) if they come back.
   in MusyX were fixed (`patches/musyx/002`): see `docs/PLAN-audio.md`.
 - **Movies** (2026-10-10). The intro movie, NLG logos and Strikers 101
   lessons were being skipped (big-endian THP header); they now play, with
-  sound in `build-audio/`. The lessons were not tested by hand yet.
+  sound in `build-audio/`. Lesson 1 was played through Strikers 101 with
+  scripted input (2026-10-10).
 
 ## Issue details
 

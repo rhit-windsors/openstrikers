@@ -1,0 +1,13 @@
+--- a/src/musyx/runtime/hw_dspctrl.c
++++ b/src/musyx/runtime/hw_dspctrl.c
+@@ -395,7 +395,9 @@
+ #if MUSY_TARGET == MUSY_TARGET_DOLPHIN
+           DCInvalidateRange(dspITDBuffer, salNumVoices * 64);
+ #endif
+-          itdPtr = (u32)dspITDBuffer;
++          // Keep the whole host pointer: itdBuffer is cleared through it
++          // when an ITD voice starts (the PB's Hi/Lo copy is only for a DSP).
++          itdPtr = (size_t)dspITDBuffer;
+           for (i = 0; i < salNumVoices; ++i) {
+             MUSY_DEBUG("Initializing voice %d...\n", i);
+             dspVoice[i].state = 0;

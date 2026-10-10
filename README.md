@@ -45,7 +45,7 @@ separate `build-audio/` build.
 | Replays | snapshot playback completes on the 64-bit host; pointer-width and highlight-layout faults fixed |
 | Input | keyboard on port 0, plus any SDL gamepad, paced to 60 Hz |
 | Memory card | creates, writes and reads its save file |
-| Audio | off in `build/`; `-DOPENSTRIKERS_AUDIO=ON` (`build-audio/`) plays music, crowd, sound effects and stadium reverb through MusyX and a host stand-in for the DSP -- see [Building with audio](#building-with-audio) and `docs/PLAN-audio.md`. Not yet: Dolby Pro Logic II |
+| Audio | off in `build/`; `-DOPENSTRIKERS_AUDIO=ON` (`build-audio/`) plays music, crowd, sound effects and stadium reverb through MusyX and a host stand-in for the DSP -- see [Building with audio](#building-with-audio) and `docs/PLAN-audio.md`. The Dolby Pro Logic II sound mode encodes the rear channels into the stereo output |
 | Movies | the intro, the NLG logo and the Strikers 101 lessons play in both builds (`src/thp_host.c` decodes THP video; their sound needs `build-audio/`) |
 
 The game boots, loads the front-end `.fen` scene package, runs its timeline
@@ -789,6 +789,7 @@ same output. Environment switches:
 | `OPENSTRIKERS_AUDIO_RAW=<file>` | also write the mix to a file (s16 little-endian, stereo, 32 kHz) |
 | `OPENSTRIKERS_AUDIO_TRACE=1` | log audio ticks, peak voices and peak level every 600 frames |
 | `OPENSTRIKERS_AUDIO_TRACE=2` | also log each voice as it starts |
+| `OPENSTRIKERS_TEST_SOUND_MODE=DOLBY` | start in that sound mode (`STEREO`, `MONO` too), as if picked in the options -- the front end applies it with the saved options, a skip-front-end run starts in it |
 
 ---
 
