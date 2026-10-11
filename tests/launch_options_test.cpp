@@ -51,5 +51,30 @@ int main() {
     parse({"game.iso", "--display", "1junk"}, false);
     for (auto bad : {"0x0", "3840x0", "8000x4320", "3840x5000", "3840x2160junk", "3840", "abc"})
         parse({"game.iso", "--resolution", bad}, false);
+    check(legacy.netRole == NetRole::None);
+    auto host = parse({"--net-host", "game.iso"});
+    check(host.netRole == NetRole::Host && host.netPort == kDefaultNetPort && !std::strcmp(host.disc, "game.iso"));
+    auto host4 = parse({"--net-host", "40000", "--net-players", "4", "--net-delay", "5", "--net-name", "Riley", "game.iso"});
+    check(host4.netPort == 40000 && host4.netPlayers == 4 && host4.netDelay == 5 && !std::strcmp(host4.netName, "Riley"));
+    auto join = parse({"game.iso", "--net-join", "192.168.1.20:40000"});
+    check(join.netRole == NetRole::Join && !std::strcmp(join.netAddress, "192.168.1.20:40000"));
+    parse({"game.iso", "--net-join"}, false);
+    parse({"game.iso", "--net-host", "70000"}, false);
+    parse({"game.iso", "--net-players", "9"}, false);
+    parse({"game.iso", "--net-players", "1"}, false);
+    parse({"game.iso", "--net-delay", "0"}, false);
+    check(legacy.match.homeTeam == -1 && legacy.match.stadium == -1 && legacy.match.items == -1);
+    auto match = parse({"--home", "peach", "--away", "dk", "--home-sidekick", "birdo", "--away-sidekick", "toad",
+                        "--stadium", "forbidden", "--skill", "3", "--match-minutes", "4", "--items", "off",
+                        "--bowser", "on", "--super-strikes", "off", "game.iso"});
+    check(match.match.homeTeam == 4 && match.match.awayTeam == 1 && match.match.homeSidekick == 3 &&
+          match.match.awaySidekick == 0 && match.match.stadium == 6 && match.match.skill == 3 &&
+          match.match.matchSeconds == 240 && match.match.items == 0 && match.match.bowser == 1 &&
+          match.match.superStrikes == 0);
+    parse({"game.iso", "--home", "bowser"}, false);
+    parse({"game.iso", "--stadium", "moon"}, false);
+    parse({"game.iso", "--skill", "5"}, false);
+    parse({"game.iso", "--items", "maybe"}, false);
+    parse({"game.iso", "--match-minutes", "0"}, false);
     std::puts("Launch argument compatibility and validation passed.");
 }

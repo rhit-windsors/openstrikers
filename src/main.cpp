@@ -19,6 +19,7 @@
 #endif
 #include "compat_shims.h"
 #include "launch_options.h"
+#include "net/session.h"
 
 #include <cstdio>
 
@@ -32,7 +33,9 @@ static AspectMode s_aspect = AspectMode::Auto;
 bool osHostSyncWidescreen(bool gameWidescreen) {
     static int s_applied = -1;
     bool widescreen = gameWidescreen;
-    if (s_aspect == AspectMode::Standard) widescreen = false;
+    // Netplay and replay fix it for everyone: 16:9 moves the game's camera.
+    if (const int fixed = net::sessionWidescreen(); fixed >= 0) widescreen = fixed != 0;
+    else if (s_aspect == AspectMode::Standard) widescreen = false;
     else if (s_aspect == AspectMode::Widescreen) widescreen = true;
     if (s_applied != static_cast<int>(widescreen)) {
         s_applied = widescreen;
@@ -97,6 +100,17 @@ int main(int argc, char* argv[])   // <-- diventa aurora_main via macro
                 "  --aspect auto|4:3|16:9|stretch     Picture shape (default auto: the\n"
                 "                                     game's Options > Aspect setting)\n"
                 "  --original-aspect / --widescreen / --stretch   Same as 4:3 / 16:9 / stretch\n"
+                "  --net-host [PORT]                  Host a network match (UDP, default 52320)\n"
+                "  --net-players N                    Machines in the match, host included (2-8)\n"
+                "  --net-delay FRAMES                 Input delay; default 4 (raise it for distant players)\n"
+                "  --net-join HOST[:PORT]             Join a network match\n"
+                "  --net-name NAME                    Your name, shown to the other players\n"
+                "Match (network play, or OPENSTRIKERS_SKIP_FE; a host's apply to everyone):\n"
+                "  --home TEAM / --away TEAM          daisy dk luigi mario peach waluigi wario yoshi\n"
+                "  --home-sidekick SK / --away-sidekick SK   toad koopa hammerbros birdo\n"
+                "  --stadium NAME                     mario peach dk wario yoshi super forbidden\n"
+                "  --match-minutes N / --skill 0-4    Length; computer skill (Training..Legend)\n"
+                "  --items on|off / --bowser on|off / --super-strikes on|off\n"
                 "  F11 or Alt+Enter toggles fullscreen while playing.\n",
                 argc > 0 ? argv[0] : "openstrikers");
         return valid ? 0 : 2;
@@ -173,5 +187,8 @@ int main(int argc, char* argv[])   // <-- diventa aurora_main via macro
         aurora_shutdown();
         return 1;
     }
+    // Input replay or netplay, if asked for: must be set up before the game's
+    // first task frame reads the fixed step, the seed or the pads.
+    net::sessionStart(options);
     return game_main();
 }

@@ -58,17 +58,28 @@ list(FILTER GAME_SOURCES EXCLUDE REGEX ".*_interp\\.cpp$")
 list(FILTER GAME_SOURCES EXCLUDE REGEX ".*FloatingPointExceptions\\.cpp$")
 list(FILTER GAME_SOURCES EXCLUDE REGEX ".*CallStackDumper\\.cpp$")
 
+# Netplay's transport-independent core: no game, aurora or socket dependency,
+# so the lockstep logic is unit-tested on its own (openstrikers-net).
+add_library(openstrikers_net STATIC ${SRC_DIR}/net/lockstep.cpp ${SRC_DIR}/net/udp.cpp ${SRC_DIR}/net/detmath.cpp)
+target_include_directories(openstrikers_net PUBLIC ${SRC_DIR})
+if (WIN32)
+    target_link_libraries(openstrikers_net PUBLIC ws2_32)
+endif ()
+
 add_executable(openstrikers
     ${NL_SOURCES}
     ${ODE_SOURCES}
     ${GAME_SOURCES}
     ${SRC_DIR}/compat_shims.cpp
     ${SRC_DIR}/main.cpp
+    ${SRC_DIR}/net/session.cpp
+    ${SRC_DIR}/net/state_hash.cpp
     ${SRC_DIR}/thp_host.c
 )
 
 target_include_directories(openstrikers PRIVATE
     ${INCLUDE_DIR}
+    ${SRC_DIR}
     ${EXTERN_DIR}/aurora/include
     ${EXTERN_DIR}/decomp/src/ode
     ${EXTERN_DIR}/decomp/include
@@ -76,6 +87,7 @@ target_include_directories(openstrikers PRIVATE
 )
 
 target_link_libraries(openstrikers PRIVATE
+    openstrikers_net
     aurora::core
     aurora::os
     aurora::gx
@@ -119,6 +131,27 @@ if (MINGW)
     target_link_options(openstrikers-launch-options-test PRIVATE -static)
 endif ()
 add_test(NAME openstrikers-launch-options COMMAND openstrikers-launch-options-test)
+
+add_executable(openstrikers-net-test EXCLUDE_FROM_ALL tests/net_lockstep_test.cpp)
+target_link_libraries(openstrikers-net-test PRIVATE openstrikers_net)
+if (MINGW)
+    target_link_options(openstrikers-net-test PRIVATE -static)
+endif ()
+add_test(NAME openstrikers-net COMMAND openstrikers-net-test)
+
+add_executable(openstrikers-detmath-test EXCLUDE_FROM_ALL tests/detmath_test.cpp)
+target_link_libraries(openstrikers-detmath-test PRIVATE openstrikers_net)
+if (MINGW)
+    target_link_options(openstrikers-detmath-test PRIVATE -static)
+endif ()
+add_test(NAME openstrikers-detmath COMMAND openstrikers-detmath-test)
+
+# A stand-in network player for testing a hosted game without a second one.
+add_executable(openstrikers-net-bot EXCLUDE_FROM_ALL tests/net_bot.cpp)
+target_link_libraries(openstrikers-net-bot PRIVATE openstrikers_net)
+if (MINGW)
+    target_link_options(openstrikers-net-bot PRIVATE -static)
+endif ()
 
 # aurora_copy_runtime_dlls() only knows about imported targets, so the
 # toolchain's own DLLs (libwinpthread-1, zlib1, libbz2-1, libsqlite3-0) are left

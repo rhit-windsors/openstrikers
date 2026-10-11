@@ -1,5 +1,6 @@
 #include "compat_shims.h"
 #include "NL/gl/glPlat.h"
+#include "net/session.h"
 
 #include <aurora/aurora.h>
 #include <dolphin/os.h>
@@ -1029,7 +1030,15 @@ static void pumpAudio() {
     int ticks = (int)(sPendingMs / 5.0);
     sPendingMs -= ticks * 5.0;
     if (sStream != nullptr && SDL_GetAudioStreamQueued(sStream) < 15 * kBytesPerMs) {
-        ++ticks; // about to underrun: run a little ahead of game time
+        if (net::sessionDeterministic()) {
+            // The synth's state is game state the game can query (is this
+            // voice still playing?), so under replay or netplay it may only
+            // advance with game time. Cover the underrun with silence.
+            static const s16 sSilence[kTickFrames * 2] = {};
+            SDL_PutAudioStreamData(sStream, sSilence, (int)sizeof(sSilence));
+        } else {
+            ++ticks; // about to underrun: run a little ahead of game time
+        }
     }
     static s16 sBuf[8 * kTickFrames * 2];
     while (ticks > 0) {

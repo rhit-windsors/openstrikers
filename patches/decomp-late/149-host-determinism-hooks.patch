@@ -1,0 +1,86 @@
+# Host hooks that make the game deterministic under input replay and netplay.
+#
+# Lockstep netplay sends only controller input, so every machine must turn the
+# same input into the same game. These are the points where the game took
+# something from the outside world; each now asks the host (src/net/session.cpp),
+# which answers as before when no session is active:
+#
+#   main.cpp       the random seed (was OSGetTick)
+#   nlTask.cpp     the per-frame delta: a fixed 1/60 s under a session, else the
+#                  existing OPENSTRIKERS_FIXED_STEP switch
+#   nlFileGC.cpp   disc reads complete in AsyncManager::Service (aurora's
+#                  deferred DVD mode) instead of on the DVD thread
+#   platpad.cpp    every port's PADStatus for the frame comes from the host --
+#                  a recording now, the agreed input of all players later
+--- a/src/Game/main.cpp
++++ b/src/Game/main.cpp
+@@ -173,7 +173,9 @@
+     {
+         nlBreak();
+     }
+-    nlSetRandomSeed(OSGetTick(), &nlDefaultSeed);
++    // The host supplies the seed when every machine (or a replay) has to draw
++    // the same numbers; otherwise it hands the tick straight back.
++    nlSetRandomSeed(osHostRandomSeed(OSGetTick()), &nlDefaultSeed);
+     bool globalTexturesLoaded = glLoadTextureBundle("global.glt");
+     if (!globalTexturesLoaded)
+     {
+--- a/src/NL/nlFileGC.cpp
++++ b/src/NL/nlFileGC.cpp
+@@ -615,6 +615,13 @@
+ 
+ inline int AsyncManager::Service()
+ {
++    // Netplay and input replay make disc reads complete here rather than on
++    // aurora's DVD thread whenever the read happens to finish, so every run
++    // sees a load land at the same point. Every wait for a read spins on this
++    // function, and BeginFrameTask reaches it once a frame through
++    // nlServiceFileSystem. A no-op otherwise.
++    osHostServiceDisc();
++
+     if (m_activeEntryList != NULL)
+     {
+         AsyncEntry* entry = m_activeEntryList->m_next;
+--- a/src/NL/nlTask.cpp
++++ b/src/NL/nlTask.cpp
+@@ -69,12 +69,13 @@
+             // game state at the same frame number, which is what makes an A/B
+             // capture comparable; without it frame N of one run and frame N of
+             // another are different moments and diffing them proves nothing.
++            // Netplay and input replay force a fixed step of their own, so the
++            // host decides (osHostFixedStepMs).
+             {
+                 static float sFixedStep = -1.0f;
+                 if (sFixedStep < 0.0f)
+                 {
+-                    const char* v = getenv("OPENSTRIKERS_FIXED_STEP");
+-                    sFixedStep = (v != NULL) ? (float)atof(v) : 0.0f;
++                    sFixedStep = osHostFixedStepMs();
+                     if (sFixedStep < 0.0f) sFixedStep = 0.0f;
+                 }
+                 if (sFixedStep > 0.0f)
+--- a/src/NL/plat/platpad.cpp
++++ b/src/NL/plat/platpad.cpp
+@@ -49,7 +49,11 @@
+  */
+ void VBlankPadUpdate()
+ {
+-    PADRead(PadStatus::s_Next);
++    // Under netplay or input replay the host supplies every port's status for
++    // this frame (all players' inputs, agreed or recorded); otherwise this is
++    // the local controllers as before.
++    if (!osHostReadPads(PadStatus::s_Next, true))
++        PADRead(PadStatus::s_Next);
+     PADClampCircle(PadStatus::s_Next);
+ 
+     int i;
+@@ -379,7 +383,8 @@
+  */
+ void InitPlatPad()
+ {
+-    PADRead(PadStatus::s_Current);
++    if (!osHostReadPads(PadStatus::s_Current, false))
++        PADRead(PadStatus::s_Current);
+     memcpy(PadStatus::s_Next, PadStatus::s_Next, 4);
+ 
+     for (int i = 0; i < 2; ++i)

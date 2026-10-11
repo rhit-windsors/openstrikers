@@ -1,0 +1,87 @@
+# The match every machine plays, and math every machine computes alike.
+#
+# Match: when the menus are skipped (always, in network play) the match comes
+# from the host (osHostMatch): teams, sidekicks, stadium, and the items,
+# Bowser and super-strike switches -- the host's in a network match, so every
+# machine sets up the same one; the command line's otherwise. In memory only.
+#
+# Math: ODE's dSin/dCos/dAtan2, nlTan and nlBezier's pow went to the C
+# runtime, whose results can differ in the last bit between machines (on
+# Windows, ucrtbase picks an FMA3 path on CPUs that have one). They now use the
+# host's deterministic versions (src/net/detmath.cpp, from musl).
+--- a/include/ode/common.h
++++ b/include/ode/common.h
+@@ -142,10 +142,13 @@
+ #define dSqrt(x)  ((float)nlSqrt(float(x), true)) /* reciprocal */
+ // #define dSqrt(x)        ((float)sqrtf(float(x)))            /* square root */
+ #define dRecipSqrt(x)   ((float)(1.0f / dSqrt(float(x))))   /* reciprocal square root */
+-#define dSin(x)         ((float)sinf(float(x)))             /* sine */
+-#define dCos(x)         ((float)cosf(float(x)))             /* cosine */
++// The host's deterministic trig (src/net/detmath.cpp), not the C runtime's,
++// whose results can differ in the last bit between machines: network play
++// needs every machine's physics to agree exactly.
++#define dSin(x)         ((float)osDetSinf(float(x)))             /* sine */
++#define dCos(x)         ((float)osDetCosf(float(x)))             /* cosine */
+ #define dFabs(x)        ((float)fabsf(float(x)))            /* absolute value */
+-#define dAtan2(y, x)    ((float)atan2f(float(y), float(x))) /* arc tangent with 2 args */
++#define dAtan2(y, x)    ((float)osDetAtan2f(float(y), float(x))) /* arc tangent with 2 args */
+ #define dFMod(a, b)     ((float)fmodf(float(a), float(b)))  /* modulo */
+ #define dCopySign(a, b) ((float)copysignf(float(a), float(b)))
+ 
+--- a/src/Game/GameInfo.cpp
++++ b/src/Game/GameInfo.cpp
+@@ -218,6 +218,31 @@
+     mUserInfo.mGameplayOptions.InitializeDefaults();
+     mUserInfo.mPowerupOptions.InitializeDefaults();
+     mUserInfo.mCheatOptions.InitializeDefaults();
++
++    // The host's match when the menus are skipped: a network match's, which
++    // every machine must set up identically, or the command line's. Applied
++    // in memory only; nothing here reaches the memory card.
++    OsHostMatch hostMatch;
++    if (skipFE && osHostMatch(&hostMatch))
++    {
++        BasicGameInfo* info = mGameInfo[mCurrentMode];
++        if (hostMatch.homeTeam >= 0)
++            info->mTeamIndex[0] = (eTeamID)hostMatch.homeTeam;
++        if (hostMatch.awayTeam >= 0)
++            info->mTeamIndex[1] = (eTeamID)hostMatch.awayTeam;
++        if (hostMatch.homeSidekick >= 0)
++            info->mSidekickIndex[0] = (eSidekickID)hostMatch.homeSidekick;
++        if (hostMatch.awaySidekick >= 0)
++            info->mSidekickIndex[1] = (eSidekickID)hostMatch.awaySidekick;
++        if (hostMatch.stadium >= 0)
++            info->mStadiumIndex = (eStadiumID)hostMatch.stadium;
++        if (hostMatch.items >= 0)
++            mUserInfo.mGameplayOptions.PowerUps = hostMatch.items != 0;
++        if (hostMatch.bowser >= 0)
++            mUserInfo.mGameplayOptions.BowserAttackEnabled = hostMatch.bowser != 0;
++        if (hostMatch.superStrikes >= 0)
++            mUserInfo.mGameplayOptions.Shoot2Score = hostMatch.superStrikes != 0;
++    }
+ }
+ 
+ /**
+--- a/src/NL/nlMath.cpp
++++ b/src/NL/nlMath.cpp
+@@ -54,7 +54,8 @@
+     oneMinusMu = 1.0f - fMu;
+     nFactorial = 1;
+     kFactorial = 1;
+-    powVal = pow(oneMinusMu, (float)nNumPoints);
++    // A whole power; the host's is exact to the bit on every machine.
++    powVal = osDetPowi(oneMinusMu, nNumPoints);
+     oneMinusMuToNMinusK = powVal;
+     muToK = 1.0f;
+ 
+@@ -152,7 +153,9 @@
+  */
+ float nlTan(unsigned short angle)
+ {
+-    return (float)tan(nlAngleConstantsData.unitsToRadians * angle);
++    // The host's deterministic tangent: the C runtime's can differ between
++    // machines in the last bit.
++    return osDetTanf(nlAngleConstantsData.unitsToRadians * angle);
+ }
+ 
+ namespace

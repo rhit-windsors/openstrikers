@@ -20,7 +20,21 @@ namespace {
 constexpr COLORREF Background = RGB(12, 18, 29), Card = RGB(23, 33, 48);
 constexpr COLORREF Field = RGB(32, 44, 61), Text = RGB(235, 241, 249);
 constexpr COLORREF Muted = RGB(155, 174, 195), Accent = RGB(255, 173, 65);
-enum { Iso = 101, BrowseIso, Exe, BrowseExe, Resolution, Mode, Display, Aspect, Vsync, Play, Logs, Status };
+enum { Iso = 101, BrowseIso, Exe, BrowseExe, Resolution, Mode, Display, Aspect, Vsync, Play, Logs, Status,
+       Online, NetName, NetPlayers, NetAddress, NetDelay, HomeTeam, HomeSidekick, AwayTeam, AwaySidekick,
+       Stadium, Length, Skill, Items, Bowser, NetHint };
+// Online play. Indices are saved in launcher.ini too.
+const wchar_t* onlineModes[] = {L"Off: play on this PC", L"Host a network match", L"Join a network match"};
+// In the game's eTeamID / eSidekickID / eStadiumID order, as --home etc. expect.
+const wchar_t* teams[] = {L"Daisy", L"Donkey Kong", L"Luigi", L"Mario", L"Peach", L"Waluigi", L"Wario", L"Yoshi"};
+const wchar_t* teamArgs[] = {L"daisy", L"dk", L"luigi", L"mario", L"peach", L"waluigi", L"wario", L"yoshi"};
+const wchar_t* sidekicks[] = {L"Toad", L"Koopa", L"Hammer Bros", L"Birdo"};
+const wchar_t* sidekickArgs[] = {L"toad", L"koopa", L"hammerbros", L"birdo"};
+const wchar_t* stadiums[] = {L"Mario Stadium", L"Peach's Castle", L"DK Jungle", L"Wario's Factory",
+                             L"Yoshi's Island", L"Super Stadium", L"The Battle Dome"};
+const wchar_t* stadiumArgs[] = {L"mario", L"peach", L"dk", L"wario", L"yoshi", L"super", L"forbidden"};
+const wchar_t* skills[] = {L"Training", L"Rookie", L"Professional", L"Superstar", L"Legend"};
+constexpr int OnlineX = 772; // the online card, right of the existing two
 const wchar_t* resolutions[] = {L"Native / match display", L"1280 x 720  (720p)", L"1920 x 1080  (1080p)",
                                 L"2560 x 1440  (1440p)", L"3840 x 2160  (4K UHD)"};
 const wchar_t* resolutionArgs[] = {L"native", L"1280x720", L"1920x1080", L"2560x1440", L"3840x2160"};
@@ -95,7 +109,16 @@ bool saveSettings() {
         {L"Resolution", std::to_wstring(selected(Resolution))},
         {L"Mode", std::to_wstring(selected(Mode))}, {L"Display", std::to_wstring(selected(Display))},
         {L"Aspect", std::to_wstring(selected(Aspect))},
-        {L"Vsync", SendDlgItemMessageW(window, Vsync, BM_GETCHECK, 0, 0) == BST_CHECKED ? L"1" : L"0"}
+        {L"Vsync", SendDlgItemMessageW(window, Vsync, BM_GETCHECK, 0, 0) == BST_CHECKED ? L"1" : L"0"},
+        {L"Online", std::to_wstring(selected(Online))}, {L"NetName", textOf(NetName)},
+        {L"NetPlayers", std::to_wstring(selected(NetPlayers))}, {L"NetAddress", textOf(NetAddress)},
+        {L"NetDelay", std::to_wstring(selected(NetDelay))},
+        {L"HomeTeam", std::to_wstring(selected(HomeTeam))}, {L"HomeSidekick", std::to_wstring(selected(HomeSidekick))},
+        {L"AwayTeam", std::to_wstring(selected(AwayTeam))}, {L"AwaySidekick", std::to_wstring(selected(AwaySidekick))},
+        {L"Stadium", std::to_wstring(selected(Stadium))}, {L"Length", std::to_wstring(selected(Length))},
+        {L"Skill", std::to_wstring(selected(Skill))},
+        {L"Items", SendDlgItemMessageW(window, Items, BM_GETCHECK, 0, 0) == BST_CHECKED ? L"1" : L"0"},
+        {L"Bowser", SendDlgItemMessageW(window, Bowser, BM_GETCHECK, 0, 0) == BST_CHECKED ? L"1" : L"0"}
     };
     for (const auto& [key, value] : values) {
         if (!WritePrivateProfileStringW(L"Launcher", key, value.c_str(), settingsFile.c_str())) {
@@ -152,6 +175,32 @@ void play() {
         error(L"This is not a Super Mario Strikers GameCube ISO/GCM. Choose an uncompressed disc image.");
         return;
     }
+    // Online: the game does the networking itself; the launcher only says
+    // whether to host or join, and the host's match.
+    std::wstring online;
+    const int onlineMode = selected(Online);
+    const std::wstring address = textOf(NetAddress);
+    if (onlineMode == 1) {
+        if (!address.empty() && address.find_first_not_of(L"0123456789") != std::wstring::npos) {
+            error(L"To host, put the UDP port to listen on in the address box (or leave it empty for 52320).");
+            return;
+        }
+        online = L" --net-host" + (address.empty() ? L"" : L" " + address) +
+                 L" --net-players " + std::to_wstring(selected(NetPlayers) + 2) +
+                 L" --home " + teamArgs[selected(HomeTeam)] + L" --home-sidekick " + sidekickArgs[selected(HomeSidekick)] +
+                 L" --away " + teamArgs[selected(AwayTeam)] + L" --away-sidekick " + sidekickArgs[selected(AwaySidekick)] +
+                 L" --stadium " + stadiumArgs[selected(Stadium)] +
+                 L" --match-minutes " + std::to_wstring(selected(Length) + 1) +
+                 L" --skill " + std::to_wstring(selected(Skill)) +
+                 L" --items " + (SendDlgItemMessageW(window, Items, BM_GETCHECK, 0, 0) == BST_CHECKED ? L"on" : L"off") +
+                 L" --bowser " + (SendDlgItemMessageW(window, Bowser, BM_GETCHECK, 0, 0) == BST_CHECKED ? L"on" : L"off");
+        if (selected(NetDelay) > 0) online += L" --net-delay " + std::to_wstring(selected(NetDelay) + 1);
+    } else if (onlineMode == 2) {
+        if (address.empty()) { error(L"Put the host's address in the address box, like 192.168.1.20 or 100.64.0.7:52320."); return; }
+        online = L" --net-join " + quote(address);
+    }
+    if (onlineMode != 0 && !textOf(NetName).empty()) online += L" --net-name " + quote(textOf(NetName));
+
     if (!saveSettings()) return;
     fs::create_directories(settingsDir / L"logs", ec);
     if (ec) { error(L"Could not create the game log folder."); return; }
@@ -177,7 +226,8 @@ void play() {
         (selected(Mode) == 0 ? L" --fullscreen" : L" --windowed") +
         L" --display " + std::to_wstring(selected(Display)) +
         L" --aspect " + aspectArgs[selected(Aspect)] +
-        (SendDlgItemMessageW(window, Vsync, BM_GETCHECK, 0, 0) == BST_CHECKED ? L" --vsync" : L" --no-vsync");
+        (SendDlgItemMessageW(window, Vsync, BM_GETCHECK, 0, 0) == BST_CHECKED ? L" --vsync" : L" --no-vsync") +
+        online;
     STARTUPINFOW startup{sizeof(startup)};
     startup.dwFlags = STARTF_USESTDHANDLES;
     startup.hStdOutput = startup.hStdError = log;
@@ -193,7 +243,9 @@ void play() {
     CloseHandle(process.hThread);
     gameProcess = process.hProcess;
     EnableWindow(GetDlgItem(window, Play), FALSE);
-    status(L"Game running. F11 or Alt+Enter toggles fullscreen.");
+    status(onlineMode == 1 ? L"Hosting. The match starts when everyone has joined."
+         : onlineMode == 2 ? L"Joining. The match starts when everyone has joined."
+                           : L"Game running. F11 or Alt+Enter toggles fullscreen.");
     SetTimer(window, 1, 500, nullptr);
     ShowWindow(window, SW_MINIMIZE);
 }
@@ -236,6 +288,8 @@ std::wstring initialIso() {
     return {};
 }
 
+void updateOnline();
+
 void createControls() {
     label(L"OPENSTRIKERS", 36, 24, 660, 44, headingFont);
     label(L"Your next match, ready to play.", 38, 74, 640, 26);
@@ -263,6 +317,54 @@ void createControls() {
             Status, 38, 578, 680, 40);
     control(L"BUTTON", L"Open logs", WS_TABSTOP | BS_OWNERDRAW, Logs, 38, 632, 154, 44);
     control(L"BUTTON", L"PLAY GAME", WS_TABSTOP | BS_OWNERDRAW, Play, 504, 628, 230, 48);
+
+    const int x = OnlineX + 16, w = 338, half = 165;
+    label(L"ONLINE PLAY", x, 130, w, 22, smallFont);
+    combo(Online, x, 156, w, {std::begin(onlineModes), std::end(onlineModes)}, prefIndex(L"Online", 0, 3));
+    label(L"YOUR NAME", x, 208, half, 22, smallFont);
+    control(L"EDIT", pref(L"NetName").c_str(), WS_TABSTOP | ES_AUTOHSCROLL, NetName, x, 234, half, 34);
+    label(L"MACHINES", x + w - half, 208, half, 22, smallFont);
+    combo(NetPlayers, x + w - half, 234, half, {L"2", L"3", L"4", L"5", L"6", L"7", L"8"}, prefIndex(L"NetPlayers", 0, 7));
+    label(L"HOST ADDRESS (JOIN) OR PORT (HOST)", x, 286, w, 22, smallFont);
+    control(L"EDIT", pref(L"NetAddress").c_str(), WS_TABSTOP | ES_AUTOHSCROLL, NetAddress, x, 312, w, 34);
+    label(L"INPUT DELAY", x, 364, w, 22, smallFont);
+    std::vector<std::wstring> delays{L"Automatic (4 frames, 67 ms)"};
+    for (int d = 2; d <= 12; ++d) delays.push_back(std::to_wstring(d) + L" frames (" + std::to_wstring(d * 50 / 3) + L" ms)");
+    combo(NetDelay, x, 390, w, delays, prefIndex(L"NetDelay", 0, static_cast<int>(delays.size())));
+    label(L"HOME TEAM AND SIDEKICK (HOST)", x, 442, w, 22, smallFont);
+    combo(HomeTeam, x, 468, half, {std::begin(teams), std::end(teams)}, prefIndex(L"HomeTeam", 3, 8));
+    combo(HomeSidekick, x + w - half, 468, half, {std::begin(sidekicks), std::end(sidekicks)}, prefIndex(L"HomeSidekick", 0, 4));
+    label(L"AWAY TEAM AND SIDEKICK", x, 520, w, 22, smallFont);
+    combo(AwayTeam, x, 546, half, {std::begin(teams), std::end(teams)}, prefIndex(L"AwayTeam", 2, 8));
+    combo(AwaySidekick, x + w - half, 546, half, {std::begin(sidekicks), std::end(sidekicks)}, prefIndex(L"AwaySidekick", 1, 4));
+    label(L"STADIUM", x, 598, w, 22, smallFont);
+    combo(Stadium, x, 624, w, {std::begin(stadiums), std::end(stadiums)}, prefIndex(L"Stadium", 1, 7));
+    label(L"LENGTH", x, 676, half, 22, smallFont);
+    std::vector<std::wstring> lengths;
+    for (int m = 1; m <= 10; ++m) lengths.push_back(std::to_wstring(m) + (m == 1 ? L" minute" : L" minutes"));
+    combo(Length, x, 702, half, lengths, prefIndex(L"Length", 4, 10));
+    label(L"COMPUTER SKILL", x + w - half, 676, half, 22, smallFont);
+    combo(Skill, x + w - half, 702, half, {std::begin(skills), std::end(skills)}, prefIndex(L"Skill", 2, 5));
+    control(L"BUTTON", L"Items", WS_TABSTOP | BS_AUTOCHECKBOX, Items, x, 750, half, 32);
+    SendDlgItemMessageW(window, Items, BM_SETCHECK, prefIndex(L"Items", 1, 2) ? BST_CHECKED : BST_UNCHECKED, 0);
+    control(L"BUTTON", L"Bowser attacks", WS_TABSTOP | BS_AUTOCHECKBOX, Bowser, x + w - half, 750, half, 32);
+    SendDlgItemMessageW(window, Bowser, BM_SETCHECK, prefIndex(L"Bowser", 1, 2) ? BST_CHECKED : BST_UNCHECKED, 0);
+    control(L"STATIC", L"", SS_LEFT, NetHint, x, 790, w, 44);
+    updateOnline();
+}
+
+// Only what the chosen role uses is editable: the host sets up the match.
+void updateOnline() {
+    const int mode = selected(Online);
+    const bool host = mode == 1;
+    for (int id : {NetName, NetAddress, NetDelay}) EnableWindow(GetDlgItem(window, id), mode != 0);
+    EnableWindow(GetDlgItem(window, NetDelay), host);
+    for (int id : {NetPlayers, HomeTeam, HomeSidekick, AwayTeam, AwaySidekick, Stadium, Length, Skill, Items, Bowser})
+        EnableWindow(GetDlgItem(window, id), host);
+    SetDlgItemTextW(window, NetHint,
+        host ? L"Players join your address. Over the internet, forward UDP 52320 or use Tailscale/ZeroTier."
+             : mode == 2 ? L"Everyone needs the same OpenStrikers build and disc. The host picks the match."
+                         : L"Up to 8 players over the network: one per fielder on both teams.");
 }
 
 void drawItem(DRAWITEMSTRUCT* item) {
@@ -311,7 +413,7 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         RECT rect;
         GetWindowRect(reinterpret_cast<HWND>(lparam), &rect);
         MapWindowPoints(nullptr, hwnd, reinterpret_cast<POINT*>(&rect), 2);
-        bool inCard = rect.top >= px(114) && rect.top < px(530);
+        bool inCard = rect.top >= px(114) && (rect.left >= px(OnlineX) ? rect.top < px(840) : rect.top < px(530));
         SetBkColor(dc, inCard ? Card : Background);
         SetTextColor(dc, reinterpret_cast<HFONT>(SendMessageW(reinterpret_cast<HWND>(lparam), WM_GETFONT, 0, 0))
                             == headingFont ? Text : Muted);
@@ -330,8 +432,10 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         FillRect(dc, &rect, backgroundBrush);
         RECT first{px(38), px(114), px(734), px(292)};
         RECT second{px(38), px(308), px(734), px(530)};
+        RECT third{px(OnlineX), px(114), px(OnlineX + 370), px(840)};
         FillRect(dc, &first, cardBrush);
         FillRect(dc, &second, cardBrush);
+        FillRect(dc, &third, cardBrush);
         RECT accent{px(38), px(102), px(108), px(105)};
         HBRUSH brush = CreateSolidBrush(Accent);
         FillRect(dc, &accent, brush);
@@ -340,6 +444,7 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         return 0;
     }
     case WM_COMMAND:
+        if (HIWORD(wparam) == CBN_SELCHANGE && LOWORD(wparam) == Online) updateOnline();
         if (HIWORD(wparam) == BN_CLICKED) {
             switch (LOWORD(wparam)) {
             case BrowseIso: browse(Iso); break;
@@ -386,7 +491,8 @@ int WINAPI wWinMain(HINSTANCE app, HINSTANCE, PWSTR, int show) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE);
     RECT work{};
     SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
-    dpiScale = std::min(GetDpiForSystem() / 96.f, (work.bottom - work.top - 60) / 704.f);
+    dpiScale = std::min({GetDpiForSystem() / 96.f, (work.bottom - work.top - 60) / 860.f,
+                         (work.right - work.left - 40) / 1160.f});
     std::vector<wchar_t> executable(32768);
     GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
     appDir = fs::path(executable.data()).parent_path();
@@ -429,7 +535,7 @@ int WINAPI wWinMain(HINSTANCE app, HINSTANCE, PWSTR, int show) {
     cls.lpszClassName = L"OpenStrikersLauncher";
     RegisterClassW(&cls);
     const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
-    RECT rect{0, 0, px(772), px(704)};
+    RECT rect{0, 0, px(1160), px(860)};
     AdjustWindowRectEx(&rect, style, FALSE, WS_EX_CONTROLPARENT);
     int width = rect.right - rect.left, height = rect.bottom - rect.top;
     window = CreateWindowExW(WS_EX_CONTROLPARENT, cls.lpszClassName, L"OpenStrikers Launcher", style,

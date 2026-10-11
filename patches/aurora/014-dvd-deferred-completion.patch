@@ -1,0 +1,187 @@
+# Deferred DVD completion, for input replay and lockstep netplay.
+#
+# The DVD worker thread completes a read whenever the disc access happens to
+# finish, so a load lands on a different frame from run to run -- and in a game
+# that polls for loads once a frame, that changes everything after it. Two
+# machines that must compute the same game from the same input cannot have
+# that. aurora_dvd_set_deferred(true) stops the worker taking commands; queued
+# commands then run in submission order, with their callbacks, when the host
+# calls aurora_dvd_service_deferred() -- the game does so from its file-system
+# service, which every wait for a read already spins on.
+#
+# Blocking reads run the queue up to themselves, and a completion callback that
+# closes or cancels its own file is recognised as running on the processing
+# thread, so neither deadlocks.
+--- a/include/aurora/dvd.h
++++ b/include/aurora/dvd.h
+@@ -21,6 +21,24 @@
+ void aurora_dvd_close(void);
+ 
+ /**
++ * \brief Make asynchronous DVD commands complete at a point the host chooses.
++ *
++ * While deferred, queued commands are not run on the DVD worker thread. They
++ * run, in submission order, when aurora_dvd_service_deferred() is called, on
++ * the calling thread, and so do their completion callbacks. A host that
++ * services once per frame sees each read complete at the same frame on every
++ * run regardless of disc speed, which input replay and lockstep netplay need.
++ * Blocking reads still work: they run the queue up to themselves.
++ */
++void aurora_dvd_set_deferred(bool deferred);
++
++/**
++ * \brief Run every queued DVD command, including any that completion callbacks
++ * queue while this runs. Does nothing unless deferred mode is on.
++ */
++void aurora_dvd_service_deferred(void);
++
++/**
+  * OVERLAY FILES!
+  *
+  * Overlay files allow you to replace and add ("overlay") files that are present in the loaded DVD.
+--- a/lib/dolphin/dvd/dvd.cpp
++++ b/lib/dolphin/dvd/dvd.cpp
+@@ -405,6 +405,62 @@
+     m_cv.notify_one();
+   }
+ 
++  // Deferred mode: the worker thread stops taking commands, and queued
++  // commands run only when service_deferred() is called, in submission order,
++  // on the calling thread. A host that calls it once per frame gets every read
++  // completing at the same frame on every run, however long the disc access
++  // really took -- which lockstep netplay and input replay depend on.
++  void set_deferred(bool deferred) {
++    std::unique_lock lk{m_mutex};
++    m_deferred = deferred;
++    // Let a command the worker already took finish before the caller can
++    // start servicing on its own thread.
++    m_doneCv.wait(lk, [&] { return !m_running || m_activeBlock == nullptr; });
++    if (!deferred) {
++      lk.unlock();
++      m_cv.notify_one();
++    }
++  }
++
++  bool is_deferred() {
++    std::lock_guard lk{m_mutex};
++    return m_deferred;
++  }
++
++  // Runs queued commands until the queue is empty, including any that the
++  // completion callbacks submit, or until `until` has completed.
++  void service_deferred(const DVDCommandBlock* until = nullptr) {
++    // A blocking read inside a completion callback services recursively.
++    const std::thread::id outer = m_serviceThread;
++    m_serviceThread = std::this_thread::get_id();
++    while (true) {
++      DVDCommandBlock* block;
++      {
++        std::lock_guard lk{m_mutex};
++        if (!m_deferred || m_queue.empty()) {
++          break;
++        }
++        block = m_queue.front();
++        m_queue.pop_front();
++        m_activeBlock = block;
++        atomic_store_release(block->state, DVD_STATE_BUSY);
++      }
++      process_command(block);
++      {
++        std::lock_guard lk{m_mutex};
++        m_activeBlock = nullptr;
++        if (m_cancelActiveBlock == block) {
++          m_cancelActiveBlock = nullptr;
++        }
++      }
++      m_doneCv.notify_all();
++      if (block == until) {
++        break;
++      }
++    }
++    m_serviceThread = outer;
++  }
++
+   void retire_command(DVDCommandBlock* block) {
+     if (block == nullptr) {
+       return;
+@@ -423,7 +479,7 @@
+       }
+     }
+ 
+-    if (m_activeBlock == block && std::this_thread::get_id() != m_thread.get_id()) {
++    if (m_activeBlock == block && !on_processing_thread()) {
+       m_cancelActiveBlock = block;
+       m_doneCv.wait(lk, [&] { return !m_running || m_activeBlock != block; });
+     } else {
+@@ -440,7 +496,7 @@
+     {
+       std::lock_guard lk{m_mutex};
+       canceledBlocks = discard_pending_commands_locked();
+-      if (m_activeBlock != nullptr && std::this_thread::get_id() != m_thread.get_id()) {
++      if (m_activeBlock != nullptr && !on_processing_thread()) {
+         m_cancelActiveBlock = m_activeBlock;
+         waitForActive = true;
+       }
+@@ -473,7 +529,7 @@
+       }
+     }
+ 
+-    if (m_activeBlock == block && std::this_thread::get_id() != m_thread.get_id()) {
++    if (m_activeBlock == block && !on_processing_thread()) {
+       m_cancelActiveBlock = block;
+       m_doneCv.wait(lk, [&] { return !m_running || m_activeBlock != block; });
+     }
+@@ -483,6 +539,16 @@
+     if (block == nullptr) {
+       return;
+     }
++    if (is_deferred()) {
++      // Nothing else will run the queue: run it here, up to this command.
++      // Everything submitted before it completes first, in order, so a
++      // blocking read stays deterministic too.
++      const s32 state = atomic_load_acquire(block->state);
++      if (state == DVD_STATE_WAITING) {
++        service_deferred(block);
++      }
++      return;
++    }
+     std::unique_lock lk{m_mutex};
+     m_doneCv.wait(lk, [&] {
+       const s32 state = atomic_load_acquire(block->state);
+@@ -498,7 +564,7 @@
+ 
+     std::unique_lock lk{m_mutex};
+     while (true) {
+-      m_cv.wait(lk, [&] { return m_shutdown || !m_queue.empty(); });
++      m_cv.wait(lk, [&] { return m_shutdown || (!m_deferred && !m_queue.empty()); });
+       if (m_shutdown) {
+         return;
+       }
+@@ -606,6 +672,16 @@
+   DVDCommandBlock* m_cancelActiveBlock = nullptr;
+   bool m_running = false;
+   bool m_shutdown = false;
++  bool m_deferred = false;
++  std::thread::id m_serviceThread;
++
++  // The thread running commands: the worker, or the caller of
++  // service_deferred(). A completion callback that cancels or closes its own
++  // file must not wait for itself to finish.
++  bool on_processing_thread() const {
++    const auto self = std::this_thread::get_id();
++    return self == m_thread.get_id() || self == m_serviceThread;
++  }
+ };
+ 
+ DvdWorker s_worker;
+@@ -714,6 +790,10 @@
+   clearState();
+ }
+ 
++void aurora_dvd_set_deferred(bool deferred) { s_worker.set_deferred(deferred); }
++
++void aurora_dvd_service_deferred(void) { s_worker.service_deferred(); }
++
+ void DVDInit(void) {}
+ 
+ const u8* DVDGetDOLLocation(s32* out_size) {

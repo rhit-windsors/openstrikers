@@ -34,6 +34,61 @@ void osHostFrameEnd();
 // an aspect, in which case the caller writes the forced value back.
 bool osHostSyncWidescreen(bool gameWidescreen);
 
+// --- determinism (input replay and netplay) ---------------------------------
+// Lockstep netplay sends only controller input, so every machine has to turn
+// the same input into the same game. These are the places the game would
+// otherwise take something from the outside world; the host owns them (see
+// src/net/session.cpp). With no session active each one behaves as before.
+#ifdef __cplusplus
+struct PADStatus;
+// The constant per-frame delta in milliseconds that nlTask uses instead of
+// the wall clock, or 0 to use the wall clock.
+float osHostFixedStepMs();
+// The seed for nlDefaultSeed; `fallback` is what the game would have used.
+unsigned int osHostRandomSeed(unsigned int fallback);
+// Completes queued disc reads (aurora's deferred DVD mode). Called from
+// nlServiceFileSystem.
+void osHostServiceDisc();
+// Fills all four ports for this frame and returns true when the host supplies
+// input (replayed or agreed over the network); returns false to have the
+// caller read the local controllers with PADRead. `frameSample` is false for
+// the one-off read at pad initialisation.
+bool osHostReadPads(PADStatus* status, bool frameSample);
+
+// Trigonometry with the same bits on every machine (src/net/detmath.cpp), for
+// the simulation: the C runtime's can differ between CPUs and Windows versions.
+extern "C" float osDetSinf(float x);
+extern "C" float osDetCosf(float x);
+extern "C" float osDetTanf(float x);
+extern "C" float osDetAtan2f(float y, float x);
+extern "C" double osDetPowi(double x, int n);
+
+// --- network slots ------------------------------------------------------------
+// A network match has a controller slot per fielder: slots 0-3 are the home
+// captain and three sidekicks, 4-7 the same for the away team.
+//
+// The team a pad plays for, -1 for none, or OS_HOST_PAD_SIDE_GAME to use the
+// game's own setting (no network match).
+#define OS_HOST_PAD_SIDE_GAME (-2)
+int osHostPadSide(int pad);
+// The fielder (0 captain, 1-3 sidekicks) a pad controls, or -1 to leave it to
+// the game.
+int osHostPadFielder(int pad);
+// True for a team whose four fielders all have a human: nobody swaps.
+bool osHostTeamLocked(int side);
+// Rumble for a slot, on whichever controller of this machine drives it.
+void osHostControlMotor(int pad, unsigned int command);
+
+// The match the skip-the-menus path sets up: the host's in a network match,
+// else the command line's. -1 keeps the game's own value. Teams, sidekicks and
+// stadium are eTeamID / eSidekickID / eStadiumID; the rest 0 off, 1 on.
+struct OsHostMatch {
+    int homeTeam, awayTeam, homeSidekick, awaySidekick, stadium;
+    int items, bowser, superStrikes;
+};
+bool osHostMatch(OsHostMatch* out);
+#endif
+
 // --- host switches ----------------------------------------------------------
 // OPENSTRIKERS_SKIP_FE=1 starts an exhibition match directly instead of running
 // the front end. It is read in three places -- the initial task state, the

@@ -1,0 +1,492 @@
+# Eight controller slots, one per fielder, for network play.
+#
+# The GameCube had four pad ports, and the game's per-pad state was sized to
+# match. A network match gives every fielder on both teams a human: slots 0-3
+# are the home captain and three sidekicks, 4-7 the away team's. NL_MAX_PADS
+# (8) sizes the pad state, the AI pad table, flick history, the per-player
+# swap timers and the rumble state, and the loops over them. Ports 4-7 never
+# come from PADRead -- only from the host's agreed network input -- and stay
+# unplugged otherwise. The front end still offers four.
+#
+# Data the memory card saves keeps its four entries: mPadSides comes from the
+# host for slots past four (and for all of them in a network match, through
+# osHostPadSide), and per-controller stats are not kept for slots past four.
+# Rumble goes through osHostControlMotor, which only shakes this machine's own
+# controllers. Indicators for slots 4-7 reuse the art of 1-4.
+#
+# Fielders: each network slot names its fielder (osHostPadFielder), which
+# cTeam::UpdateControllers gives it first. A team whose four fielders all have
+# a human is locked (osHostTeamLocked): SwapController moves no pad, except
+# that a pad the goalie borrowed to throw the ball out goes back to the fielder
+# it belongs to.
+--- a/include/Game/AI/AIPad.h
++++ b/include/Game/AI/AIPad.h
+@@ -22,7 +22,7 @@
+ struct AIPadManager
+ {
+     static void Startup();
+-    static cAIPad mAIPads[4];
++    static cAIPad mAIPads[NL_MAX_PADS];
+ };
+ 
+ #endif // AIPAD_H
+--- a/include/Game/Player.h
++++ b/include/Game/Player.h
+@@ -145,7 +145,7 @@
+     /* 0x170 */ Timer m_tSlideAttackTimer;               // offset 0x170, size 0x4
+     /* 0x174 */ Timer m_tLooseBallPassTimer;             // offset 0x174, size 0x4
+     /* 0x178 */ Timer m_tInactivityTimer;                // offset 0x178, size 0x4
+-    /* 0x17C */ Timer m_tSwapControllerTimer[4];         // offset 0x17C, size 0x10
++    /* 0x17C */ Timer m_tSwapControllerTimer[NL_MAX_PADS]; // offset 0x17C, size 0x10 (four on the GameCube)
+     /* 0x18C */ bool m_bCanTestController;               // offset 0x18C, size 0x1
+     /* 0x190 */ ePadActions m_eLastPadAction;            // offset 0x190, size 0x4
+     /* 0x194 */ u16 m_aSwapFacingDirection;              // offset 0x194, size 0x2
+--- a/include/NL/globalpad.h
++++ b/include/NL/globalpad.h
+@@ -7,6 +7,12 @@
+ 
+ class cGlobalPad;
+ 
++// Controller slots the game simulates. The GameCube had four ports
++// (PAD_MAX_CONTROLLERS); network play gives every fielder on both teams a
++// slot, so the host runs eight. Ports 4-7 never come from PADRead -- only from
++// the host's agreed network input -- and the front end still only offers four.
++#define NL_MAX_PADS 8
++
+ class cPadManager
+ {
+ public:
+@@ -20,7 +26,7 @@
+     }
+ 
+     static s32* m_pRemapArray;
+-    static cGlobalPad* m_aPads[PAD_MAX_CONTROLLERS];
++    static cGlobalPad* m_aPads[NL_MAX_PADS];
+     static float m_DeltaT;
+ };
+ 
+--- a/include/NL/platpad.h
++++ b/include/NL/platpad.h
+@@ -56,18 +56,19 @@
+ class PadStatus
+ {
+ public:
+-    static PADStatus s_A[4];
+-    static PADStatus s_B[4];
++    static PADStatus s_A[NL_MAX_PADS];
++    static PADStatus s_B[NL_MAX_PADS];
+     static PADStatus* s_Current;
+     static PADStatus* s_Next;
+ 
+     void Update(float dt);
+ 
+-    /* 0x000 */ struct tGameCubePad m_GameCubePads[4]; // size 0x380
+-    /* 0x380 */ u16 m_justPressed[4];                  // size 0x8
+-    /* 0x388 */ u16 m_justReleased[4];                 // size 0x8
+-    /* 0x390 */ u16 m_previousButtons[4];              // size 0x8
+-    /* 0x398 */ s8 m_previousErr[4];                   // size 0x4
++    // Offsets are the GameCube's four-pad layout; the host keeps NL_MAX_PADS.
++    /* 0x000 */ struct tGameCubePad m_GameCubePads[NL_MAX_PADS]; // size 0x380
++    /* 0x380 */ u16 m_justPressed[NL_MAX_PADS];                  // size 0x8
++    /* 0x388 */ u16 m_justReleased[NL_MAX_PADS];                 // size 0x8
++    /* 0x390 */ u16 m_previousButtons[NL_MAX_PADS];              // size 0x8
++    /* 0x398 */ s8 m_previousErr[NL_MAX_PADS];                   // size 0x4
+ };
+ 
+ #endif // _PLATPAD_H_
+--- a/src/Game/AIPad.cpp
++++ b/src/Game/AIPad.cpp
+@@ -4,7 +4,7 @@
+ static f32 g_fMovementDeadZone = 0.3f;
+ static f32 g_fCStickDeadZone = 0.5f;
+ 
+-cAIPad AIPadManager::mAIPads[4];
++cAIPad AIPadManager::mAIPads[NL_MAX_PADS];
+ 
+ /**
+  * Offset/Address/Size: 0xFC | 0x8000582C | size: 0x20
+@@ -61,7 +61,7 @@
+ void AIPadManager::Startup()
+ {
+     int i;
+-    for (i = 0; i < 4; ++i)
++    for (i = 0; i < NL_MAX_PADS; ++i)
+     {
+         mAIPads[i].m_pGlobalPad = cPadManager::GetPad(i);
+     }
+--- a/src/Game/DB/StatsTracker.cpp
++++ b/src/Game/DB/StatsTracker.cpp
+@@ -1486,7 +1486,9 @@
+  */
+ void StatsTracker::AddUserStatByPad(ePlayerStats stat, int pad, int amount)
+ {
+-    if (pad < 0)
++    // Per-controller stats are kept (and saved) for the four GameCube ports
++    // only; network slots beyond them are not tracked.
++    if (pad < 0 || pad >= 4)
+     {
+         return;
+     }
+--- a/src/Game/GameInfo.cpp
++++ b/src/Game/GameInfo.cpp
+@@ -790,6 +790,14 @@
+  */
+ s16 GameInfoManager::GetPlayingSide(unsigned short padnumber) const
+ {
++    // A network match takes every slot's team from the session; slots past
++    // the four GameCube ports have nowhere else to come from.
++    int hostSide = osHostPadSide(padnumber);
++    if (hostSide != OS_HOST_PAD_SIDE_GAME || padnumber >= 4)
++    {
++        return hostSide == OS_HOST_PAD_SIDE_GAME ? -1 : hostSide;
++    }
++
+     eGameModes mode;
+     BasicGameInfo* gameInfo = mGameInfo[mode = mCurrentMode];
+     return gameInfo->mPadSides[padnumber];
+@@ -800,6 +808,10 @@
+  */
+ void GameInfoManager::SetPlayingSide(unsigned short padnumber, short side)
+ {
++    if (padnumber >= 4)
++    {
++        return;
++    }
+     mGameInfo[mCurrentMode]->mPadSides[padnumber] = side;
+ }
+ 
+@@ -2350,7 +2362,7 @@
+     unsigned char humansOnSide[2] = { 0, 0 };
+     int i;
+ 
+-    for (i = 0; i < 4; i++)
++    for (i = 0; i < NL_MAX_PADS; i++)
+     {
+         if (GetPlayingSide(i) == 0)
+         {
+--- a/src/Game/Pad/FlickDetection.cpp
++++ b/src/Game/Pad/FlickDetection.cpp
+@@ -7,8 +7,8 @@
+ 
+ static char FLICK_NONE __attribute__((section(".sdata2"))) = 0x20;
+ 
+-StaticRing<char> history[4];
+-char historyStorage[4][16] = { };
++StaticRing<char> history[NL_MAX_PADS];
++char historyStorage[NL_MAX_PADS][16] = { };
+ 
+ } // namespace
+ 
+@@ -17,7 +17,7 @@
+  */
+ void FlickDetection::Initialize()
+ {
+-    for (int i = 0; i < 4; i++)
++    for (int i = 0; i < NL_MAX_PADS; i++)
+     {
+         history[i].mStorage = &historyStorage[i][0];
+         history[i].mCapacity = 16;
+@@ -31,7 +31,7 @@
+  */
+ void FlickDetection::Update()
+ {
+-    for (int i = 0; i < 4; i++)
++    for (int i = 0; i < NL_MAX_PADS; i++)
+     {
+         cAIPad& pad = AIPadManager::mAIPads[i];
+         StaticRing<char>& ring = history[i];
+--- a/src/Game/PadActions.cpp
++++ b/src/Game/PadActions.cpp
+@@ -26,14 +26,14 @@
+ 
+     if (!g_bEnableGamecubePadMonkey)
+     {
+-        for (int i = 0; i < 4; i++)
++        for (int i = 0; i < NL_MAX_PADS; i++)
+         {
+             cPadManager::m_aPads[i] = new (nlMalloc(sizeof(cPlatPad), 8, false)) cPlatPad(i);
+         }
+     }
+     else
+     {
+-        for (int i = 0; i < 4; i++)
++        for (int i = 0; i < NL_MAX_PADS; i++)
+         {
+             cPadManager::m_aPads[i] = new (nlMalloc(sizeof(PadMonkey), 8, false)) PadMonkey(i);
+         }
+--- a/src/Game/Player.cpp
++++ b/src/Game/Player.cpp
+@@ -148,7 +148,7 @@
+     }
+ 
+     float fScaledDt = fDeltaT * (1.0f / FixedUpdateTask::mTimeScale);
+-    for (int iPadID = 0; iPadID < 4; iPadID++)
++    for (int iPadID = 0; iPadID < NL_MAX_PADS; iPadID++)
+     {
+         self->m_tSwapControllerTimer[iPadID].Countdown(fScaledDt, 0.0f);
+     }
+@@ -348,6 +348,26 @@
+     s32 iPadID;
+     cPlayer* pPotentialSwapPlayer;
+ 
++    // Network play: on a team whose four fielders all have a human, each human
++    // keeps their own fielder. The only pad that ever moves is the one the
++    // goalie borrows to throw the ball out (cPlayer::PickupBall), and once the
++    // ball has left the goalie it goes back to the fielder it belongs to.
++    if (osHostTeamLocked(m_pTeam->m_nSide))
++    {
++        cGlobalPad* pPad = GetGlobalPad();
++        if (m_eClassType == GOALIE && pPad != NULL)
++        {
++            int nOwner = osHostPadFielder(pPad->m_padIndex);
++            if (nOwner >= 0 && m_pTeam->GetPlayer(nOwner)->m_pController == NULL)
++            {
++                m_pTeam->GetPlayer(nOwner)->SetAIPad(m_pController);
++                SetAIPad(NULL);
++                return 1;
++            }
++        }
++        return 0;
++    }
++
+     if (m_bCanTestController != 0)
+     {
+         if (g_pBall->m_pPassTarget == NULL || g_pBall->m_pPassTarget != this)
+@@ -1381,10 +1401,10 @@
+  */
+ void cPlayer::ClearSwapControllerTimer()
+ {
+-    m_tSwapControllerTimer[0].m_uPackedTime = 0;
+-    m_tSwapControllerTimer[1].m_uPackedTime = 0;
+-    m_tSwapControllerTimer[2].m_uPackedTime = 0;
+-    m_tSwapControllerTimer[3].m_uPackedTime = 0;
++    for (int i = 0; i < NL_MAX_PADS; i++)
++    {
++        m_tSwapControllerTimer[i].m_uPackedTime = 0;
++    }
+ }
+ 
+ /**
+--- a/src/Game/Render/Indicators.cpp
++++ b/src/Game/Render/Indicators.cpp
+@@ -238,14 +238,16 @@
+     }
+ }
+ 
++// The disc has indicator art for four controllers. Network slots 4-7 are the
++// away team's fielders in the same order as 0-3 at home, so they reuse 1-4.
+ static inline unsigned long GetCharacterTexID(cPlayer* pCharacter)
+ {
+-    return uIndicatorTexID[pCharacter->GetGlobalPad()->m_padIndex];
++    return uIndicatorTexID[pCharacter->GetGlobalPad()->m_padIndex & 3];
+ }
+ 
+ static inline unsigned long GetCharacterGlowTexID(cPlayer* pCharacter)
+ {
+-    return uGlowTexID[pCharacter->GetGlobalPad()->m_padIndex];
++    return uGlowTexID[pCharacter->GetGlobalPad()->m_padIndex & 3];
+ }
+ 
+ /**
+--- a/src/Game/RumbleActions.cpp
++++ b/src/Game/RumbleActions.cpp
+@@ -1,6 +1,6 @@
+ #include "Game/RumbleActions.h"
+ 
+-static struct RumbleActionState rumbleActionState[4];
++static struct RumbleActionState rumbleActionState[NL_MAX_PADS];
+ 
+ RumbleOp opArrayShootToScoreContact[] = {
+     { 0, 0x1F4 }, // { 0, 500 }
+@@ -41,7 +41,7 @@
+  */
+ void UpdateRumbleActions(float dt)
+ {
+-    for (int padIndex = 0; padIndex < 4; padIndex++)
++    for (int padIndex = 0; padIndex < NL_MAX_PADS; padIndex++)
+     {
+         RumbleActionState* state = &rumbleActionState[padIndex];
+         if (state->active != 0)
+--- a/src/Game/Team.cpp
++++ b/src/Game/Team.cpp
+@@ -351,7 +351,7 @@
+     short playingSide;
+ 
+     numAssignedControllers = 0;
+-    for (i = 0; i < 4; i++)
++    for (i = 0; i < NL_MAX_PADS; i++)
+     {
+         mySide = m_nSide;
+         playingSide = GameInfoManager::Instance()->GetPlayingSide(i);
+@@ -454,7 +454,7 @@
+ {
+     cAIPad* pAIPads = AIPadManager::mAIPads;
+ 
+-    for (int i = 0; i < 4; i++)
++    for (int i = 0; i < NL_MAX_PADS; i++)
+     {
+         if (m_nSide != (s16)nlSingleton<GameInfoManager>::Instance()->GetPlayingSide((u16)i))
+         {
+@@ -480,6 +480,13 @@
+ 
+             if (playerIdx == 5)
+             {
++                // Network play names the fielder each player controls.
++                int nPreferred = osHostPadFielder(i);
++                if (nPreferred >= 0 && m_pPlayers[nPreferred]->m_pController == NULL)
++                {
++                    m_pPlayers[nPreferred]->SetAIPad(&pAIPads[i]);
++                    continue;
++                }
+                 for (int j = 0; j < 5; j++)
+                 {
+                     if (m_pPlayers[j]->m_pController == NULL)
+--- a/src/NL/plat/globalpad.cpp
++++ b/src/NL/plat/globalpad.cpp
+@@ -1,7 +1,7 @@
+ #include "NL/globalpad.h"
+ #include "NL/nlMath.h"
+ 
+-cGlobalPad* cPadManager::m_aPads[PAD_MAX_CONTROLLERS];
++cGlobalPad* cPadManager::m_aPads[NL_MAX_PADS];
+ s32* cPadManager::m_pRemapArray = nullptr;
+ float cPadManager::m_DeltaT = 0.0f;
+ 
+@@ -60,7 +60,7 @@
+  */
+ void cPadManager::Update(float deltaTime)
+ {
+-    for (int i = 0; i < PAD_MAX_CONTROLLERS; i++)
++    for (int i = 0; i < NL_MAX_PADS; i++)
+     {
+         m_aPads[i]->Update(deltaTime);
+     }
+--- a/src/NL/plat/platpad.cpp
++++ b/src/NL/plat/platpad.cpp
+@@ -4,8 +4,8 @@
+ #include "NL/nlMemory.h"
+ #include "NL/gl/glPlat.h"
+ 
+-PADStatus PadStatus::s_A[4];
+-PADStatus PadStatus::s_B[4];
++PADStatus PadStatus::s_A[NL_MAX_PADS];
++PADStatus PadStatus::s_B[NL_MAX_PADS];
+ PADStatus* PadStatus::s_Current = PadStatus::s_A;
+ PADStatus* PadStatus::s_Next = PadStatus::s_B;
+ 
+@@ -18,6 +18,18 @@
+ PadStatus padCategories[2];
+ PadStatus* padStatus = &padCategories[0];
+ 
++// PADRead fills the four GameCube ports; slots beyond them exist only when the
++// host supplies them, so outside a network session they are unplugged.
++static inline void ReadLocalPads(PADStatus* status)
++{
++    PADRead(status);
++    for (int i = PAD_MAX_CONTROLLERS; i < NL_MAX_PADS; i++)
++    {
++        memset(&status[i], 0, sizeof(PADStatus));
++        status[i].err = PAD_ERR_NO_CONTROLLER;
++    }
++}
++
+ static inline void UpdateButtonStateTime(PadStatus* pPadStatus, int padIdx)
+ {
+     float delta = 1.0f / (float)glx_GetTargetFPS();
+@@ -53,24 +65,26 @@
+     // this frame (all players' inputs, agreed or recorded); otherwise this is
+     // the local controllers as before.
+     if (!osHostReadPads(PadStatus::s_Next, true))
+-        PADRead(PadStatus::s_Next);
+-    PADClampCircle(PadStatus::s_Next);
++        ReadLocalPads(PadStatus::s_Next);
++    // PADClampCircle covers four ports per call.
++    for (int first = 0; first < NL_MAX_PADS; first += PAD_MAX_CONTROLLERS)
++        PADClampCircle(&PadStatus::s_Next[first]);
+ 
+     int i;
+-    for (i = 0; i < 4; i++)
++    for (i = 0; i < NL_MAX_PADS; i++)
+     {
+         if (PadStatus::s_Next[i].err == -3)
+             break;
+     }
+ 
+-    if (i != 4)
++    if (i != NL_MAX_PADS)
+         return;
+ 
+     PADStatus* temp = PadStatus::s_Next;
+     PadStatus::s_Next = PadStatus::s_Current;
+     PadStatus::s_Current = temp;
+ 
+-    for (i = 0; i < 4; i++)
++    for (i = 0; i < NL_MAX_PADS; i++)
+     {
+         cGlobalPad* pad = cPadManager::GetPad(i);
+ 
+@@ -139,7 +153,8 @@
+ void cPlatPad::StopRumble()
+ {
+     padStatus[0].m_GameCubePads[m_padIndex].bRumbleActive = 0;
+-    PADControlMotor(m_padIndex, 2);
++    // The host maps the slot to a controller on this machine, if any.
++    osHostControlMotor(m_padIndex, 2);
+ }
+ 
+ /**
+@@ -149,7 +164,7 @@
+ {
+     if (m_bDisableRumble == 0)
+     {
+-        PADControlMotor(m_padIndex, 1);
++        osHostControlMotor(m_padIndex, 1);
+         padStatus[0].m_GameCubePads[m_padIndex].fRumbleTimer = fDuration;
+         padStatus[0].m_GameCubePads[m_padIndex].bRumbleActive = 1;
+     }
+@@ -306,7 +321,7 @@
+ {
+     u32 resetMask = 0;
+ 
+-    for (s32 i = 0; i < 4; ++i)
++    for (s32 i = 0; i < NL_MAX_PADS; ++i)
+     {
+         s8 err = PadStatus::s_Current[i].err;
+ 
+@@ -333,7 +348,8 @@
+                 memset(&m_GameCubePads[i], 0, sizeof(tGameCubePad));
+             }
+ 
+-            u32 mask = g_nPadMasks[i];
++            // Only the GameCube ports can be reset.
++            u32 mask = i < PAD_MAX_CONTROLLERS ? g_nPadMasks[i] : 0;
+             int zero = 0;
+             m_justPressed[i] = zero;
+             resetMask |= mask;
+@@ -347,7 +363,7 @@
+             if (m_GameCubePads[i].fRumbleTimer < 0.0f)
+             {
+                 m_GameCubePads[i].bRumbleActive = 0;
+-                PADControlMotor(i, 0);
++                osHostControlMotor(i, 0);
+             }
+         }
+     }
+@@ -368,7 +384,7 @@
+ 
+ static inline void InitPadStatus(PadStatus* pad)
+ {
+-    for (int i = 0; i < 4; ++i)
++    for (int i = 0; i < NL_MAX_PADS; ++i)
+     {
+         pad->m_justPressed[i] = 0;
+         pad->m_justReleased[i] = 0;
+@@ -384,7 +400,7 @@
+ void InitPlatPad()
+ {
+     if (!osHostReadPads(PadStatus::s_Current, false))
+-        PADRead(PadStatus::s_Current);
++        ReadLocalPads(PadStatus::s_Current);
+     memcpy(PadStatus::s_Next, PadStatus::s_Next, 4);
+ 
+     for (int i = 0; i < 2; ++i)
