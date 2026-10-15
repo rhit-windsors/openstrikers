@@ -22,7 +22,7 @@
  static float s_fOverheadSize = 35.0f;
 +// Player names (DrawPlayerName) at the heading font's own size read larger than
 +// the number they replace; they are drawn at this fraction of it.
-+static const float kNameScale = 0.56f;
++static const float kNameScale = 0.42f;
  static float s_fAdditiveBlendingIntensity = 0.55f;
  static float s_fAdditiveTextureScale = 1.25f;
  static float s_fPulseRate = 2.0f;
