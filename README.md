@@ -95,16 +95,19 @@ last shot was once a flat lime green.
 ## Status
 
 Whole matches play from kickoff to the recaps and back to the menu, with
-goals, super strikes, replays and celebration cinematics. There are no known
-open issues (`ISSUES.md`); the work in progress is audio, which plays in the
-separate `build-audio/` build.
+goals, super strikes, replays and celebration cinematics. Network play works:
+the first real test, two PCs on a LAN on 2026-10-15, played a match in
+sync. There are no known open issues (`ISSUES.md`). Audio is complete but still
+lives in the separate `build-audio/` build.
 
 | | |
 |---|---|
 | Windows (native, MSYS2 UCRT64) | front end complete; full matches play -- `smoke-test.ps1` passes |
+| Network play | up to 8 machines, one human per fielder, delay-based lockstep; verified on two PCs over a LAN (one reading the disc image from a network share) -- see [Network play](#network-play). Internet play needs a forwarded port or a VPN such as Tailscale; a relay server is designed for but not built |
+| Launcher | `openstrikers-launcher.exe` / `OpenStrikers.vbs`: disc, resolution up to 4K, fullscreen, 4:3 / 16:9 / stretch, and hosting or joining a network match |
 | Stability | unattended `soak.ps1` runs play match after match: 15 minutes of fast-forwarded play (59 matches, 143 goals) without a crash, and the allocator validator finds no heap damage |
 | Linux / WSL (GCC) | builds and boots (not re-verified since the render/input work) |
-| Rendering | 2D/front end, the in-match HUD, stadium, lighting and animated characters draw correctly |
+| Rendering | 2D/front end, the in-match HUD, stadium, lighting and animated characters draw correctly. A machine with an empty shader cache can show brief black patches until its shaders compile; the build ships a starter cache so most compile during boot (see [Running](#running)) |
 | Match options | adds a 1:00 game time (Options → Gameplay → Game Time) alongside the original lengths |
 | Characters | stay planted on the pitch -- see [Characters floated because a mirrored blend read a dead stack slot](#characters-floated-because-a-mirrored-blend-read-a-dead-stack-slot) |
 | 3D models | `.bmd` loads (342 models for the palace) plus skin meshes; shared-array geometry corruption is fixed -- see [The match rendering fix](#the-match-rendering-fix) |
@@ -1010,6 +1013,13 @@ Every 30 frames each machine checks a hash of the game state (`src/net/state_has
 against the host's. A mismatch ends the match for everyone with
 "The game went out of sync", instead of letting two machines play different
 games.
+
+**Tested:** two PCs on a LAN (2026-10-15), one reading its disc image off a
+network share, played a match in sync. Slow disc
+storage costs hitches, never sync: reads complete on the game thread. The only
+blemish was brief black patches on the second PC while its shader cache filled,
+which is rendering only and the reason `initial_pipeline_cache.db` ships with
+the build.
 
 **Checking determinism without a network.** The same machinery records and
 replays input:
