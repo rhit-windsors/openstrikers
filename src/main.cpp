@@ -9,6 +9,7 @@
 #include <dolphin/pad.h>
 #include <SDL3/SDL_video.h>
 #include <SDL3/SDL_iostream.h>
+#include <SDL3/SDL_filesystem.h>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #ifndef NOMINMAX
@@ -134,6 +135,11 @@ int main(int argc, char* argv[])   // <-- diventa aurora_main via macro
         // from discovering its normal per-user preference directory.
         .userPath = std::getenv("OPENSTRIKERS_CACHE_PATH"),
         .cachePath = std::getenv("OPENSTRIKERS_CACHE_PATH"),
+        // Aurora looks for initial_pipeline_cache.db here, which the build
+        // copies next to the executable. Left unset it is resolved against
+        // the working directory, so launching from anywhere else on a fresh
+        // machine would skip the seed and drop draws while shaders compile.
+        .resourcesPath = SDL_GetBasePath(),
         .vsync = options.vsync,
         // Position the window on the selected monitor before entering fullscreen.
         .startFullscreen = false,

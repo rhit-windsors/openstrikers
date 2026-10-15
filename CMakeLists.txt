@@ -153,6 +153,18 @@ if (MINGW)
     target_link_options(openstrikers-net-bot PRIVATE -static)
 endif ()
 
+# Aurora skips a draw while its pipeline is still compiling, so on a machine
+# with an empty cache the first sight of each material is a black hole. The
+# seed lists every pipeline a played-in cache has seen; Aurora merges it on
+# startup and compiles it in the background. Refresh it with
+# tools/refresh-pipeline-seed.py.
+add_custom_command(TARGET openstrikers POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/resources/initial_pipeline_cache.db
+        $<TARGET_FILE_DIR:openstrikers>
+    VERBATIM
+)
+
 # aurora_copy_runtime_dlls() only knows about imported targets, so the
 # toolchain's own DLLs (libwinpthread-1, zlib1, libbz2-1, libsqlite3-0) are left
 # behind. They resolve in an MSYS2 shell because ucrt64/bin is already on PATH,

@@ -908,6 +908,19 @@ Saves and the emulated memory card live in the platform config directory:
 That directory also holds `dawn_cache.db`, Dawn's compiled-shader cache. Delete
 it if you suspect a stale pipeline.
 
+Next to it, `pipeline_cache.db` lists every GX pipeline the game has asked for.
+Aurora *skips a draw* while that draw's pipeline is still compiling, so on a
+machine with an empty cache, the first time each material appears, it leaves a
+black patch for a few frames. That was seen on a second PC in the first LAN
+netplay test. To avoid it, the build copies
+`resources/initial_pipeline_cache.db` next to the executable. Aurora merges it
+into a fresh cache at startup and compiles all of it in the background during
+boot and the front end. The rows are render-state enums only (blend, depth, cull,
+TEV combiner, vertex layout) and carry nothing from the disc. Refresh it after
+playing new content, or after an Aurora update that bumps
+`GXPipelineConfigVersion` (stale rows are skipped), with
+`python tools/refresh-pipeline-seed.py`.
+
 A save written before the memory-card fixes below is garbage, and the game
 correctly refuses it — you get the corrupted-save popup on a loop. Delete
 `USA/Card A/01-G4QE-GameSoccer.gci` under that directory and it will write a

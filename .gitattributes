@@ -8,3 +8,4 @@
 # Same reasoning: these are exact bytes, not text to be normalised.
 *.png binary
 *.ppm binary
+*.db binary
