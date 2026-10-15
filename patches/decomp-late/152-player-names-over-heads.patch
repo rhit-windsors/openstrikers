@@ -1,6 +1,6 @@
 --- a/src/Game/Render/Indicators.cpp
 +++ b/src/Game/Render/Indicators.cpp
-@@ -3,6 +3,7 @@
+@@ -3,19 +3,25 @@
  #include "Game/AI/AiUtil.h"
  #include "Game/CharacterTemplate.h"
  #include "Game/CharacterTweaks.h"
@@ -8,7 +8,10 @@
  #include "Game/Game.h"
  #include "Game/Player.h"
  #include "Game/ReplayManager.h"
-@@ -12,6 +13,7 @@
+ #include "NL/gl/glDraw2.h"
++#include "NL/gl/glMatrix.h"
+ #include "NL/gl/glState.h"
+ #include "NL/gl/glTexture.h"
  #include "NL/gl/glView.h"
  #include "NL/globalpad.h"
  #include "NL/nlColour.h"
@@ -16,7 +19,33 @@
  #include "NL/nlMath.h"
  #include "types.h"
  
-@@ -250,6 +252,84 @@
+ static float s_fOverheadSize = 35.0f;
++// Player names (DrawPlayerName) at the heading font's own size read larger than
++// the number they replace; they are drawn at this fraction of it.
++static const float kNameScale = 0.7f;
+ static float s_fAdditiveBlendingIntensity = 0.55f;
+ static float s_fAdditiveTextureScale = 1.25f;
+ static float s_fPulseRate = 2.0f;
+@@ -101,6 +107,7 @@
+ static inline void DrawIndicator(int xCentre, int yCentre, float fPixelWidth, float fPixelHeight, float fOpacity, unsigned long uTexID,
+     float rotationAngle, unsigned char additiveBlending);
+ static inline void DrawOffscreenIndicator(const nlVector3& v3NormalizedScreenPos, IndicatorInfo* pInfo, cPlayer* pCharacter);
++static bool DrawPlayerName(float fX, float fY, cPlayer* pCharacter, float fScale, float fOpacity, float fHighlight, bool bKeepOnScreen);
+ static inline unsigned long GetCharacterTexID(cPlayer* pCharacter);
+ 
+ static inline float max_float(float a, float b)
+@@ -202,6 +209,10 @@
+ 
+     scale = (float)fabs(1.0f - max_float((float)fabs(v3NormalizedScreenPos.y), (float)fabs(v3NormalizedScreenPos.x)));
+     scale = InterpolateRangeClamped(1.0f, 0.5f, 0.0f, 2.0f, scale);
++    if (DrawPlayerName(screenPosX, screenPosY, pCharacter, kNameScale * scale, pInfo->m_fOpacity, 0.0f, true))
++    {
++        return;
++    }
+     DrawIndicator((int)screenPosX, (int)screenPosY, 64.0f * scale, 64.0f * scale, pInfo->m_fOpacity, GetCharacterTexID(pCharacter), 0.0f, 1);
+ }
+ 
+@@ -250,6 +261,114 @@
      return uGlowTexID[pCharacter->GetGlobalPad()->m_padIndex & 3];
  }
  
@@ -31,7 +60,7 @@
 +    { 180, 68, 68 },  // 4 red
 +};
 +
-+static bool DrawPlayerName(float fX, float fY, cPlayer* pCharacter, float fOpacity, float fHighlight)
++static bool DrawPlayerName(float fX, float fY, cPlayer* pCharacter, float fScale, float fOpacity, float fHighlight, bool bKeepOnScreen)
 +{
 +    enum { kMaxNameChars = 12 };
 +    const int slot = pCharacter->GetGlobalPad()->m_padIndex;
@@ -82,6 +111,36 @@
 +        (unsigned char)(rgb[2] + (255 - rgb[2]) * white), alpha);
 +    nlColourSet(outline, 40, 42, 45, alpha);
 +
++    // At the screen edge, keep the whole name on screen (640 wide, 16 margin).
++    if (bKeepOnScreen)
++    {
++        const float half = 0.5f * width * fScale + 16.0f;
++        if (fX < half)
++        {
++            fX = half;
++        }
++        else if (fX > 640.0f - half)
++        {
++            fX = 640.0f - half;
++        }
++    }
++
++    // The glyphs are laid out at the font's size around (fX, fY) and scaled
++    // about that point by the poly matrix.
++    unsigned long hMatrix = glAllocMatrix();
++    unsigned long* pMatrix = NULL;
++    if (hMatrix + 0x10000 != 0xFFFF)
++    {
++        nlMatrix4 m;
++        m.SetIdentity();
++        m.m11 = fScale;
++        m.m22 = fScale;
++        m.m41 = fX * (1.0f - fScale);
++        m.m42 = fY * (1.0f - fScale);
++        glSetMatrix(hMatrix, m);
++        pMatrix = &hMatrix;
++    }
++
 +    FontCharString string;
 +    string.m_pString = text;
 +    string.m_InternalBuffer = 0;
@@ -92,31 +151,31 @@
 +    // flipped in any view but 0, and this 2D view runs top-down.
 +    if (pFont->m_TextureType == SplitFX)
 +    {
-+        pFont->DrawString((eGLView)27, string, position, outline, outline, length, nlFont::PASS_Effect, false, NULL, NULL);
++        pFont->DrawString((eGLView)27, string, position, outline, outline, length, nlFont::PASS_Effect, false, pMatrix, NULL);
 +    }
-+    pFont->DrawString((eGLView)27, string, position, colour, colour, length, nlFont::PASS_Text, false, NULL, NULL);
++    pFont->DrawString((eGLView)27, string, position, colour, colour, length, nlFont::PASS_Text, false, pMatrix, NULL);
 +    return true;
 +}
 +
  /**
   * Offset/Address/Size: 0xA8 | 0x8015F30C | size: 0x7C0
   */
-@@ -321,6 +401,10 @@
+@@ -321,6 +440,10 @@
              switchScale = (0.5f - pPlayer->m_UserControlledTime) / 0.5f;
              sizeScale = Interpolate(1.0f, 2.0f, switchScale);
  
-+            if (DrawPlayerName(fX, fY, pPlayer, fOpacity, switchScale))
++            if (DrawPlayerName(fX, fY, pPlayer, kNameScale * Interpolate(1.0f, 1.3f, switchScale), fOpacity, switchScale, false))
 +            {
 +                continue;
 +            }
              DrawIndicator((int)fX, (int)fY, s_fAdditiveTextureScale * (s_fOverheadSize * sizeScale), s_fAdditiveTextureScale * (s_fOverheadSize * sizeScale), s_fAdditiveBlendingIntensity * switchScale, glowTexID, 0.0f, 2);
  
              fDistInPixels = s_fOverheadSize * sizeScale;
-@@ -335,12 +419,20 @@
+@@ -335,12 +458,20 @@
                  s_fGlowIntensityScale = 0.0f;
              }
  
-+            if (DrawPlayerName(fX, fY, pPlayer, fOpacity, s_bPulseGlowTexture ? s_fGlowIntensityScale : 1.0f))
++            if (DrawPlayerName(fX, fY, pPlayer, kNameScale, fOpacity, s_bPulseGlowTexture ? s_fGlowIntensityScale : 1.0f, false))
 +            {
 +                continue;
 +            }
@@ -126,7 +185,7 @@
          }
          else
          {
-+            if (DrawPlayerName(fX, fY, pPlayer, fOpacity, 0.0f))
++            if (DrawPlayerName(fX, fY, pPlayer, kNameScale, fOpacity, 0.0f, false))
 +            {
 +                continue;
 +            }

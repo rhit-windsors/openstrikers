@@ -968,7 +968,8 @@ the number art does), lightening while the player is on the ball. A machine
 driving several fielders gets "NAME 1", "NAME 2". Up to 12 characters of
 A-Z, 0-9 and punctuation the font has; anything else is left out. Offline,
 `--player-names Riley,Sam` names the players on ports 1 and 2 the same way.
-Players walking off screen keep the numbered edge arrows. The drawing is
+The name is drawn at 70% of the font's size; a player off screen shows it at
+the screen edge instead of the number, shrinking with distance. The drawing is
 `patches/decomp-late/152-player-names-over-heads.patch`; names never reach the
 simulation, so they cannot desync a match.
 
