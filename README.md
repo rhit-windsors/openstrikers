@@ -961,6 +961,17 @@ openstrikers.exe "C:\path\to\game.iso" --net-host --net-players 2 --net-name Ril
 openstrikers.exe "C:\path\to\game.iso" --net-join 192.168.1.20 --net-name Sam
 ```
 
+Each player's `--net-name` is drawn over the fielder they control, in place
+of the controller number: capitals in the HUD's heading font, in that number's
+colour (1 yellow, 2 blue, 3 green, 4 red; the away team's slots reuse them, as
+the number art does), lightening while the player is on the ball. A machine
+driving several fielders gets "NAME 1", "NAME 2". Up to 12 characters of
+A-Z, 0-9 and punctuation the font has; anything else is left out. Offline,
+`--player-names Riley,Sam` names the players on ports 1 and 2 the same way.
+Players walking off screen keep the numbered edge arrows. The drawing is
+`patches/decomp-late/152-player-names-over-heads.patch`; names never reach the
+simulation, so they cannot desync a match.
+
 Only the host needs a reachable port: forward UDP 52320 to it, or put everyone
 on the same Tailscale/ZeroTier network and join the host's address there.
 Everyone needs the **same openstrikers build and the same disc image**: the

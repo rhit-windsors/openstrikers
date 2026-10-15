@@ -64,6 +64,7 @@ struct LaunchOptions {
     unsigned netPlayers = 2;            // host: machines in the session, itself included
     unsigned netDelay = 0;              // host: input delay in frames; 0 picks a default
     const char* netName = nullptr;
+    const char* playerNames = nullptr;  // offline: "A,B,..." for the players on ports 1-4
     MatchSettings match;
 };
 
@@ -141,6 +142,9 @@ inline bool parse_launch_options(int argc, char* argv[], LaunchOptions& options)
             } else if (!std::strcmp(arg, "--net-name")) {
                 if (++i == argc) return false;
                 options.netName = argv[i];
+            } else if (!std::strcmp(arg, "--player-names")) {
+                if (++i == argc) return false;
+                options.playerNames = argv[i];
             } else if (!std::strcmp(arg, "--home") || !std::strcmp(arg, "--away")) {
                 if (++i == argc) return false;
                 int& team = arg[2] == 'h' ? options.match.homeTeam : options.match.awayTeam;

@@ -78,6 +78,11 @@ int osHostPadFielder(int pad);
 bool osHostTeamLocked(int side);
 // Rumble for a slot, on whichever controller of this machine drives it.
 void osHostControlMotor(int pad, unsigned int command);
+// The name to draw over the player a slot controls, or NULL to keep the
+// controller number: online, the name of the machine driving the slot
+// (numbered when one machine drives several); offline, the --player-names
+// entry for that port. Drawing only -- never feed it into the simulation.
+const char* osHostPadName(int pad);
 
 // The match the skip-the-menus path sets up: the host's in a network match,
 // else the command line's. -1 keeps the game's own value. Teams, sidekicks and

@@ -71,6 +71,9 @@ int64_t s_firstMismatch = -1;
 // the host's online.
 MatchSettings s_match;
 
+// --player-names: what to draw over each local port's player offline.
+std::string s_localNames[PAD_MAX_CONTROLLERS];
+
 std::unique_ptr<UdpTransport> s_transport;
 std::unique_ptr<Lockstep> s_lockstep;
 uint64_t s_clockStart = 0;
@@ -427,6 +430,16 @@ void sessionStart(const LaunchOptions& options) {
     if (const char* v = envValue("OPENSTRIKERS_NET_JITTER_MS")) {
         s_jitterMs = (uint32_t)std::strtoul(v, nullptr, 0);
     }
+    if (options.playerNames != nullptr) {
+        int port = 0;
+        for (const char* p = options.playerNames; *p != '\0' && port < PAD_MAX_CONTROLLERS; ++p) {
+            if (*p == ',') {
+                ++port;
+            } else {
+                s_localNames[port] += *p;
+            }
+        }
+    }
     s_match = options.match;
     if (s_match.widescreen < 0) {
         // The host's (or recorder's) picture choice decides the game's 16:9
@@ -630,6 +643,35 @@ void osHostControlMotor(int pad, unsigned int command) {
     if (port < PAD_MAX_CONTROLLERS) {
         PADControlMotor(port, command);
     }
+}
+
+const char* osHostPadName(int pad) {
+    using namespace net;
+    static std::string s_names[kMaxSlots];
+    if (pad < 0 || pad >= kMaxSlots) {
+        return nullptr;
+    }
+    std::string& name = s_names[pad];
+    if (s_mode == Mode::Online) {
+        if (!s_lockstep->slotOccupied(pad)) {
+            return nullptr;
+        }
+        const int owner = s_lockstep->slotOwner(pad);
+        int index = 0, count = 0;
+        for (int s = 0; s < kMaxSlots; ++s) {
+            if (s_lockstep->slotOccupied(s) && s_lockstep->slotOwner(s) == owner) {
+                index += s < pad;
+                ++count;
+            }
+        }
+        name = s_lockstep->peerName(owner);
+        if (count > 1) {
+            name += " " + std::to_string(index + 1);
+        }
+    } else {
+        name = pad < PAD_MAX_CONTROLLERS ? s_localNames[pad] : std::string();
+    }
+    return name.empty() ? nullptr : name.c_str();
 }
 
 bool osHostMatch(OsHostMatch* out) {
