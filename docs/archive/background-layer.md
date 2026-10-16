@@ -1,3 +1,8 @@
+> Archived session notes. Plans, pending checks and handoff statements below
+> describe the original session. See [current issues](../../ISSUES.md),
+> [building](../BUILDING.md) and [testing](../DEVELOPMENT.md) for maintained guidance.
+> Code paths in backticks are relative to the repository root.
+
 # Background-layer investigation: resolved in the depth-of-field capture
 
 Written 2026-09-09 mid-investigation, for whoever picks this up next.

@@ -1,3 +1,8 @@
+> Archived session notes. Plans, pending checks and handoff statements below
+> describe the original session. See [current issues](../../ISSUES.md),
+> [building](../BUILDING.md) and [testing](../DEVELOPMENT.md) for maintained guidance.
+> Code paths in backticks are relative to the repository root.
+
 # Plan: audio (written 2026-10-08)
 
 ## Where it stands
@@ -11,7 +16,7 @@
   3D emitters, streams, aux reverb/chorus/delay, and `hw_dspctrl.c` which builds
   the DSP's per-voice parameter blocks) is **not compiled at all**.
 - The game-side stream plumbing does run: stream files open, headers are read
-  and byte-swapped (README: "Audio stream headers are big-endian too"), and the
+  and byte-swapped (see "Audio stream headers are big-endian too" in [porting history](porting-history.md)), and the
   leak in `StreamTrack::StopQStream` was fixed (decomp-late/129).
 - `hw_pc.c` (MusyX's PC hardware layer) is a skeleton: no mixer, output calls
   commented out. Aurora has ARAM (`lib/dolphin/AR.cpp`) but no AI/DSP/AX, and

@@ -68,7 +68,7 @@ for p in "$ROOT"/patches/tmp/*.patch; do
 done
 
 # Applied after patches/tmp, not with patches/decomp. A patch saved by the
-# workflow in README.md is generated against a tree that already has the tmp
+# workflow in docs/BUILDING.md is generated against a tree that already has the tmp
 # workarounds applied, so any decomp fix touching a file that a tmp patch also
 # touches cannot apply back in the decomp stage -- it needs context that does
 # not exist yet at that point. Patches that depend on the tmp stage live here.

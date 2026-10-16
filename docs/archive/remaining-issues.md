@@ -1,6 +1,11 @@
+> Archived session notes. Plans, pending checks and handoff statements below
+> describe the original session. See [current issues](../../ISSUES.md),
+> [building](../BUILDING.md) and [testing](../DEVELOPMENT.md) for maintained guidance.
+> Code paths in backticks are relative to the repository root.
+
 # Plan: testing the remaining issues (written 2026-10-08)
 
-Everything here runs unattended through `soak.ps1` (README, "Soak testing").
+Everything here runs unattended through `soak.ps1` (see [soak testing](../DEVELOPMENT.md#soak-testing-playing-whole-matches-unattended)).
 One game window at a time. Lighting: the user judged it "pretty spot on", closed.
 Set `OPENSTRIKERS_ISO` first; launch `soak.ps1` by absolute path.
 
