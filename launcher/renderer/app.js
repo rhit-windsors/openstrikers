@@ -98,6 +98,7 @@ async function loadSettings() {
   $('mode').value = settings.fullscreen ? '1' : '0';
   $('aspect').value = settings.aspect;
   $('vsync').checked = settings.vsync;
+  $('msaa').value = String(settings.msaa ?? 1);
   const displays = await launcher.displays();
   options($('display'), displays.map((d) => [d.index, `${d.index + 1}: ${d.label}${d.primary ? ' - main' : ''}`]),
     Math.min(settings.display, Math.max(0, displays.length - 1)));
@@ -120,6 +121,7 @@ $('mode').addEventListener('change', (e) => save({ fullscreen: e.target.value ==
 $('display').addEventListener('change', (e) => save({ display: Number(e.target.value) }));
 $('aspect').addEventListener('change', (e) => save({ aspect: e.target.value }));
 $('vsync').addEventListener('change', (e) => save({ vsync: e.target.checked }));
+$('msaa').addEventListener('change', (e) => save({ msaa: Number(e.target.value) }));
 $('name').addEventListener('change', (e) => {
   const name = e.target.value.replace(/,/g, '').trim();
   if (name) save({ name });

@@ -1,0 +1,27 @@
+# glx_GetTex treats a texture handle as a PlatTexture pointer when its high
+# byte is 0x80 -- the first 16MB of MEM1, where the GameCube heap always put
+# these headers. The host MEM1 is 128MB and laid out differently: with MSAA
+# on, Aurora's extra allocations push some headers to 0x81000000 and up. They
+# failed the test, missed the hash lookup, and glx_SwitchTexture drew its
+# missing-texture stand-in (global/white and global/magenta, alternating
+# every 4 frames) on the ball and the Palace dugout canopies.
+# Accept any aligned address inside the host's MEM1; the PTEX tag check
+# still guards the dereference.
+--- a/src/NL/glx/glxTexture.cpp
++++ b/src/NL/glx/glxTexture.cpp
+@@ -232,8 +232,13 @@
+     int index;
+     const unsigned long originalHandle = handle;
+ 
+-    // Check if handle is already a PlatTexture pointer (high byte 0x80)
+-    if (((handle & 0xFF000000) + 0x80000000) == 0)
++    // Check if handle is already a PlatTexture pointer. The GameCube tested
++    // for a 0x80 high byte: the first 16MB of MEM1, where its heap always
++    // put these headers. The host heap is laid out differently and larger,
++    // so they can sit at 0x81000000 and above (they do with MSAA on); those
++    // failed the test, missed the handle lookup and drew the flashing
++    // white/magenta missing texture. Accept anywhere in the host's MEM1.
++    if (handle >= 0x80000000UL && handle - 0x80000000UL < OPENSTRIKERS_MEM1_SIZE && (handle & 3) == 0)
+     {
+         // Check for the PlatTexture "PTEX" type tag.
+         if ((*(unsigned long*)handle - 0x50540000) == 0x4558)

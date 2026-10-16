@@ -98,6 +98,7 @@ int main(int argc, char* argv[])   // <-- diventa aurora_main via macro
                 "  --window-size WIDTHxHEIGHT         Windowed size (default 1280x960)\n"
                 "  --display N                       Monitor index, starting at 0\n"
                 "  --vsync / --no-vsync\n"
+                "  --msaa 1|2|4|8                     Anti-aliasing samples per pixel (default 1, off)\n"
                 "  --aspect auto|4:3|16:9|stretch     Picture shape (default auto: the\n"
                 "                                     game's Options > Aspect setting)\n"
                 "  --original-aspect / --widescreen / --stretch   Same as 4:3 / 16:9 / stretch\n"
@@ -145,6 +146,7 @@ int main(int argc, char* argv[])   // <-- diventa aurora_main via macro
         // the working directory, so launching from anywhere else on a fresh
         // machine would skip the seed and drop draws while shaders compile.
         .resourcesPath = SDL_GetBasePath(),
+        .msaa = options.msaa,
         .vsync = options.vsync,
         // Position the window on the selected monitor before entering fullscreen.
         .startFullscreen = false,
@@ -191,8 +193,8 @@ int main(int argc, char* argv[])   // <-- diventa aurora_main via macro
     SDL_SyncWindow(info.window);
     u32 renderWidth = 0, renderHeight = 0;
     AuroraGetRenderSize(&renderWidth, &renderHeight);
-    fprintf(stderr, "openstrikers: requested render %ux%u, %s, vsync %s\n", renderWidth, renderHeight,
-            options.fullscreen ? "fullscreen" : "windowed", options.vsync ? "on" : "off");
+    fprintf(stderr, "openstrikers: requested render %ux%u, %s, vsync %s, msaa %ux\n", renderWidth, renderHeight,
+            options.fullscreen ? "fullscreen" : "windowed", options.vsync ? "on" : "off", options.msaa);
     if (!aurora_dvd_open(disc)) {
         fprintf(stderr, "openstrikers: failed to open disc image %s\n", disc);
         aurora_shutdown();

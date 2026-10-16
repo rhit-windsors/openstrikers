@@ -59,6 +59,7 @@ struct LaunchOptions {
     unsigned renderWidth = 0, renderHeight = 0;
     unsigned windowWidth = 1280, windowHeight = 960;
     unsigned display = 0;
+    unsigned msaa = 1;                  // anti-aliasing samples per pixel: 1 (off), 2, 4 or 8
     AspectMode aspect = AspectMode::Auto;
     bool fullscreen = false, vsync = false, help = false;
     NetRole netRole = NetRole::None;
@@ -150,6 +151,9 @@ inline bool parse_launch_options(int argc, char* argv[], LaunchOptions& options)
                 char tail = 0;
                 if (std::sscanf(argv[i], "%u%c", &display, &tail) != 1 || display > 63) return false;
                 options.display = display;
+            } else if (!std::strcmp(arg, "--msaa")) {
+                if (++i == argc || !parse_unsigned(argv[i], 1, 8, options.msaa) ||
+                    (options.msaa & (options.msaa - 1))) return false;
             } else if (!std::strcmp(arg, "--net-host")) {
                 options.netRole = NetRole::Host;
                 // The port is optional.

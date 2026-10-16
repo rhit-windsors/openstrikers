@@ -166,7 +166,9 @@ test('addresses', () => {
 test('game command lines', () => {
   const s = { ...defaultSettings(), iso: 'C:/g.iso', localNames: ['Riley', '', 'Al,ex', ''] };
   assert.deepEqual(offlineArgs(s), ['C:/g.iso', '--resolution', '3840x2160', '--fullscreen', '--display', '0',
-    '--aspect', '4:3', '--vsync', '--player-names', 'Riley,,Alex,']);
+    '--aspect', '4:3', '--vsync', '--msaa', '1', '--player-names', 'Riley,,Alex,']);
+  assert.deepEqual(offlineArgs({ ...s, msaa: 4 }).slice(9, 11), ['--msaa', '4']);
+  assert.deepEqual(offlineArgs({ ...s, msaa: 3 }).slice(9, 11), ['--msaa', '1']);
   assert.ok(!offlineArgs({ ...s, localNames: ['', ''] }).includes('--player-names'));
   const plan = {
     players: 3, slots: '0,2,-,-,1,-,-,-',
@@ -174,12 +176,12 @@ test('game command lines', () => {
       items: true, bowser: false, superStrikes: true, delay: 0 },
   };
   const host = onlineArgs(s, { seat: 0, plan }, null, 'Riley');
-  assert.deepEqual(host.slice(9), ['--net-name', 'Riley', '--net-host', '52320', '--net-players', '3',
+  assert.deepEqual(host.slice(11), ['--net-name', 'Riley', '--net-host', '52320', '--net-players', '3',
     '--net-slots', '0,2,-,-,1,-,-,-', '--home', 'peach', '--home-sidekick', 'birdo', '--away', 'dk',
     '--away-sidekick', 'toad', '--stadium', 'forbidden', '--match-minutes', '5', '--skill', '3',
     '--items', 'on', '--bowser', 'off', '--super-strikes', 'on']);
   const guest = onlineArgs(s, { seat: 2, plan: { ...plan, match: { ...plan.match, delay: 6 } } }, '10.0.0.5', 'Sam');
-  assert.deepEqual(guest.slice(9), ['--net-name', 'Sam', '--net-join', '10.0.0.5:52320', '--net-seat', '2']);
+  assert.deepEqual(guest.slice(11), ['--net-name', 'Sam', '--net-join', '10.0.0.5:52320', '--net-seat', '2']);
   const delayed = onlineArgs(s, { seat: 0, plan: { ...plan, match: { ...plan.match, delay: 6 } } }, null, 'R');
   assert.deepEqual(delayed.slice(-2), ['--net-delay', '6']);
 });

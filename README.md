@@ -53,7 +53,9 @@ around it (prefer `build-audio`: it has sound), or choose one in **Settings**.
   and disc before it lets the host start. There is chat, and each player's ping.
 - **Settings:** disc image, the game executable, render resolution (native to
   4K), fullscreen or window, monitor, picture (Original 4:3, Widescreen 16:9,
-  stretch, or the in-game Aspect option) and VSync.
+  stretch, or the in-game Aspect option), anti-aliasing (off, 2x, 4x or 8x
+  MSAA) and VSync. Anti-aliasing is each player's own choice, also online: it
+  changes only how the picture is drawn, never the match.
 
 Picture modes: Widescreen is the game's own 16:9 mode (Options > Aspect): a
 wider projection, its widescreen camera zoom and movies, at 3840 x 2160 when
@@ -93,8 +95,10 @@ picture follows the in-game Aspect option unless `--aspect 4:3|16:9|stretch`
 (or `--original-aspect` / `--widescreen` / `--stretch`) says otherwise:
 
 ```powershell
-.\build-audio\openstrikers.exe "D:\Games\Strikers.iso" --fullscreen --resolution 3840x2160 --vsync
+.\build-audio\openstrikers.exe "D:\Games\Strikers.iso" --fullscreen --resolution 3840x2160 --vsync --msaa 4
 ```
+
+`--msaa 1|2|4|8` sets the anti-aliasing samples per pixel (default 1, off).
 
 Run `openstrikers.exe --help` for all options. The supporting changes are
 `patches/aurora/011-launcher-render-resolution-and-fullscreen.patch` (render
@@ -394,6 +398,35 @@ Note that the screens are *deliberately* transparent in the gameplay camera:
 0x2000 and 0x8000 while the gameplay camera is active. A trace showing the
 screens dropped for `translucency == 0` through a whole match is correct
 behaviour, not a fault -- they are meant to appear only in presentation cameras.
+
+### The ball flashed white and magenta with MSAA on
+
+With anti-aliasing on, the ball and the Palace's dugout canopies flashed
+white and magenta, four frames each. That is the game's own missing-texture
+stand-in: when `glx_SwitchTexture` cannot find a packet's texture it draws
+`global/white` and `global/magenta` in turn (`(frame & 4) >> 2`), and
+`OPENSTRIKERS_TRACE_MISSING_TEXTURES=1` names the handles it could not find.
+
+They were not missing. Some texture handles are `PlatTexture` pointers, and
+`glx_GetTex` recognised a pointer by a 0x80 high byte -- the first 16MB of
+MEM1, where the GameCube's heap always put them. The host's MEM1 is 128MB and
+its heap is laid out differently; with MSAA on, Aurora allocates more of it, the
+headers land at 0x81000000 and up, and the test sent them to the hash lookup,
+which failed. Without MSAA the same headers sit just below 0x81000000, so any
+other growth in host allocations would have tripped it too.
+`patches/decomp-late/154-texture-pointer-handles-anywhere-in-mem1.patch`
+accepts any aligned address inside the host's MEM1; the `PTEX` tag check still
+guards the dereference.
+
+How it was found, since every renderer-side suspect (EFB copies, resolves,
+blending, dual-source alpha, depth of field) checked out identical: record one
+straight-to-match session with `OPENSTRIKERS_SKIP_FE=1` and
+`OPENSTRIKERS_NET_RECORD`, replay it with and without `--msaa` under
+`OPENSTRIKERS_NET_REPLAY`, and the same frame numbers are the same picture
+(the replay confirms the game state is identical throughout). With that A/B,
+masking one shader at a time found the draw, texture dumps showed it bound to
+a `global.glt` texture instead of `ball.glt`'s, and a backtrace on that bind
+led to the missing-texture fallback.
 
 ### The match rendering fix
 

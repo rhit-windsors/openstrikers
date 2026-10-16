@@ -316,7 +316,7 @@ function publicSettings() {
 function registerIpc() {
   ipcMain.handle('settings:get', () => publicSettings());
   ipcMain.handle('settings:set', (_e, patch) => {
-    const allowed = ['iso', 'exe', 'resolution', 'fullscreen', 'display', 'aspect', 'vsync', 'name', 'localNames', 'lastAddress'];
+    const allowed = ['iso', 'exe', 'resolution', 'fullscreen', 'display', 'aspect', 'vsync', 'msaa', 'name', 'localNames', 'lastAddress'];
     for (const k of allowed) if (patch && k in patch) settings[k] = patch[k];
     saveSettings();
     if (patch && 'name' in patch && lobby) lobby.act({ t: 'name', name: settings.name });

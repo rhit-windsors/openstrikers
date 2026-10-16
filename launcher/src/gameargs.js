@@ -6,6 +6,7 @@ const { TEAMS, SIDEKICKS, STADIUMS, GAME_PORT } = require('./lobby');
 
 const RESOLUTIONS = ['native', '1280x720', '1920x1080', '2560x1440', '3840x2160'];
 const ASPECTS = ['4:3', '16:9', 'stretch', 'auto'];
+const MSAA = [1, 2, 4, 8];
 
 function defaultSettings() {
   return {
@@ -16,6 +17,7 @@ function defaultSettings() {
     display: 0,
     aspect: '4:3',
     vsync: true,
+    msaa: 1,
     name: '',
     localNames: ['', '', '', ''],
     lastAddress: '',
@@ -29,6 +31,7 @@ function displayArgs(s) {
     '--display', String(Number.isInteger(s.display) && s.display >= 0 ? s.display : 0),
     '--aspect', ASPECTS.includes(s.aspect) ? s.aspect : 'auto',
     s.vsync ? '--vsync' : '--no-vsync',
+    '--msaa', String(MSAA.includes(s.msaa) ? s.msaa : 1),
   ];
 }
 

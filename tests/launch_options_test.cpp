@@ -82,6 +82,12 @@ int main() {
           match.match.superStrikes == 0);
     check(legacy.match.endAfterMatch == -1);
     check(parse({"game.iso", "--end-after-match"}).match.endAfterMatch == 1);
+    check(parse({"game.iso"}).msaa == 1);
+    check(parse({"game.iso", "--msaa", "4"}).msaa == 4);
+    check(parse({"game.iso", "--msaa", "8"}).msaa == 8);
+    parse({"game.iso", "--msaa", "3"}, false);
+    parse({"game.iso", "--msaa", "16"}, false);
+    parse({"game.iso", "--msaa"}, false);
     parse({"game.iso", "--home", "bowser"}, false);
     parse({"game.iso", "--stadium", "moon"}, false);
     parse({"game.iso", "--skill", "5"}, false);
