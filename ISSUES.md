@@ -20,6 +20,10 @@ recorded project status, not a new exhaustive compatibility test.
 
 ## Watch for regressions
 
+- **Cup trophy texture crash, fixed 2026-10-16** (`patches/decomp-late/155`).
+  The asynchronous bundle reader interpreted the texture count in host byte
+  order, then read outside the bundle when a cup trophy loaded after a match.
+  See the [diagnosis and validation](docs/archive/async-trophy-texture-crash.md).
 - A one-off audio-build startup crash in Aurora's pipeline-cache loader was
   likely caused by the MusyX sound-stack overrun fixed in `patches/musyx/003`.
   Reopen with a new log if it returns.
