@@ -116,6 +116,7 @@ int main(int argc, char* argv[])   // <-- diventa aurora_main via macro
                 "  --stadium NAME                     mario peach dk wario yoshi super forbidden\n"
                 "  --match-minutes N / --skill 0-4    Length; computer skill (Training..Legend)\n"
                 "  --items on|off / --bowser on|off / --super-strikes on|off\n"
+                "  --end-after-match                  Exit once the match is over (the launcher's lobby)\n"
                 "  F11 or Alt+Enter toggles fullscreen while playing.\n",
                 argc > 0 ? argv[0] : "openstrikers");
         return valid ? 0 : 2;

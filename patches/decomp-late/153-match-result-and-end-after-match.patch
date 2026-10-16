@@ -1,0 +1,35 @@
+# The end of a match, for the launcher's lobby and cup (src/net/session.cpp).
+# StatsTracker::TrackWinner reports the decided result once through
+# osHostMatchResult ('openstrikers: result H-A [ot] [forfeit]', team 0 home),
+# and with --end-after-match (the host's choice, sent to every machine) the
+# summary's A ends the game through osHostMatchFinished instead of opening
+# the Rematch / Change Teams / Quit menu, so everyone returns to the lobby.
+--- a/src/Game/DB/StatsTracker.cpp
++++ b/src/Game/DB/StatsTracker.cpp
+@@ -1758,6 +1758,9 @@
+ 
+     if (!mHasGameEnded)
+     {
++        // The launcher's cup reads the result from here: team 0 is the home
++        // side (controller slots 0-3).
++        osHostMatchResult(scoreLeft, scoreRight, mIsOvertime && !wasForfeit, wasForfeit);
+         if (nlSingleton<GameInfoManager>::Instance()->IsInCupOrTournamentMode())
+         {
+             if (mIsOvertime && !wasForfeit)
+--- a/src/Game/FE/Overlay/OverlayHandlerSummary.cpp
++++ b/src/Game/FE/Overlay/OverlayHandlerSummary.cpp
+@@ -244,7 +244,13 @@
+             {
+                 if (nlSingleton<GameInfoManager>::Instance()->mCurrentMode == GameInfoManager::GM_FRIENDLY)
+                 {
+-                    if (g_e3_Build)
++                    // A lobby match ends here and everyone goes back to the
++                    // launcher, instead of Rematch / Change Teams / Quit.
++                    if (osHostEndAfterMatch())
++                    {
++                        osHostMatchFinished();
++                    }
++                    else if (g_e3_Build)
+                     {
+                         FrontEnd::ReturnToFE();
+                     }

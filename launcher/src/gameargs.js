@@ -52,6 +52,7 @@ function matchArgs(m) {
     '--items', onOff(m.items), '--bowser', onOff(m.bowser), '--super-strikes', onOff(m.superStrikes),
   ];
   if (m.delay > 0) args.push('--net-delay', String(m.delay));
+  if (m.endAfterMatch) args.push('--end-after-match');
   return args;
 }
 

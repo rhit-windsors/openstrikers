@@ -80,6 +80,8 @@ int main() {
           match.match.awaySidekick == 0 && match.match.stadium == 6 && match.match.skill == 3 &&
           match.match.matchSeconds == 240 && match.match.items == 0 && match.match.bowser == 1 &&
           match.match.superStrikes == 0);
+    check(legacy.match.endAfterMatch == -1);
+    check(parse({"game.iso", "--end-after-match"}).match.endAfterMatch == 1);
     parse({"game.iso", "--home", "bowser"}, false);
     parse({"game.iso", "--stadium", "moon"}, false);
     parse({"game.iso", "--skill", "5"}, false);

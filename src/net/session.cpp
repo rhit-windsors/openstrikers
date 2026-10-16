@@ -74,6 +74,9 @@ MatchSettings s_match;
 // --player-names: what to draw over each local port's player offline.
 std::string s_localNames[PAD_MAX_CONTROLLERS];
 
+// osHostMatchFinished(): the session frame to exit at, or 0.
+uint32_t s_finishFrame = 0;
+
 std::unique_ptr<UdpTransport> s_transport;
 std::unique_ptr<Lockstep> s_lockstep;
 uint64_t s_clockStart = 0;
@@ -158,11 +161,12 @@ void applyMatchToEnv(const MatchSettings& m) {
     setEnv("OPENSTRIKERS_AI_SKILL", m.skill >= 0 ? buf : nullptr);
 }
 
-constexpr uint8_t kMatchConfigVersion = 2; // 2: widescreen
+constexpr uint8_t kMatchConfigVersion = 3; // 2: widescreen; 3: end after the match
 
 std::vector<uint8_t> encodeMatch(const MatchSettings& m) {
     const int fields[] = {m.homeTeam, m.awayTeam, m.homeSidekick, m.awaySidekick, m.stadium,
-                          m.skill, m.matchSeconds, m.items, m.bowser, m.superStrikes, m.widescreen};
+                          m.skill, m.matchSeconds, m.items, m.bowser, m.superStrikes, m.widescreen,
+                          m.endAfterMatch};
     std::vector<uint8_t> out{kMatchConfigVersion};
     for (int f : fields) {
         out.push_back(uint8_t(f & 0xFF));
@@ -173,7 +177,8 @@ std::vector<uint8_t> encodeMatch(const MatchSettings& m) {
 
 bool decodeMatch(const std::vector<uint8_t>& in, MatchSettings& m) {
     int* fields[] = {&m.homeTeam, &m.awayTeam, &m.homeSidekick, &m.awaySidekick, &m.stadium,
-                     &m.skill, &m.matchSeconds, &m.items, &m.bowser, &m.superStrikes, &m.widescreen};
+                     &m.skill, &m.matchSeconds, &m.items, &m.bowser, &m.superStrikes, &m.widescreen,
+                     &m.endAfterMatch};
     constexpr size_t kCount = sizeof(fields) / sizeof(fields[0]);
     if (in.size() != 1 + 2 * kCount || in[0] != kMatchConfigVersion) return false;
     for (size_t i = 0; i < kCount; ++i) {
@@ -225,7 +230,23 @@ uint64_t buildId() {
     std::exit(code);
 }
 
+// The match is over: leave quietly, exit code 0.
+[[noreturn]] void finishMatch() {
+    std::fprintf(stderr, "openstrikers: match finished\n");
+    std::fflush(stderr);
+    flushRecording();
+    if (s_lockstep) {
+        s_lockstep->leave();
+        s_lockstep->poll(nowMs());
+    }
+    aurora_shutdown();
+    std::exit(0);
+}
+
 void checkOnline() {
+    // Once the match is over the others leave as they finish; that is not an
+    // error.
+    if (s_finishFrame != 0 && s_lockstep->status() == Lockstep::Status::Disconnected) finishMatch();
     switch (s_lockstep->status()) {
     case Lockstep::Status::Desynced:
         endOnline("Netplay desync", "The game went out of sync between players: " + s_lockstep->statusMessage(), 4);
@@ -554,6 +575,9 @@ bool osHostReadPads(PADStatus* status, bool frameSample) {
     if (s_jitterMs != 0) {
         SDL_Delay((Uint32)(std::rand() % (int)(s_jitterMs + 1)));
     }
+    if (s_finishFrame != 0 && s_frame >= s_finishFrame) {
+        finishMatch();
+    }
 
     if (s_mode == Mode::Online) {
         onlineFrame(status);
@@ -678,6 +702,30 @@ const char* osHostPadName(int pad) {
         name = pad < PAD_MAX_CONTROLLERS ? s_localNames[pad] : std::string();
     }
     return name.empty() ? nullptr : name.c_str();
+}
+
+void osHostMatchResult(int home, int away, bool overtime, bool forfeit) {
+    std::fprintf(stderr, "openstrikers: result %d-%d%s%s\n", home, away, overtime ? " ot" : "",
+                 forfeit ? " forfeit" : "");
+    // Quitting from the pause menu forfeits and heads for the menus, never the
+    // summary: a lobby match ends there instead.
+    if (forfeit && osHostEndAfterMatch()) {
+        osHostMatchFinished();
+    }
+}
+
+bool osHostEndAfterMatch() { return net::s_match.endAfterMatch > 0; }
+
+void osHostMatchFinished() {
+    using namespace net;
+    if (s_mode == Mode::Off) {
+        finishMatch();
+    }
+    // A second's grace: every machine presses on at this same frame, and
+    // whoever exits first must not leave another short of it.
+    if (s_finishFrame == 0) {
+        s_finishFrame = s_frame + 60;
+    }
 }
 
 bool osHostMatch(OsHostMatch* out) {

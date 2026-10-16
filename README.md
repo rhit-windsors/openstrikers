@@ -33,7 +33,23 @@ around it (prefer `build-audio`: it has sound), or choose one in **Settings**.
   side picks its team and sidekick. The host sets the stadium, length,
   computer skill, items, Bowser, super strikes and input delay, and starts the
   match: every computer then launches the game together, and comes back to the
-  lobby when it ends. The lobby checks that everyone has the same game build
+  lobby when it ends (the summary's A ends the game; there is no rematch menu,
+  the host just starts again).
+- **Co-op cup** (the lobby's other mode): up to four players on one team,
+  through a cup against the computer. The host picks Mushroom, Flower, Star or
+  Bowser, or a Super cup, and the players' team. The launcher runs it the way
+  the game runs its own cups: captains drawn at random, the game's fixture
+  lists, a round robin (twice, home and away, in the Super cups), the last
+  round at the cup's own stadium, 3 points a win, 1 an overtime loss, and in
+  the Bowser cups a knockout between the top four (1st v 4th, 2nd v 3rd, then
+  the final). The players' matches are played in the game; every other match
+  is decided the way the game decides the ones you do not see
+  (`StatsTracker::SimulateGame`: fifteen chances a side at 20%, overtime a coin
+  toss). The table, the next fixture and the latest results show in the lobby
+  between matches. A cup is saved after every match
+  (`%LOCALAPPDATA%\OpenStrikers\cup.json`), so the host can resume it in a
+  later lobby. The game's own cup screens, trophies and save-file unlocks are
+  not involved. The lobby checks that everyone has the same game build
   and disc before it lets the host start. There is chat, and each player's ping.
 - **Settings:** disc image, the game executable, render resolution (native to
   4K), fullscreen or window, monitor, picture (Original 4:3, Widescreen 16:9,
@@ -67,6 +83,10 @@ How it hands a match to the game: the host's game gets `--net-host` with
 `--net-slots` (which machine drives each fielder), every other game
 `--net-join` with `--net-seat` (its machine number), so the lobby, not the
 order the games happen to connect in, decides who plays whom.
+Lobby matches also pass `--end-after-match`: the host's game, and through the
+match settings every other one, exits on the summary's A (or a forfeit),
+printing `openstrikers: result H-A [ot] [forfeit]`, which is how the cup learns
+the score (`patches/decomp-late/153-match-result-and-end-after-match.patch`).
 
 Terminal startup remains supported, with its previous windowed defaults. The
 picture follows the in-game Aspect option unless `--aspect 4:3|16:9|stretch`
@@ -118,7 +138,7 @@ lives in the separate `build-audio/` build.
 |---|---|
 | Windows (native, MSYS2 UCRT64) | front end complete; full matches play -- `smoke-test.ps1` passes |
 | Network play | up to 8 machines, one human per fielder, delay-based lockstep; verified on two PCs over a LAN (one reading the disc image from a network share) -- see [Network play](#network-play). Internet play needs a forwarded port or a VPN such as Tailscale; a relay server is designed for but not built |
-| Launcher | `OpenStrikersLauncher.exe` (Electron, `launcher/`): play locally with names over heads, or an online lobby where everyone picks their fielders and the host starts the match on every computer; disc, resolution up to 4K, fullscreen, 4:3 / 16:9 / stretch |
+| Launcher | `OpenStrikersLauncher.exe` (Electron, `launcher/`): play locally with names over heads, or an online lobby where everyone picks their fielders and the host starts the match on every computer, or a co-op cup for up to four against the computer; disc, resolution up to 4K, fullscreen, 4:3 / 16:9 / stretch |
 | Stability | unattended `soak.ps1` runs play match after match: 15 minutes of fast-forwarded play (59 matches, 143 goals) without a crash, and the allocator validator finds no heap damage |
 | Linux / WSL (GCC) | builds and boots (not re-verified since the render/input work) |
 | Rendering | 2D/front end, the in-match HUD, stadium, lighting and animated characters draw correctly. A machine with an empty shader cache can show brief black patches until its shaders compile; the build ships a starter cache so most compile during boot (see [Running](#running)) |

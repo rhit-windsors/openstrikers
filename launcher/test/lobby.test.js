@@ -183,3 +183,60 @@ test('game command lines', () => {
   const delayed = onlineArgs(s, { seat: 0, plan: { ...plan, match: { ...plan.match, delay: 6 } } }, null, 'R');
   assert.deepEqual(delayed.slice(-2), ['--net-delay', '6']);
 });
+
+test('a cup: everyone at home, the cup\'s fixture, results recorded', async () => {
+  const l = await lobby(['Riley', 'Sam']);
+  const saved = [];
+  l.host.on('cup', (c) => saved.push(c && JSON.parse(JSON.stringify(c))));
+  try {
+    const [sam] = l.clients;
+    assert.equal(sam.state.slots[4], sam.selfId);
+    l.host.act({ t: 'mode', mode: 'cup' });
+    let s = await waitFor(sam, (st) => st.mode === 'cup');
+    assert.equal(s.slots[1], sam.selfId); // moved from the away captaincy
+    assert.ok(s.slots.slice(4).every((x) => x === null));
+    assert.match(s.problem, /Choose a cup/);
+    sam.act({ t: 'slot', slot: 5 }); // refused: away is the computer's
+    l.host.act({ t: 'team', side: 'home', team: 4, sidekick: 3 });
+    l.host.act({ t: 'cupKind', kind: 0 });
+    l.host.act({ t: 'startCup' });
+    s = await waitFor(sam, (st) => !!st.cup);
+    assert.equal(s.slots[5], null);
+    assert.equal(s.problem, '');
+    assert.equal(s.cup.entrants.find((e) => e.human).team, 4);
+    l.host.act({ t: 'team', side: 'home', team: 1 }); // locked for the cup
+    const hostStart = once(l.host, 'start');
+    l.host.act({ t: 'start' });
+    const [{ plan }] = await hostStart;
+    assert.equal(plan.slots, '0,1,-,-,-,-,-,-');
+    assert.equal(plan.match.home.team, 4);
+    assert.equal(plan.match.home.sidekick, 3);
+    assert.notEqual(plan.match.away.team, 4);
+    assert.equal(plan.match.endAfterMatch, true);
+    assert.ok(onlineArgs(defaultSettings(), { seat: 0, plan }, null, 'R').includes('--end-after-match'));
+    // The host's game reports, then exits.
+    l.host.act({ t: 'result', home: 3, away: 1, ot: false });
+    l.host.act({ t: 'ingame', running: false });
+    sam.act({ t: 'ingame', running: false });
+    s = await waitFor(sam, (st) => st.cup.round === 1 && st.phase === 'lobby');
+    const me = s.cup.entrants.findIndex((e) => e.human);
+    const played = s.cup.rounds[0].find((m) => m.home === me || m.away === me);
+    assert.deepEqual(played.home === me ? [played.result.home, played.result.away] : [played.result.away, played.result.home], [3, 1]);
+    assert.ok(s.cup.rounds[0].every((m) => m.result));
+    // A result with no cup match being played is ignored.
+    l.host.act({ t: 'result', home: 5, away: 0 });
+    assert.equal(l.host.state.cup.round, 1);
+    assert.equal(saved.at(-1).round, 1);
+
+    // A new lobby picks the saved cup up again.
+    const again = new LobbyHost({ name: 'Riley', build: 'b1', port: 0, beacon: false, savedCup: saved.at(-1) });
+    assert.equal(again.state.savedCup.progress, 'Round 2 of 3');
+    again.act({ t: 'resumeCup' });
+    assert.equal(again.state.mode, 'cup');
+    assert.equal(again.state.cup.round, 1);
+    assert.equal(again.state.match.home.team, 4);
+    again.close();
+  } finally {
+    closeAll(l);
+  }
+});

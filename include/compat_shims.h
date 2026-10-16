@@ -92,6 +92,19 @@ struct OsHostMatch {
     int items, bowser, superStrikes;
 };
 bool osHostMatch(OsHostMatch* out);
+
+// --- the end of a match ---------------------------------------------------------
+// Called once when a match is decided, with team 0's (home's) and team 1's
+// score. Prints "openstrikers: result H-A [ot] [forfeit]", which the launcher's
+// cup reads from the game's log.
+void osHostMatchResult(int home, int away, bool overtime, bool forfeit);
+// True when the match ends the game (--end-after-match, the host's choice in a
+// network match): the summary's A then calls osHostMatchFinished() instead of
+// opening the Rematch / Quit menu.
+bool osHostEndAfterMatch();
+// Ends the game shortly after, with exit code 0. Every machine of a network
+// match calls it on the same frame.
+void osHostMatchFinished();
 #endif
 
 // --- host switches ----------------------------------------------------------

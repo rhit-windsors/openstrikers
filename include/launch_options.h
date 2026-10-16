@@ -27,6 +27,9 @@ struct MatchSettings {
     // decides which effects draw random numbers, so every machine in a
     // network match uses the host's.
     int widescreen = -1;
+    // 1: the game exits once the match is over, back to the launcher (its
+    // lobby and cup), instead of offering a rematch.
+    int endAfterMatch = -1;
 };
 
 inline int parse_name(const char* value, std::initializer_list<const char*> names) {
@@ -169,6 +172,8 @@ inline bool parse_launch_options(int argc, char* argv[], LaunchOptions& options)
             } else if (!std::strcmp(arg, "--net-slots")) {
                 if (++i == argc || !parse_net_slots(argv[i], options.netSlots)) return false;
                 options.netSlotsSet = true;
+            } else if (!std::strcmp(arg, "--end-after-match")) {
+                options.match.endAfterMatch = 1;
             } else if (!std::strcmp(arg, "--player-names")) {
                 if (++i == argc) return false;
                 options.playerNames = argv[i];

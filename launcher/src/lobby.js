@@ -26,6 +26,9 @@ const MAX_LOCAL_SLOTS = 4; // a machine drives at most one fielder per controlle
 const MAX_NAME = 16;
 const MAX_LINE = 64 * 1024;
 
+const { CUPS, createCup, recordResult, nextMatch, humanIndex, progress, validCup, standings } = require('./cup');
+
+const TEAM_NAMES = ['Daisy', 'Donkey Kong', 'Luigi', 'Mario', 'Peach', 'Waluigi', 'Wario', 'Yoshi'];
 const TEAMS = ['daisy', 'dk', 'luigi', 'mario', 'peach', 'waluigi', 'wario', 'yoshi'];
 const SIDEKICKS = ['toad', 'koopa', 'hammerbros', 'birdo'];
 const STADIUMS = ['mario', 'peach', 'dk', 'wario', 'yoshi', 'super', 'forbidden'];
@@ -98,16 +101,67 @@ function frame(socket, onMessage, onClose) {
 function planMatch(state) {
   const seatOf = new Map(state.players.map((p, i) => [p.id, i]));
   const slots = state.slots.map((id) => (id === null ? '-' : String(seatOf.get(id))));
+  // Every lobby match ends the game when it is over, so everyone comes back
+  // here; a cup match is the cup's next fixture, the players at home.
+  const match = { ...state.match, endAfterMatch: true };
+  if (state.mode === 'cup' && state.cup) {
+    const next = nextMatch(state.cup);
+    const me = humanIndex(state.cup);
+    const them = state.cup.entrants[next.home === me ? next.away : next.home];
+    match.home = { ...match.home, ...pick(state.cup.entrants[me]) };
+    match.away = pick(them);
+    match.stadium = next.stadium;
+  }
   return {
     players: state.players.length,
     slots: slots.join(','),
     seats: Object.fromEntries(state.players.map((p, i) => [p.id, i])),
-    match: state.match,
+    match,
+  };
+}
+
+const pick = (e) => ({ team: e.team, sidekick: e.sidekick });
+
+// What the lobby shows of a cup, worked out here so every window shows the
+// same: the table, the players' next match, and the latest results.
+function cupView(cup) {
+  const me = humanIndex(cup);
+  const name = (i) => TEAM_NAMES[cup.entrants[i].team];
+  const describe = (m, stage) => ({
+    stage,
+    home: name(m.home), away: name(m.away),
+    homeHuman: m.home === me, awayHuman: m.away === me,
+    stadium: m.stadium,
+    result: m.result,
+  });
+  const next = nextMatch(cup);
+  let latest = [];
+  if (cup.knockout?.final?.result) latest = [describe(cup.knockout.final, 'Final')];
+  else if (cup.knockout?.semis[0].result) latest = cup.knockout.semis.map((m) => describe(m, 'Semi-final'));
+  else {
+    const done = cup.rounds.filter((r) => r.every((m) => m.result));
+    if (done.length) latest = done.at(-1).map((m) => describe(m, `Round ${done.length}`));
+  }
+  const opponent = next ? cup.entrants[next.home === me ? next.away : next.home] : null;
+  return {
+    name: CUPS[cup.kind].name,
+    progress: progress(cup),
+    knockout: !!CUPS[cup.kind].knockout,
+    table: standings(cup).map((row, i) => ({ ...row, position: i + 1, name: TEAM_NAMES[row.team] })),
+    next: next && { stage: next.stage, stadium: next.stadium, team: opponent.team, sidekick: opponent.sidekick, name: TEAM_NAMES[opponent.team] },
+    latest,
+    done: cup.done,
+    eliminated: !!cup.eliminated,
+    champion: cup.done ? { name: name(cup.champion), human: cup.champion === me } : null,
   };
 }
 
 // Why the host cannot start yet, or '' when it can.
 function startProblem(state) {
+  if (state.mode === 'cup') {
+    if (!state.cup) return 'Choose a cup and start it.';
+    if (state.cup.done) return 'The cup is over. Start another one, or switch back to an exhibition.';
+  }
   if (state.players.length < 2) return 'Waiting for at least one more player.';
   const host = state.players[0];
   const odd = state.players.filter((p) => p.build !== host.build);
@@ -123,18 +177,25 @@ function startProblem(state) {
 }
 
 class LobbyHost extends EventEmitter {
-  constructor({ name, build, buildLabel = '', port = LOBBY_PORT, beacon = true }) {
+  // `savedCup`: an unfinished cup from an earlier lobby, which the host can
+  // pick up again.
+  constructor({ name, build, buildLabel = '', port = LOBBY_PORT, beacon = true, savedCup = null }) {
     super();
     this.port = port;
     this.beaconEnabled = beacon;
     this.selfId = 0;
     this.nextId = 1;
     this.clients = new Map(); // id -> { send, socket }
+    this.savedCup = validCup(savedCup) && !savedCup.done ? savedCup : null;
     this.state = {
       phase: 'lobby',
       players: [{ id: 0, name: cleanName(name) || 'Host', host: true, build, buildLabel, ping: 0, inGame: false }],
       slots: Array(SLOTS).fill(null),
       match: defaultMatch(),
+      mode: 'match', // or 'cup': every player on the home side, through a cup
+      cupKind: 0,
+      cup: null,
+      savedCup: this.savedCup ? { kind: this.savedCup.kind, progress: progress(this.savedCup) } : null,
       problem: '',
     };
     this.state.slots[0] = 0;
@@ -233,10 +294,30 @@ class LobbyHost extends EventEmitter {
     });
   }
 
-  // The away captain first, so two players face each other by default.
+  // The away captain first, so two players face each other by default; in a
+  // cup everyone plays for the home side.
   firstFreeSlot() {
-    for (const s of [4, 0, 1, 5, 2, 6, 3, 7]) if (this.state.slots[s] === null) return s;
+    const order = this.state.mode === 'cup' ? [0, 1, 2, 3] : [4, 0, 1, 5, 2, 6, 3, 7];
+    for (const s of order) if (this.state.slots[s] === null) return s;
     return -1;
+  }
+
+  // In a cup the away side is the computer's: move anyone there to a free
+  // home spot, or to none.
+  gatherHome() {
+    const { slots } = this.state;
+    for (let s = 4; s < SLOTS; ++s) {
+      const id = slots[s];
+      if (id === null) continue;
+      slots[s] = null;
+      if (slots.slice(0, 4).includes(id)) continue;
+      const free = slots.slice(0, 4).indexOf(null);
+      if (free >= 0) slots[free] = id;
+    }
+  }
+
+  cupChanged() {
+    this.emit('cup', this.state.cup);
   }
 
   player(id) {
@@ -269,6 +350,7 @@ class LobbyHost extends EventEmitter {
         if (owner === id || (host && owner !== null && msg.release)) {
           this.state.slots[msg.slot] = null;
         } else if (owner === null) {
+          if (this.state.mode === 'cup' && msg.slot >= 4) return this.tell(id, 'In a cup everyone plays for the same team.');
           const mine = this.state.slots.filter((s) => s === id).length;
           if (mine >= MAX_LOCAL_SLOTS) return this.tell(id, 'You can play at most four fielders, one per controller.');
           this.state.slots[msg.slot] = id;
@@ -279,6 +361,8 @@ class LobbyHost extends EventEmitter {
         // A side's captain picks its team; the host picks for a side with no
         // human captain.
         if (msg.side !== 'home' && msg.side !== 'away' || this.state.phase !== 'lobby') return;
+        // A cup draws the opponents, and keeps the team it started with.
+        if (this.state.mode === 'cup' && (msg.side === 'away' || this.state.cup)) return;
         const captain = this.state.slots[msg.side === 'home' ? 0 : 4];
         if (!(captain === id || (host && captain === null) || (host && captain === this.selfId))) {
           return this.tell(id, 'Only that side\'s captain picks its team.');
@@ -299,6 +383,66 @@ class LobbyHost extends EventEmitter {
         for (const k of ['items', 'bowser', 'superStrikes']) if (typeof f[k] === 'boolean') m[k] = f[k];
         break;
       }
+      case 'mode': {
+        if (!host || this.state.phase !== 'lobby' || (msg.mode !== 'match' && msg.mode !== 'cup')) return;
+        this.state.mode = msg.mode;
+        if (msg.mode === 'cup') {
+          this.gatherHome();
+          this.system('The host switched to a cup: everyone plays for one team.');
+        }
+        break;
+      }
+      case 'cupKind':
+        if (!host || this.state.cup || !intIn(msg.kind, 0, CUPS.length - 1)) return;
+        this.state.cupKind = msg.kind;
+        break;
+      case 'startCup': {
+        if (!host || this.state.mode !== 'cup' || this.state.phase !== 'lobby' || (this.state.cup && !this.state.cup.done)) return;
+        const { team, sidekick } = this.state.match.home;
+        this.state.cup = createCup({ kind: this.state.cupKind, team, sidekick, seed: crypto.randomBytes(4).readUInt32LE(0) });
+        this.system(`${CUPS[this.state.cupKind].name} drawn: ${this.describeEntrants()}.`);
+        this.cupChanged();
+        break;
+      }
+      case 'resumeCup':
+        if (!host || !this.savedCup || this.state.phase !== 'lobby') return;
+        this.state.mode = 'cup';
+        this.gatherHome();
+        this.state.cup = this.savedCup;
+        this.state.cupKind = this.savedCup.kind;
+        this.state.match.home = { ...this.state.match.home, ...pick(this.savedCup.entrants[humanIndex(this.savedCup)]) };
+        this.savedCup = null;
+        this.state.savedCup = null;
+        this.system(`Back to the ${CUPS[this.state.cupKind].name}: ${progress(this.state.cup).toLowerCase()}.`);
+        break;
+      case 'endCup':
+        if (!host || !this.state.cup || this.state.phase !== 'lobby') return;
+        this.state.cup = null;
+        this.cupChanged();
+        break;
+      case 'result': {
+        // From the host's own game, once it has exited: the players are home.
+        if (!host || !this.cupMatchPending) return;
+        this.cupMatchPending = false;
+        const { home, away } = msg;
+        if (!Number.isInteger(home) || !Number.isInteger(away)) return;
+        const before = nextMatch(this.state.cup);
+        const opponent = this.state.cup.entrants[before.home === humanIndex(this.state.cup) ? before.away : before.home];
+        try {
+          recordResult(this.state.cup, { us: home, them: away, ot: !!msg.ot, forfeit: !!msg.forfeit });
+        } catch {
+          return;
+        }
+        const won = msg.forfeit ? away < 0 : home > away;
+        this.system(`${won ? 'Won' : 'Lost'} ${Math.max(home, 0)}-${Math.max(away, 0)}${msg.ot ? ' in overtime' : ''} against ${TEAM_NAMES[opponent.team]}.`);
+        const cup = this.state.cup;
+        if (cup.done) {
+          const champion = cup.entrants[cup.champion];
+          this.system(champion.human ? `You won the ${CUPS[cup.kind].name}!` : `${TEAM_NAMES[champion.team]} won the ${CUPS[cup.kind].name}.`);
+        }
+        this.cupChanged();
+        break;
+      }
       case 'chat': {
         const text = String(msg.text ?? '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 300);
         if (text) this.broadcast({ t: 'chat', from: p.name, text });
@@ -309,6 +453,7 @@ class LobbyHost extends EventEmitter {
         if (host && !p.inGame && this.state.phase !== 'lobby') {
           // The match ends with the host's game.
           this.state.phase = 'lobby';
+          this.cupMatchPending = false;
         }
         break;
       case 'pong':
@@ -328,10 +473,15 @@ class LobbyHost extends EventEmitter {
     if (problem) return this.tell(this.selfId, problem);
     const plan = planMatch(this.state);
     this.state.phase = 'playing';
+    this.cupMatchPending = this.state.mode === 'cup';
     for (const p of this.state.players) p.inGame = true;
     for (const [id, c] of this.clients) c.send({ t: 'start', seat: plan.seats[id], plan });
     this.emit('start', { seat: 0, plan });
     this.changed();
+  }
+
+  describeEntrants() {
+    return this.state.cup.entrants.map((e) => (e.human ? `you (${TEAM_NAMES[e.team]})` : TEAM_NAMES[e.team])).join(', ');
   }
 
   ping() {
@@ -354,6 +504,7 @@ class LobbyHost extends EventEmitter {
 
   refresh() {
     this.state.problem = this.state.phase === 'lobby' ? startProblem(this.state) : '';
+    this.state.cupView = this.state.cup ? cupView(this.state.cup) : null;
   }
 
   changed() {

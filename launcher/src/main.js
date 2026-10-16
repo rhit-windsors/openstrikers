@@ -20,6 +20,7 @@ const dataDir = process.env.OPENSTRIKERS_LAUNCHER_HOME ||
     ? path.join(process.env.LOCALAPPDATA, 'OpenStrikers')
     : path.join(app.getPath('appData'), 'OpenStrikers'));
 const settingsFile = path.join(dataDir, 'launcher.json');
+const cupFile = path.join(dataDir, 'cup.json'); // the host's cup in progress
 const logDir = path.join(dataDir, 'logs');
 app.setPath('userData', path.join(dataDir, 'electron'));
 
@@ -184,10 +185,26 @@ const EXIT_REASONS = {
   6: 'Could not join the host\'s match.',
 };
 
+// "openstrikers: result 2-1 ot" (decomp-late/153), the last one the game
+// printed: home (the players, in a cup) first.
+function matchResult(logPath) {
+  try {
+    const all = [...fs.readFileSync(logPath, 'utf8').matchAll(/^openstrikers: result (-?\d+)-(-?\d+)( ot)?( forfeit)?/gm)];
+    const m = all.at(-1);
+    return m ? { home: Number(m[1]), away: Number(m[2]), ot: !!m[3], forfeit: !!m[4] } : null;
+  } catch {
+    return null;
+  }
+}
+
 function finished(code, error) {
   if (!game) return;
   const { logPath } = game;
   game = null;
+  if (lobby instanceof LobbyHost && code === 0) {
+    const result = matchResult(logPath);
+    if (result) lobby.act({ t: 'result', ...result });
+  }
   let detail = '';
   if (code !== 0) {
     try {
@@ -340,7 +357,22 @@ function registerIpc() {
     if (ready.problem) return { ok: false, error: ready.problem };
     leaveLobby();
     const build = buildId();
-    const host = new LobbyHost({ name: settings.name, build: build.id, buildLabel: build.label });
+    let savedCup = null;
+    try {
+      savedCup = JSON.parse(fs.readFileSync(cupFile, 'utf8'));
+    } catch {
+      savedCup = null;
+    }
+    const host = new LobbyHost({ name: settings.name, build: build.id, buildLabel: build.label, savedCup });
+    // Saved after every match, so a cup outlives the lobby.
+    host.on('cup', (cup) => {
+      try {
+        if (cup && !cup.done) fs.writeFileSync(cupFile, JSON.stringify(cup));
+        else fs.rmSync(cupFile, { force: true });
+      } catch {
+        // Not being able to save only costs resuming later.
+      }
+    });
     try {
       await host.listen();
     } catch (err) {

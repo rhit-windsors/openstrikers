@@ -9,6 +9,7 @@ const TEAMS = [
 ];
 const SIDEKICKS = ['Toad', 'Koopa', 'Hammer Bros', 'Birdo'];
 const STADIUMS = ['Mario Stadium', "Peach's Castle", 'DK Jungle', "Wario's Factory", "Yoshi's Island", 'Super Stadium', 'The Battle Dome'];
+const CUPS = ['Mushroom Cup', 'Flower Cup', 'Star Cup', 'Bowser Cup', 'Super Mushroom Cup', 'Super Flower Cup', 'Super Star Cup', 'Super Bowser Cup'];
 const SKILLS = ['Training', 'Rookie', 'Professional', 'Superstar', 'Legend'];
 const ROLES = ['Captain', 'Sidekick', 'Sidekick', 'Sidekick'];
 const MINUTES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 30];
@@ -220,16 +221,34 @@ function playerById(id) {
 
 function canPickTeam(side) {
   const captain = lobby.state.slots[side === 'home' ? 0 : 4];
+  if (lobby.state.mode === 'cup' && (side === 'away' || lobby.state.cup)) return false;
   return lobby.state.phase === 'lobby' &&
     (captain === lobby.selfId || (lobby.host && (captain === null || captain === lobby.selfId)));
 }
 
+// In a cup the other half is the computer's: the next opponent, drawn by the cup.
+function renderOpponent() {
+  const next = lobby.state.cupView?.next;
+  const head = h('div', { class: 'team-head', style: `--team: ${next ? TEAMS[next.team][1] : '#888'}` },
+    h('div', { class: 'side-name' }, 'Opponent', h('b', {}, next ? next.name : lobby.state.cup ? '-' : 'Drawn by the cup')),
+    next ? h('div', { class: 'hint' }, `with ${SIDEKICKS[next.sidekick]}`) : null);
+  const slots = [0, 1, 2, 3].map((k) => h('div', { class: 'slot cpu locked away-cpu' },
+    h('span', { class: `dot c${k + 1}` }),
+    h('span', { class: 'role' }, k === 0 ? ROLES[0] : `${ROLES[k]} ${k}`),
+    h('span', { class: 'who' }, 'Computer')));
+  $('half-away').replaceChildren(head, ...slots);
+}
+
 function renderHalf(side) {
   const { state, selfId, host } = lobby;
+  if (side === 'away' && state.mode === 'cup') return renderOpponent();
   const base = side === 'home' ? 0 : 4;
   const m = state.match[side];
   const editable = canPickTeam(side);
-  const team = h('select', { disabled: !editable, title: editable ? '' : 'The captain picks the team' });
+  const team = h('select', {
+    disabled: !editable,
+    title: editable ? '' : state.mode === 'cup' && state.cup ? 'A cup keeps its team' : 'The captain picks the team',
+  });
   options(team, TEAMS.map(([n], i) => [i, n]), m.team);
   team.addEventListener('change', () => launcher.act({ t: 'team', side, team: Number(team.value) }));
   const sidekick = h('select', { disabled: !editable });
@@ -263,7 +282,7 @@ function renderHalf(side) {
   });
 
   const head = h('div', { class: 'team-head', style: `--team: ${TEAMS[m.team][1]}` },
-    h('div', { class: 'side-name' }, side === 'home' ? 'Home' : 'Away', h('b', {}, TEAMS[m.team][0])),
+    h('div', { class: 'side-name' }, state.mode === 'cup' ? 'Your team' : side === 'home' ? 'Home' : 'Away', h('b', {}, TEAMS[m.team][0])),
     team, sidekick);
   $(`half-${side}`).replaceChildren(head, ...slots);
 }
@@ -286,7 +305,7 @@ function renderMatch() {
   };
   $('match').replaceChildren(
     h('h2', {}, host ? 'Match' : 'Match (the host decides)'),
-    select('Stadium', STADIUMS.map((n, i) => [i, n]), m.stadium, 'stadium'),
+    state.mode === 'cup' ? null : select('Stadium', STADIUMS.map((n, i) => [i, n]), m.stadium, 'stadium'),
     select('Length', MINUTES.map((n) => [n, `${n} minute${n === 1 ? '' : 's'}`]), m.minutes, 'minutes'),
     select('Computer skill', SKILLS.map((n, i) => [i, n]), m.skill, 'skill'),
     select('Input delay', [[0, 'Default (4 frames)'], ...[2, 3, 4, 5, 6, 7, 8, 10, 12].map((n) => [n, `${n} frames (${Math.round(n * 16.7)} ms)`])], m.delay, 'delay'),
@@ -317,12 +336,98 @@ function renderLobby() {
   renderMatch();
   renderPlayers();
   const start = $('start');
-  start.hidden = !host;
+  start.hidden = !host || (state.mode === 'cup' && (!state.cup || state.cup.done));
+  start.textContent = state.mode === 'cup' ? 'Play next match' : 'Start match';
   let text = state.problem;
   if (state.phase !== 'lobby') text = 'Match in progress.';
-  else if (!host && !text) text = `Waiting for ${hostName} to start the match.`;
+  else if (!host && !text) text = `Waiting for ${hostName} to start the ${state.mode === 'cup' ? 'next cup match' : 'match'}.`;
+  renderModeSwitch();
+  renderCup();
   $('start-problem').textContent = text;
   start.disabled = state.phase !== 'lobby' || !!state.problem || gameRunning;
+}
+
+function renderModeSwitch() {
+  const { state, host } = lobby;
+  const locked = !host || state.phase !== 'lobby';
+  const button = (mode, label) => h('button', {
+    class: state.mode === mode ? 'on' : '',
+    disabled: locked,
+    title: host ? '' : 'The host chooses',
+    onclick: () => { if (state.mode !== mode) launcher.act({ t: 'mode', mode }); },
+  }, label);
+  $('mode-switch').replaceChildren(button('match', 'Exhibition'), button('cup', 'Co-op cup'));
+}
+
+function ordinal(n) {
+  const tens = n % 100;
+  if (tens >= 11 && tens <= 13) return `${n}th`;
+  return `${n}${['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'}`;
+}
+
+function renderCup() {
+  const { state, host } = lobby;
+  const card = $('cup');
+  card.hidden = state.mode !== 'cup';
+  if (card.hidden) return;
+  const open = state.phase === 'lobby';
+  if (!state.cup) {
+    const kind = h('select', { disabled: !host || !open });
+    options(kind, CUPS.map((n, i) => [i, n]), state.cupKind);
+    kind.addEventListener('change', () => launcher.act({ t: 'cupKind', kind: Number(kind.value) }));
+    card.replaceChildren(
+      h('div', { class: 'cup-head' }, h('h2', {}, 'Co-op cup')),
+      h('p', { class: 'hint' }, "Everyone plays for one team, through a cup against the computer: a league like the game's own cups, and in the Bowser cups a knockout between the top four. Pick your team above."),
+      h('div', { class: 'cup-setup' },
+        kind,
+        host ? h('button', { class: 'btn btn-primary', disabled: !open, onclick: () => launcher.act({ t: 'startCup' }) }, 'Start cup') : null,
+        host && state.savedCup ? h('button', { class: 'btn', disabled: !open, onclick: () => launcher.act({ t: 'resumeCup' }) },
+          `Resume ${CUPS[state.savedCup.kind]} (${state.savedCup.progress.toLowerCase()})`) : null,
+        host ? null : h('span', { class: 'hint' }, 'The host chooses the cup.')));
+    return;
+  }
+  const v = state.cupView;
+  const parts = [h('div', { class: 'cup-head' }, h('h2', {}, v.name), h('span', { class: 'progress' }, v.progress))];
+  if (v.done) {
+    const us = v.table.find((row) => row.human);
+    let text;
+    if (v.champion.human) text = `Champions! You won the ${v.name}.`;
+    else if (v.knockout) text = `${v.champion.name} won the ${v.name}.${v.eliminated ? ' You were knocked out.' : ''}`;
+    else text = `${v.champion.name} won the ${v.name}. You finished ${ordinal(us.position)}.`;
+    parts.push(h('div', { class: `cup-banner${v.champion.human ? '' : ' out'}` }, text));
+  } else if (v.next) {
+    const stage = v.next.stage === 'final' ? 'Final' : v.next.stage === 'semi' ? 'Semi-final' : 'Next match';
+    parts.push(h('div', { class: 'cup-next' },
+      h('div', {}, h('div', { class: 'label' }, stage),
+        h('div', { class: 'vs' }, `${TEAMS[state.match.home.team][0]} vs ${v.next.name}`),
+        h('div', { class: 'where' }, `${STADIUMS[v.next.stadium]} - their sidekicks: ${SIDEKICKS[v.next.sidekick]}`))));
+  }
+  // In a Bowser cup's league, the top four go through to the knockout.
+  const through = v.knockout && !state.cup.knockout ? 4 : 0;
+  const table = h('table', { class: 'table' },
+    h('thead', {}, h('tr', {}, ...['#', 'Team', 'P', 'W', 'OTW', 'OTL', 'L', 'GF', 'GA', 'Pts'].map((t) => h('th', {}, t)))),
+    h('tbody', {}, ...v.table.map((row) => h('tr', { class: `${row.human ? 'us' : ''}${row.position <= through ? ' through' : ''}` },
+      h('td', {}, String(row.position)), h('td', {}, row.human ? `${row.name} (you)` : row.name),
+      ...[row.played, row.won, row.otWon, row.otLost, row.lost, row.goalsFor, row.goalsAgainst].map((n) => h('td', {}, String(n))),
+      h('td', { class: 'pts' }, String(row.points))))));
+  const latest = h('div', {},
+    h('h3', {}, v.latest.length ? v.latest[0].stage : 'Results'),
+    v.latest.length
+      ? h('ul', { class: 'results' }, ...v.latest.map((m) => h('li', {},
+        h('span', { class: `h${m.homeHuman ? ' us' : ''}` }, m.home),
+        h('span', { class: 'score' }, `${m.result.home}-${m.result.away}${m.result.ot ? ' OT' : ''}`),
+        h('span', { class: m.awayHuman ? 'us' : '' }, m.away))))
+      : h('p', { class: 'hint' }, 'No matches played yet.'));
+  parts.push(h('div', { class: 'cup-body' }, table, latest));
+  if (host) {
+    parts.push(h('div', { class: 'cup-foot' },
+      v.done ? h('button', { class: 'btn btn-primary', disabled: !open, onclick: () => launcher.act({ t: 'startCup' }) }, 'Play another cup') : null,
+      h('button', {
+        class: 'btn btn-ghost', disabled: !open,
+        onclick: () => { if (v.done || confirm(`Abandon the ${v.name}?`)) launcher.act({ t: 'endCup' }); },
+      }, v.done ? 'Choose another cup' : 'Abandon cup')));
+  }
+  card.replaceChildren(...parts);
 }
 
 $('start').addEventListener('click', () => launcher.act({ t: 'start' }));
