@@ -113,6 +113,7 @@ int main(int argc, char* argv[])   // <-- diventa aurora_main via macro
                 "  --player-names A,B,...             Offline: names over ports 1-4's players\n"
                 "Match (network play, or OPENSTRIKERS_SKIP_FE; a host's apply to everyone):\n"
                 "  --home TEAM / --away TEAM          daisy dk luigi mario peach waluigi wario yoshi\n"
+                "                                     super (the robots; their sidekicks are fixed)\n"
                 "  --home-sidekick SK / --away-sidekick SK   toad koopa hammerbros birdo\n"
                 "  --stadium NAME                     mario peach dk wario yoshi super forbidden\n"
                 "  --match-minutes N / --skill 0-4    Length; computer skill (Training..Legend)\n"

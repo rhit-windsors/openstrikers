@@ -6,7 +6,10 @@
 const TEAMS = [
   ['Daisy', '#f39c32'], ['Donkey Kong', '#a0652f'], ['Luigi', '#2fbf5b'], ['Mario', '#e8423a'],
   ['Peach', '#ff8fc8'], ['Waluigi', '#8e4fc9'], ['Wario', '#f1c40f'], ['Yoshi', '#7ed957'],
+  ['Super Team', '#8fa3b8'],
 ];
+// The robots: every player can take a super strike, and their sidekicks are fixed.
+const SUPER_TEAM = 8;
 const SIDEKICKS = ['Toad', 'Koopa', 'Hammer Bros', 'Birdo'];
 const STADIUMS = ['Mario Stadium', "Peach's Castle", 'DK Jungle', "Wario's Factory", "Yoshi's Island", 'Super Stadium', 'The Battle Dome'];
 const CUPS = ['Mushroom Cup', 'Flower Cup', 'Star Cup', 'Bowser Cup', 'Super Mushroom Cup', 'Super Flower Cup', 'Super Star Cup', 'Super Bowser Cup'];
@@ -253,8 +256,10 @@ function renderHalf(side) {
   });
   options(team, TEAMS.map(([n], i) => [i, n]), m.team);
   team.addEventListener('change', () => launcher.act({ t: 'team', side, team: Number(team.value) }));
-  const sidekick = h('select', { disabled: !editable });
-  options(sidekick, SIDEKICKS.map((n, i) => [i, n]), m.sidekick);
+  const robots = m.team === SUPER_TEAM;
+  const sidekick = h('select', { disabled: !editable || robots, title: robots ? 'The Super Team is all robots' : '' });
+  if (robots) options(sidekick, [[0, 'Robots']], 0);
+  else options(sidekick, SIDEKICKS.map((n, i) => [i, n]), m.sidekick);
   sidekick.addEventListener('change', () => launcher.act({ t: 'team', side, sidekick: Number(sidekick.value) }));
 
   const slots = [0, 1, 2, 3].map((k) => {
@@ -278,7 +283,7 @@ function renderHalf(side) {
       },
     },
     h('span', { class: `dot c${k + 1}` }),
-    h('span', { class: 'role' }, k === 0 ? ROLES[0] : `${ROLES[k]} ${k}`),
+    h('span', { class: 'role' }, robots ? `Robot ${k + 1}` : k === 0 ? ROLES[0] : `${ROLES[k]} ${k}`),
     h('span', { class: 'who' }, p ? p.name : 'Computer'),
     h('span', { class: 'action' }, action));
   });

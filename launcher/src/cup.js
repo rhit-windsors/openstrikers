@@ -31,7 +31,9 @@ const MATCHUPS = {
     [6, 5], [0, 3]],
 };
 
-const TEAM_COUNT = 8; // eTeamID 0..7; the Super Team is not offered
+// The computer's teams: eTeamID 0..7. The players may be the Super Team (8);
+// it is never drawn as an opponent, as in the game.
+const TEAM_COUNT = 8;
 const SIDEKICK_COUNT = 4;
 const STADIUM_COUNT = 7;
 

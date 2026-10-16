@@ -182,6 +182,8 @@ test('game command lines', () => {
     '--items', 'on', '--bowser', 'off', '--super-strikes', 'on']);
   const guest = onlineArgs(s, { seat: 2, plan: { ...plan, match: { ...plan.match, delay: 6 } } }, '10.0.0.5', 'Sam');
   assert.deepEqual(guest.slice(11), ['--net-name', 'Sam', '--net-join', '10.0.0.5:52320', '--net-seat', '2']);
+  const robots = onlineArgs(s, { seat: 0, plan: { ...plan, match: { ...plan.match, home: { team: 8, sidekick: 2 } } } }, null, 'R');
+  assert.equal(robots[robots.indexOf('--home') + 1], 'super');
   const delayed = onlineArgs(s, { seat: 0, plan: { ...plan, match: { ...plan.match, delay: 6 } } }, null, 'R');
   assert.deepEqual(delayed.slice(-2), ['--net-delay', '6']);
 });

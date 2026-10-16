@@ -28,8 +28,11 @@ const MAX_LINE = 64 * 1024;
 
 const { CUPS, createCup, recordResult, nextMatch, humanIndex, progress, validCup, standings } = require('./cup');
 
-const TEAM_NAMES = ['Daisy', 'Donkey Kong', 'Luigi', 'Mario', 'Peach', 'Waluigi', 'Wario', 'Yoshi'];
-const TEAMS = ['daisy', 'dk', 'luigi', 'mario', 'peach', 'waluigi', 'wario', 'yoshi'];
+const TEAM_NAMES = ['Daisy', 'Donkey Kong', 'Luigi', 'Mario', 'Peach', 'Waluigi', 'Wario', 'Yoshi', 'Super Team'];
+// The last is the Super Team (the robots, TEAM_MYSTERY): every player can take
+// a super strike, and the game picks its sidekicks.
+const TEAMS = ['daisy', 'dk', 'luigi', 'mario', 'peach', 'waluigi', 'wario', 'yoshi', 'super'];
+const SUPER_TEAM = 8;
 const SIDEKICKS = ['toad', 'koopa', 'hammerbros', 'birdo'];
 const STADIUMS = ['mario', 'peach', 'dk', 'wario', 'yoshi', 'super', 'forbidden'];
 
@@ -664,6 +667,6 @@ function parseAddress(text, defaultPort = LOBBY_PORT) {
 }
 
 module.exports = {
-  PROTOCOL, LOBBY_PORT, BEACON_PORT, GAME_PORT, SLOTS, TEAMS, SIDEKICKS, STADIUMS,
+  PROTOCOL, LOBBY_PORT, BEACON_PORT, GAME_PORT, SLOTS, TEAMS, SUPER_TEAM, SIDEKICKS, STADIUMS,
   LobbyHost, LobbyClient, LobbyFinder, planMatch, startProblem, parseAddress, cleanName, defaultMatch,
 };

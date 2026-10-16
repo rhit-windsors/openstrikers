@@ -42,8 +42,10 @@ inline int parse_name(const char* value, std::initializer_list<const char*> name
 }
 
 // In eTeamID order.
+// The Super Team (the robots) is TEAM_MYSTERY; the game picks its sidekicks.
 inline int parse_team(const char* v) {
-    return parse_name(v, {"daisy", "dk", "luigi", "mario", "peach", "waluigi", "wario", "yoshi"});
+    if (!std::strcmp(v, "super")) return 8;
+    return parse_name(v, {"daisy", "dk", "luigi", "mario", "peach", "waluigi", "wario", "yoshi", "mystery"});
 }
 // In eSidekickID order.
 inline int parse_sidekick(const char* v) { return parse_name(v, {"toad", "koopa", "hammerbros", "birdo"}); }

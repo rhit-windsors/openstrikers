@@ -82,6 +82,8 @@ int main() {
           match.match.superStrikes == 0);
     check(legacy.match.endAfterMatch == -1);
     check(parse({"game.iso", "--end-after-match"}).match.endAfterMatch == 1);
+    check(parse({"game.iso", "--home", "super"}).match.homeTeam == 8);
+    check(parse({"game.iso", "--away", "mystery"}).match.awayTeam == 8);
     check(parse({"game.iso"}).msaa == 1);
     check(parse({"game.iso", "--msaa", "4"}).msaa == 4);
     check(parse({"game.iso", "--msaa", "8"}).msaa == 8);

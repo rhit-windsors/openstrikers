@@ -85,6 +85,15 @@ test('losing everything in a Bowser Cup ends it without you', () => {
   assert.ok(cup.knockout.final.result);
 });
 
+test('the players can be the Super Team; the computer never is', () => {
+  const cup = createCup({ kind: kind('bowser'), team: 8, sidekick: 0, seed: 21 });
+  assert.equal(cup.entrants[humanIndex(cup)].team, 8);
+  assert.ok(cup.entrants.filter((e) => !e.human).every((e) => e.team >= 0 && e.team < 8));
+  assert.equal(new Set(cup.entrants.map((e) => e.team)).size, 8);
+  while (!cup.done) play(cup);
+  assert.equal(cup.champion, humanIndex(cup));
+});
+
 test('the draw is the seed\'s: the same seed, the same cup', () => {
   const a = createCup({ kind: kind('star'), team: 2, sidekick: 2, seed: 99 });
   const b = createCup({ kind: kind('star'), team: 2, sidekick: 2, seed: 99 });

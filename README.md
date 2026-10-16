@@ -30,7 +30,8 @@ around it (prefer `build-audio`: it has sound), or choose one in **Settings**.
   address, or pick it from the lobbies found on the network. Everyone sees who
   is in, picks a name and the fielders they will play (up to four per computer,
   one per controller; empty spots are the computer's), and the captain of each
-  side picks its team and sidekick. The host sets the stadium, length,
+  side picks its team and sidekick (or the Super Team: four robots who can all
+  take super strikes, with no sidekick choice). The host sets the stadium, length,
   computer skill, items, Bowser, super strikes and input delay, and starts the
   match: every computer then launches the game together, and comes back to the
   lobby when it ends (the summary's A ends the game; there is no rematch menu,
@@ -1059,7 +1060,9 @@ openstrikers.exe game.iso --net-host --net-players 4 --home peach --home-sidekic
 ```
 
 (`--skill` sets how good the computer is at whatever fielders and goalies it
-plays.) The same options set up the match `OPENSTRIKERS_SKIP_FE=1` starts
+plays. `--home super` / `--away super` fields the Super Team, the game's
+`TEAM_MYSTERY`; it ignores the sidekick option, since the game fixes its
+robots.) The same options set up the match `OPENSTRIKERS_SKIP_FE=1` starts
 offline. The host's picture also decides whether the game runs in its own 16:9
 mode for everyone (`--widescreen`, or 4:3 otherwise), because 16:9 moves the
 game's camera and what is on screen changes how the game draws random numbers;
