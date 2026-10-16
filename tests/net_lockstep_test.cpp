@@ -263,6 +263,59 @@ void testBuildMismatchRejected() {
     CHECK(run.machines[0].lockstep->status() == Lockstep::Status::Waiting);
 }
 
+// A lobby seats the machines and says which fielders each drives; the order
+// they connect in must not matter.
+void testLobbySeats() {
+    Run run = makeRun(3, NetConditions{20, 10, 5, 5}, 15, 3);
+    LockstepConfig hc;
+    hc.host = true;
+    hc.numPeers = 3;
+    hc.inputDelay = 3;
+    hc.seed = 777;
+    hc.buildId = 42;
+    hc.name = "host";
+    for (int s = 0; s < kMaxSlots; ++s) hc.slotOwner[s] = -1;
+    hc.slotOwner[0] = 0; // host: home captain
+    hc.slotOwner[1] = 1; // seat 1: home sidekick
+    hc.slotOwner[4] = 2; // seat 2: away captain
+    hc.slotOwner[5] = 2; //         and an away sidekick
+    run.machines[0].lockstep = std::make_unique<Lockstep>(*run.machines[0].transport, hc);
+    for (int i = 1; i < 3; ++i) {
+        LockstepConfig cc;
+        cc.hostEndpoint = endpointFor(0);
+        cc.buildId = 42;
+        cc.name = i == 1 ? "second" : "first";
+        cc.seat = uint8_t(3 - i); // machine 1 takes seat 2, machine 2 seat 1
+        run.machines[i].lockstep = std::make_unique<Lockstep>(*run.machines[i].transport, cc);
+    }
+    simulate(run, 600, 60000);
+    for (Machine& m : run.machines) CHECK(m.frame == 600);
+    CHECK(run.machines[1].lockstep->localPeer() == 2);
+    CHECK(run.machines[2].lockstep->localPeer() == 1);
+    CHECK(run.machines[1].lockstep->peerName(1) == "first");
+    CHECK(run.machines[0].lockstep->slotOwner(5) == 2);
+    CHECK(!run.machines[0].lockstep->slotOccupied(2));
+    // Slot 5 is seat 2's second controller.
+    const FrameInput& late = run.machines[0].ran[500];
+    CHECK(late.pad[4] == inputFor(2, 500) && late.pad[5] == inputFor(2, 500));
+    CHECK(late.pad[1] == inputFor(1, 500));
+}
+
+void testSeatTaken() {
+    Run run = makeRun(3, NetConditions{0, 0, 0, 0}, 17, 2);
+    for (int i = 1; i < 3; ++i) {
+        LockstepConfig cc;
+        cc.hostEndpoint = endpointFor(0);
+        cc.buildId = 42;
+        cc.seat = 1;
+        run.machines[i].lockstep = std::make_unique<Lockstep>(*run.machines[i].transport, cc);
+    }
+    simulate(run, 10, 3000);
+    const int rejected = (run.machines[1].lockstep->status() == Lockstep::Status::Rejected) +
+                         (run.machines[2].lockstep->status() == Lockstep::Status::Rejected);
+    CHECK(rejected == 1);
+}
+
 void testLeave() {
     Run run = makeRun(2, NetConditions{0, 0, 0, 0}, 13, 2);
     simulate(run, 100, 20000);
@@ -328,6 +381,8 @@ int main() {
     testDesyncDetected();
     testDisconnect();
     testBuildMismatchRejected();
+    testLobbySeats();
+    testSeatTaken();
     testLeave();
     if (g_failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);

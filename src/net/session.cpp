@@ -295,13 +295,19 @@ void startOnline(const LaunchOptions& options) {
     config.buildId = buildId();
     // For tests/net_bot.cpp, which joins without being a game.
     config.acceptAnyBuild = envValue("OPENSTRIKERS_NET_ACCEPT_ANY_BUILD") != nullptr;
-    // Without a lobby to choose, machines alternate teams in join order, each
-    // taking the next fielder: host home captain, first guest away captain,
-    // then home sidekick 1, away sidekick 1, and so on.
+    // A lobby (--net-slots) says who drives which fielder. Without one,
+    // machines alternate teams in join order, each taking the next fielder:
+    // host home captain, first guest away captain, then home sidekick 1, away
+    // sidekick 1, and so on.
     for (int s = 0; s < kMaxSlots; ++s) config.slotOwner[s] = -1;
-    for (int peer = 0; peer < int(options.netPlayers); ++peer) {
-        config.slotOwner[(peer % 2) * 4 + peer / 2] = int8_t(peer);
+    if (options.netSlotsSet) {
+        for (int s = 0; s < kMaxSlots; ++s) config.slotOwner[s] = int8_t(options.netSlots[s]);
+    } else {
+        for (int peer = 0; peer < int(options.netPlayers); ++peer) {
+            config.slotOwner[(peer % 2) * 4 + peer / 2] = int8_t(peer);
+        }
     }
+    config.seat = uint8_t(options.netSeat);
     if (config.host) {
         foldEnvIntoMatch(s_match);
         config.matchConfig = encodeMatch(s_match);

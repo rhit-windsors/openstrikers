@@ -1,0 +1,17 @@
+{
+  "name": "openstrikers-launcher",
+  "productName": "OpenStrikersLauncher",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Launcher and online lobby for openstrikers",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "package": "node package.js"
+  },
+  "devDependencies": {
+    "@electron/packager": "20.3.0",
+    "electron": "44.5.1"
+  }
+}

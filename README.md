@@ -13,43 +13,60 @@ sources compile and run as a 64-bit little-endian host binary.
 
 Current known problems are tracked in [`ISSUES.md`](ISSUES.md).
 
-## Windows launcher
+## Launcher
 
-Double-click **`OpenStrikers.vbs`** in the project folder, or
-**`openstrikers-launcher.exe`** next to the game in your build folder.
-Choose your ISO/GCM with **Browse**, then click **Play Game**. The launcher
-remembers the disc, executable, and display settings. The project shortcut
-prefers `build-audio/` when available; choose that build's `openstrikers.exe`
-for sound. The launcher is built alongside the game on Windows.
+**`OpenStrikersLauncher.exe`** is built with the game, in
+`build-audio\launcher\OpenStrikersLauncher-win32-x64\` (or `build\launcher\...`).
+It is an Electron app (`launcher/`), written to build and run on Linux too
+(`OpenStrikersLauncher-linux-x64/`), though so far it is only tested on Windows. Building it needs Node.js (`winget install
+OpenJS.NodeJS.LTS`); the first build downloads Electron. CMake skips it with a
+note if npm is missing, or with `-DOPENSTRIKERS_LAUNCHER=OFF`. Pin the exe to
+the taskbar or make a shortcut to it; it finds the game in the build folder
+around it (prefer `build-audio`: it has sound), or choose one in **Settings**.
 
-- **Render resolution:** native, 720p, 1080p, 1440p, or 4K UHD (default).
-  Rendering is independent of desktop resolution; lower-resolution monitors
-  downsample the selected render target. A 4K monitor is needed for native 4K output.
-- **Window mode:** fullscreen (default) or a centered, resizable window.
-  Fullscreen uses the selected monitor's desktop mode without changing it.
-- **Display:** choose which monitor to play on.
-- **Picture:** Original 4:3 (default), **Widescreen 16:9**, stretch to fill, or
-  "Use in-game Aspect option". Widescreen is the game's own widescreen mode
-  (Options > Aspect): a wider projection, its widescreen camera zoom and
-  movies, at 3840 × 2160 when 4K is selected. As on a GameCube set to 16:9,
-  the HUD and menus are stretched horizontally. A 4:3 picture adds black bars
-  on wide displays; at 4K it renders at 2880 × 2160. Forcing 4:3 or 16:9
-  overrides the in-game option while you play, so saving options in game
-  saves the forced value. "Use in-game Aspect option" lets the menu switch the
-  picture live.
-- **VSync:** on by default in the launcher to reduce tearing.
-- **Online play** (the right-hand card): *Host a network match* or *Join a
-  network match*, up to 8 machines with one player per fielder on both teams.
-  The host picks the machines, input delay, teams, sidekicks, stadium, length,
-  computer skill, items and Bowser; a joining player only needs the host's
-  address. See [Network play](#network-play).
+- **Play:** the game on this computer, with its own menus. Name the players on
+  controllers 1-4 to have the names drawn over their heads.
+- **Online:** a lobby. One player opens it; the others join with the host's
+  address, or pick it from the lobbies found on the network. Everyone sees who
+  is in, picks a name and the fielders they will play (up to four per computer,
+  one per controller; empty spots are the computer's), and the captain of each
+  side picks its team and sidekick. The host sets the stadium, length,
+  computer skill, items, Bowser, super strikes and input delay, and starts the
+  match: every computer then launches the game together, and comes back to the
+  lobby when it ends. The lobby checks that everyone has the same game build
+  and disc before it lets the host start. There is chat, and each player's ping.
+- **Settings:** disc image, the game executable, render resolution (native to
+  4K), fullscreen or window, monitor, picture (Original 4:3, Widescreen 16:9,
+  stretch, or the in-game Aspect option) and VSync.
+
+Picture modes: Widescreen is the game's own 16:9 mode (Options > Aspect): a
+wider projection, its widescreen camera zoom and movies, at 3840 x 2160 when
+4K is selected. As on a GameCube set to 16:9, the HUD and menus are stretched
+horizontally. A 4:3 picture adds black bars on wide displays; at 4K it renders
+at 2880 x 2160. Forcing 4:3 or 16:9 overrides the in-game option while you play,
+so saving options in game saves the forced value.
+
+Hosting over the internet: forward **TCP 52321** (the lobby) and **UDP 52320**
+(the match) to the host, or put everyone on the same Tailscale/ZeroTier network
+and join the host's address there. Windows asks to let the launcher and the
+game through the firewall the first time you host; allow both. Lobbies on the
+local network announce themselves on UDP 52322.
 
 **F11** or **Alt+Enter** toggles fullscreen during play. The launcher minimizes
-while the game runs and returns when it exits. Closing the launcher leaves the
-game running. **Open logs** shows diagnostic logs if startup fails.
-Settings and launcher logs live in `%LOCALAPPDATA%\OpenStrikers\`; game saves
-remain in Aurora's usual per-user directory. The launcher can import
-`OPENSTRIKERS_ISO` from the environment or the project's `.env` on first use.
+while the game runs and returns when it exits; closing it leaves the game
+running. If the game stops with an error (a network match out of sync, a
+player who left), the launcher says so and can show the game's log. Settings
+(`launcher.json`) and a log per game run live in `%LOCALAPPDATA%\OpenStrikers\`
+on Windows, `~/.config/OpenStrikers/` on Linux; on first run the launcher
+imports the old Win32 launcher's `launcher.ini`, or `OPENSTRIKERS_ISO`. Game
+saves remain in Aurora's usual per-user directory.
+
+Working on the launcher: `npm install` then `npm start` in `launcher/` runs it
+from source; `npm test` tests the lobby and the game command lines it builds.
+How it hands a match to the game: the host's game gets `--net-host` with
+`--net-slots` (which machine drives each fielder), every other game
+`--net-join` with `--net-seat` (its machine number), so the lobby, not the
+order the games happen to connect in, decides who plays whom.
 
 Terminal startup remains supported, with its previous windowed defaults. The
 picture follows the in-game Aspect option unless `--aspect 4:3|16:9|stretch`
@@ -66,12 +83,9 @@ resolution, aspect lock, F11), `patches/aurora/012-full-precision-scissor.patch`
 the window, any render target over 1706 pixels on a side came out black) and
 `patches/decomp-late/147-widescreen-follows-game-aspect-option.patch`.
 
-Launcher validation: build the `openstrikers-launch-options-test` target and run
+Game option validation: build the `openstrikers-launch-options-test` target and run
 `ctest --test-dir build -R openstrikers-launch-options --output-on-failure`.
-`tests/launcher-smoke.ps1 -IsoPath "D:\Games\Strikers.iso" -BuildDir build-audio`
-checks saved preferences, 4K match startup, fullscreen switching, and process
-lifecycle using an isolated settings folder inside the build directory. It does
-not look at the picture; `tests/render-smoke.ps1 -PictureMode Widescreen|Original|Stretch`
+`tests/render-smoke.ps1 -PictureMode Widescreen|Original|Stretch`
 reads back a 4K frame and fails if it is black.
 Add `-PictureMode Widescreen` to validate 16:9, or `-PictureMode Stretch` to
 validate the fill option. The `openstrikers-widescreen-test` target checks
@@ -104,7 +118,7 @@ lives in the separate `build-audio/` build.
 |---|---|
 | Windows (native, MSYS2 UCRT64) | front end complete; full matches play -- `smoke-test.ps1` passes |
 | Network play | up to 8 machines, one human per fielder, delay-based lockstep; verified on two PCs over a LAN (one reading the disc image from a network share) -- see [Network play](#network-play). Internet play needs a forwarded port or a VPN such as Tailscale; a relay server is designed for but not built |
-| Launcher | `openstrikers-launcher.exe` / `OpenStrikers.vbs`: disc, resolution up to 4K, fullscreen, 4:3 / 16:9 / stretch, and hosting or joining a network match |
+| Launcher | `OpenStrikersLauncher.exe` (Electron, `launcher/`): play locally with names over heads, or an online lobby where everyone picks their fielders and the host starts the match on every computer; disc, resolution up to 4K, fullscreen, 4:3 / 16:9 / stretch |
 | Stability | unattended `soak.ps1` runs play match after match: 15 minutes of fast-forwarded play (59 matches, 143 goals) without a crash, and the allocator validator finds no heap damage |
 | Linux / WSL (GCC) | builds and boots (not re-verified since the render/input work) |
 | Rendering | 2D/front end, the in-match HUD, stadium, lighting and animated characters draw correctly. A machine with an empty shader cache can show brief black patches until its shaders compile; the build ships a starter cache so most compile during boot (see [Running](#running)) |
@@ -977,9 +991,11 @@ Only the host needs a reachable port: forward UDP 52320 to it, or put everyone
 on the same Tailscale/ZeroTier network and join the host's address there.
 Everyone needs the **same openstrikers build and the same disc image**: the
 host turns anyone else away, because the game only computes identically from
-identical binaries. Without a lobby yet, machines alternate teams in join order
-(host home captain, first guest away captain, then home sidekick 1, away
-sidekick 1, ...). A team with all four fielders human is locked: nobody swaps
+identical binaries. The [launcher](#launcher)'s lobby is the easy way to set
+up a match: who plays which fielder is chosen there, and passed to the games
+as `--net-slots` (host) and `--net-seat` (everyone else). From the command line
+without them, machines alternate teams in join order (host home captain, first
+guest away captain, then home sidekick 1, away sidekick 1, ...). A team with all four fielders human is locked: nobody swaps
 players. A team with fewer keeps the game's normal switching.
 
 The host sets up the match, and its choices apply on every machine:

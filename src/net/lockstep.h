@@ -73,6 +73,9 @@ struct LockstepConfig {
     int8_t slotOwner[kMaxSlots] = {0, 1, 2, 3, 4, 5, 6, 7};
     // Client: where the host is.
     Endpoint hostEndpoint;
+    // Client: the machine number to take (1..numPeers-1), as a lobby assigned
+    // it, or 0 for the first free one.
+    uint8_t seat = 0;
     // Everyone: identifies the executable and disc; must match the host's.
     uint64_t buildId = 0;
     // Host: admit any build. Only for test peers that run no game.

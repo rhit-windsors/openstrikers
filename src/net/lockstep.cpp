@@ -7,12 +7,12 @@ namespace net {
 namespace {
 
 constexpr uint32_t kMagic = 0x4E4B534F; // "OSKN"
-constexpr uint8_t kVersion = 1;
+constexpr uint8_t kVersion = 2; // 2: Hello asks for a seat
 constexpr size_t kMaxPacket = 1200;     // stays under any real path MTU
 constexpr uint32_t kNoHash = UINT32_MAX;
 
 enum MessageType : uint8_t {
-    kHello = 1,   // client -> host: build id, name
+    kHello = 1,   // client -> host: build id, name, seat asked for
     kWelcome = 2, // host -> client: admitted, here is your machine number
     kReject = 3,  // host -> client: reason
     kStart = 4,   // host -> client: seed, delay, slot owners; the game may start
@@ -269,6 +269,7 @@ void Lockstep::sendHello() {
     Writer w(kHello);
     w.u64(m_config.buildId);
     w.str(m_config.name);
+    w.u8(m_config.seat);
     m_transport.send(m_config.hostEndpoint, w.bytes().data(), w.size());
 }
 
@@ -364,6 +365,7 @@ void Lockstep::handle(const Endpoint& from, const uint8_t* data, size_t size, ui
         if (type == kHello) {
             const uint64_t build = r.u64();
             const std::string name = r.str();
+            const uint8_t seat = r.u8();
             if (!r.ok()) return;
             if (build != m_config.buildId && !m_config.acceptAnyBuild) {
                 Writer w(kReject);
@@ -372,15 +374,23 @@ void Lockstep::handle(const Endpoint& from, const uint8_t* data, size_t size, ui
                 return;
             }
             if (peer < 0) {
-                for (int i = 1; i < m_numPeers; ++i) {
-                    if (!m_peers[i].joined) {
-                        peer = i;
-                        break;
+                // A lobby hands out seats, so who drives which fielder is
+                // settled before anyone connects; otherwise first come, first
+                // seated.
+                if (seat != 0) {
+                    if (seat < m_numPeers && !m_peers[seat].joined) peer = seat;
+                } else {
+                    for (int i = 1; i < m_numPeers; ++i) {
+                        if (!m_peers[i].joined) {
+                            peer = i;
+                            break;
+                        }
                     }
                 }
                 if (peer < 0 || m_status != Status::Waiting) {
                     Writer w(kReject);
-                    w.str("the session is full");
+                    w.str(seat != 0 && m_status == Status::Waiting ? "that seat is taken or not in this session"
+                                                                   : "the session is full");
                     m_transport.send(from, w.bytes().data(), w.size());
                     return;
                 }

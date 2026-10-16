@@ -64,6 +64,11 @@ struct LaunchOptions {
     unsigned netPlayers = 2;            // host: machines in the session, itself included
     unsigned netDelay = 0;              // host: input delay in frames; 0 picks a default
     const char* netName = nullptr;
+    unsigned netSeat = 0;               // join: machine number a lobby gave us, 0 for any
+    // host: the machine (0 host, 1.. seats) driving each fielder slot, -1 for
+    // the computer; netSlotsSet false keeps the default alternating order.
+    int netSlots[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
+    bool netSlotsSet = false;
     const char* playerNames = nullptr;  // offline: "A,B,..." for the players on ports 1-4
     MatchSettings match;
 };
@@ -93,6 +98,23 @@ inline bool parse_resolution(const char* value, unsigned& width, unsigned& heigh
     width = w;
     height = h;
     return true;
+}
+
+// "0,1,-,-,2,-,-,-": the machine driving each of the eight fielder slots (home
+// captain, home sidekicks, away captain, away sidekicks), '-' for the computer.
+inline bool parse_net_slots(const char* value, int (&slots)[8]) {
+    int count = 0;
+    for (const char* p = value;; ++p) {
+        if (count == 8) return false;
+        if (*p == '-') slots[count] = -1;
+        else if (*p >= '0' && *p <= '7') slots[count] = *p - '0';
+        else return false;
+        ++count;
+        ++p;
+        if (*p == '\0') break;
+        if (*p != ',') return false;
+    }
+    return count == 8;
 }
 
 inline bool parse_launch_options(int argc, char* argv[], LaunchOptions& options) {
@@ -142,6 +164,11 @@ inline bool parse_launch_options(int argc, char* argv[], LaunchOptions& options)
             } else if (!std::strcmp(arg, "--net-name")) {
                 if (++i == argc) return false;
                 options.netName = argv[i];
+            } else if (!std::strcmp(arg, "--net-seat")) {
+                if (++i == argc || !parse_unsigned(argv[i], 1, 7, options.netSeat)) return false;
+            } else if (!std::strcmp(arg, "--net-slots")) {
+                if (++i == argc || !parse_net_slots(argv[i], options.netSlots)) return false;
+                options.netSlotsSet = true;
             } else if (!std::strcmp(arg, "--player-names")) {
                 if (++i == argc) return false;
                 options.playerNames = argv[i];

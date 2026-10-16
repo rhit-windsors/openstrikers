@@ -63,6 +63,15 @@ int main() {
     parse({"game.iso", "--net-players", "9"}, false);
     parse({"game.iso", "--net-players", "1"}, false);
     parse({"game.iso", "--net-delay", "0"}, false);
+    auto seat = parse({"game.iso", "--net-join", "host", "--net-seat", "3"});
+    check(seat.netSeat == 3 && !seat.netSlotsSet);
+    parse({"game.iso", "--net-seat", "0"}, false);
+    parse({"game.iso", "--net-seat", "8"}, false);
+    auto slots = parse({"game.iso", "--net-host", "--net-slots", "0,1,-,-,2,-,-,3"});
+    check(slots.netSlotsSet && slots.netSlots[0] == 0 && slots.netSlots[1] == 1 && slots.netSlots[2] == -1 &&
+          slots.netSlots[4] == 2 && slots.netSlots[7] == 3);
+    for (auto bad : {"0,1", "0,1,-,-,2,-,-,3,4", "0,1,-,-,2,-,-,", "0;1;-;-;2;-;-;3", "0,1,-,-,8,-,-,3", "01,-,-,-,-,-,-,-"})
+        parse({"game.iso", "--net-slots", bad}, false);
     check(legacy.match.homeTeam == -1 && legacy.match.stadium == -1 && legacy.match.items == -1);
     auto match = parse({"--home", "peach", "--away", "dk", "--home-sidekick", "birdo", "--away-sidekick", "toad",
                         "--stadium", "forbidden", "--skill", "3", "--match-minutes", "4", "--items", "off",

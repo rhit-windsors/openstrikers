@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:">
+  <title>OpenStrikers</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="titlebar">
+    <div class="brand"><span class="brand-open">OPEN</span><span class="brand-strikers">STRIKERS</span></div>
+    <div class="build" id="build"></div>
+  </header>
+
+  <nav class="rail">
+    <button class="nav active" data-view="play">
+      <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg><span>Play</span>
+    </button>
+    <button class="nav" data-view="online">
+      <svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm6.9 6h-2.9a15.7 15.7 0 0 0-1.4-3.6A8 8 0 0 1 18.9 8zM12 4a14 14 0 0 1 1.9 4h-3.8A14 14 0 0 1 12 4zM4.3 14a8.2 8.2 0 0 1 0-4h3.3a16.5 16.5 0 0 0 0 4zm.8 2h2.9a15.7 15.7 0 0 0 1.4 3.6A8 8 0 0 1 5.1 16zM8 8H5.1a8 8 0 0 1 4.3-3.6A15.7 15.7 0 0 0 8 8zm4 12a14 14 0 0 1-1.9-4h3.8A14 14 0 0 1 12 20zm2.3-6H9.7a14.7 14.7 0 0 1 0-4h4.6a14.7 14.7 0 0 1 0 4zm.3 5.6a15.7 15.7 0 0 0 1.4-3.6h2.9a8 8 0 0 1-4.3 3.6zm1.8-5.6a16.5 16.5 0 0 0 0-4h3.3a8.2 8.2 0 0 1 0 4z"/></svg><span>Online</span>
+    </button>
+    <button class="nav" data-view="settings">
+      <svg viewBox="0 0 24 24"><path d="M19.4 13a7.6 7.6 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L15 3h-4l-.4 2.7a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.4 7.4 0 0 0 1.7 1L11 21h4l.4-2.7a7.4 7.4 0 0 0 1.7-1l2.5 1 2-3.5zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/></svg><span>Settings</span>
+    </button>
+    <div class="rail-spacer"></div>
+    <div class="rail-status" id="game-status"></div>
+  </nav>
+
+  <main>
+    <!-- Play on this computer -->
+    <section class="view active" id="view-play">
+      <div class="hero">
+        <div class="hero-text">
+          <h1>Kick off</h1>
+          <p>Play on this computer with the game's own menus: exhibition, cups, and up to four players on controllers.</p>
+          <button class="btn btn-play" id="play-offline">
+            <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>Play
+          </button>
+          <p class="problem" id="play-problem"></p>
+        </div>
+        <div class="ball" aria-hidden="true"></div>
+      </div>
+      <div class="card">
+        <h2>Names over heads</h2>
+        <p class="hint">Shown over the player each controller port drives. Leave a port empty to keep its number.</p>
+        <div class="local-names" id="local-names"></div>
+      </div>
+    </section>
+
+    <!-- Online: find or open a lobby -->
+    <section class="view" id="view-online">
+      <div id="online-entry">
+        <div class="card your-name">
+          <label for="name">Your name</label>
+          <input id="name" maxlength="16" autocomplete="off" spellcheck="false">
+          <span class="hint">Drawn over your player's head in the match.</span>
+        </div>
+        <div class="split">
+          <div class="card">
+            <h2>Host a lobby</h2>
+            <p class="hint">Friends join with your address. Over the internet, forward TCP 52321 and UDP 52320 to this computer, or use a VPN like Tailscale.</p>
+            <button class="btn btn-primary" id="host">Open lobby</button>
+          </div>
+          <div class="card">
+            <h2>Join a lobby</h2>
+            <div class="row">
+              <input id="address" placeholder="192.168.1.20" autocomplete="off" spellcheck="false">
+              <button class="btn btn-primary" id="join">Join</button>
+            </div>
+            <h3>On your network</h3>
+            <ul class="lan" id="lan"><li class="empty">Looking for lobbies...</li></ul>
+          </div>
+        </div>
+        <p class="problem" id="online-problem"></p>
+      </div>
+
+      <div id="lobby" hidden>
+        <div class="lobby-head">
+          <div>
+            <h1 id="lobby-title"></h1>
+            <div class="hint" id="lobby-addresses"></div>
+          </div>
+          <button class="btn btn-ghost" id="leave">Leave</button>
+        </div>
+        <div class="lobby-grid">
+          <div class="pitch-wrap">
+            <div class="pitch" id="pitch">
+              <div class="half" id="half-home"></div>
+              <div class="halfway"></div>
+              <div class="centre-spot"></div>
+              <div class="half" id="half-away"></div>
+            </div>
+            <div class="card match" id="match"></div>
+          </div>
+          <aside class="side">
+            <div class="card players">
+              <h2>Players <span class="count" id="player-count"></span></h2>
+              <ul id="players"></ul>
+            </div>
+            <div class="card chat">
+              <ul id="chat-log"></ul>
+              <form id="chat-form"><input id="chat-input" placeholder="Say something" maxlength="300" autocomplete="off"></form>
+            </div>
+          </aside>
+        </div>
+        <div class="start-bar">
+          <p class="problem" id="start-problem"></p>
+          <button class="btn btn-play" id="start">Start match</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Settings -->
+    <section class="view" id="view-settings">
+      <div class="card">
+        <h2>Game</h2>
+        <div class="field">
+          <label>Disc image</label>
+          <div class="row"><input id="iso" readonly><button class="btn" data-browse="iso">Browse</button></div>
+          <span class="hint" id="disc-status"></span>
+        </div>
+        <div class="field">
+          <label>openstrikers</label>
+          <div class="row"><input id="exe" readonly><button class="btn" data-browse="exe">Browse</button></div>
+          <span class="hint">Use the build-audio build for sound. Everyone in an online match needs the same build.</span>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Display</h2>
+        <div class="grid2">
+          <div class="field"><label for="resolution">Render resolution</label>
+            <select id="resolution">
+              <option value="native">Native (window size)</option>
+              <option value="1280x720">1280 x 720</option>
+              <option value="1920x1080">1920 x 1080</option>
+              <option value="2560x1440">2560 x 1440</option>
+              <option value="3840x2160">3840 x 2160 (4K)</option>
+            </select></div>
+          <div class="field"><label for="mode">Window</label>
+            <select id="mode"><option value="1">Fullscreen</option><option value="0">Window</option></select></div>
+          <div class="field"><label for="display">Monitor</label><select id="display"></select></div>
+          <div class="field"><label for="aspect">Picture</label>
+            <select id="aspect">
+              <option value="4:3">Original 4:3</option>
+              <option value="16:9">Widescreen 16:9</option>
+              <option value="stretch">Stretch to fill</option>
+              <option value="auto">Follow the in-game Aspect option</option>
+            </select></div>
+        </div>
+        <label class="check"><input type="checkbox" id="vsync"> VSync</label>
+        <p class="hint">Online, the host's picture choice decides 16:9 for everyone: it moves the game's camera, so it is part of the match.</p>
+      </div>
+      <div class="card">
+        <h2>Logs</h2>
+        <p class="hint">Each game run writes a log. They help when the game will not start or a match ends early.</p>
+        <button class="btn" id="open-logs">Open logs folder</button>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>

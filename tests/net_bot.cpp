@@ -92,10 +92,12 @@ private:
 int main(int argc, char** argv) {
     if (argc < 2) {
         std::fprintf(stderr, "usage: %s HOST[:PORT] [--frames N] [--seed S] [--latency MS] [--loss PERCENT] "
-                             "[--freeze-at FRAME]\n", argv[0]);
+                             "[--freeze-at FRAME] [--seat N] [--name NAME]\n", argv[0]);
         return 2;
     }
     uint32_t frames = 36000, latency = 0, loss = 0, freezeAt = UINT32_MAX;
+    uint8_t seat = 0;
+    const char* name = "bot";
     for (int i = 2; i + 1 < argc; i += 2) {
         const uint32_t v = uint32_t(std::strtoul(argv[i + 1], nullptr, 0));
         if (!std::strcmp(argv[i], "--frames")) frames = v;
@@ -103,12 +105,15 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--latency")) latency = v;
         else if (!std::strcmp(argv[i], "--loss")) loss = v;
         else if (!std::strcmp(argv[i], "--freeze-at")) freezeAt = v;
+        else if (!std::strcmp(argv[i], "--seat")) seat = uint8_t(v);
+        else if (!std::strcmp(argv[i], "--name")) name = argv[i + 1];
     }
 
     UdpTransport udp;
     std::string error;
     LockstepConfig config;
-    config.name = "bot";
+    config.name = name;
+    config.seat = seat;
     if (!udp.open(0, error) || !UdpTransport::resolve(argv[1], 52320, config.hostEndpoint, error)) {
         std::fprintf(stderr, "net-bot: %s\n", error.c_str());
         return 2;

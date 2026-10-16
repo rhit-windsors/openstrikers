@@ -115,13 +115,29 @@ aurora_copy_runtime_dlls(openstrikers)
 
 if (WIN32)
     target_link_libraries(openstrikers PRIVATE shell32)
-    add_executable(openstrikers-launcher WIN32 ${SRC_DIR}/launcher_win32.cpp)
-    target_link_libraries(openstrikers-launcher PRIVATE
-        ${AURORA_SDL3_TARGET} comdlg32 shell32 ole32 dwmapi gdi32 user32)
-    if (MINGW)
-        target_link_options(openstrikers-launcher PRIVATE -municode -static)
-    endif ()
-    aurora_copy_runtime_dlls(openstrikers-launcher)
+endif ()
+
+# The launcher (launcher/, an Electron app): packaged into
+# <build>/launcher/OpenStrikersLauncher-<os>-<arch>/, next to the game it
+# finds by itself. Needs Node.js; the first build downloads Electron.
+option(OPENSTRIKERS_LAUNCHER "Build the launcher (needs Node.js and npm)" ON)
+find_program(NPM_EXECUTABLE NAMES npm.cmd npm)
+if (OPENSTRIKERS_LAUNCHER AND NPM_EXECUTABLE)
+    set(LAUNCHER_DIR ${CMAKE_SOURCE_DIR}/launcher)
+    file(GLOB LAUNCHER_SOURCES CONFIGURE_DEPENDS ${LAUNCHER_DIR}/src/*.js ${LAUNCHER_DIR}/renderer/*)
+    set(LAUNCHER_STAMP ${CMAKE_BINARY_DIR}/launcher/packaged.stamp)
+    add_custom_command(OUTPUT ${LAUNCHER_STAMP}
+        COMMAND ${NPM_EXECUTABLE} install --no-audit --no-fund
+        COMMAND ${NPM_EXECUTABLE} run package -- ${CMAKE_BINARY_DIR}/launcher
+        COMMAND ${CMAKE_COMMAND} -E touch ${LAUNCHER_STAMP}
+        WORKING_DIRECTORY ${LAUNCHER_DIR}
+        DEPENDS ${LAUNCHER_SOURCES} ${LAUNCHER_DIR}/package.json ${LAUNCHER_DIR}/package-lock.json
+                ${LAUNCHER_DIR}/package.js
+        COMMENT "Packaging the launcher"
+        VERBATIM)
+    add_custom_target(openstrikers-launcher ALL DEPENDS ${LAUNCHER_STAMP})
+elseif (OPENSTRIKERS_LAUNCHER)
+    message(STATUS "npm not found: the launcher (launcher/) will not be built")
 endif ()
 
 enable_testing()
